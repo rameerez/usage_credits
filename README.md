@@ -6,7 +6,7 @@ Allow your users to have in-app credits they can use to perform operations.
 
 Perfect for SaaS, AI apps, and API products that want to implement usage-based pricing.
 
-`usage_credits` integrates with the `pay` gem both to refill credits through subscriptions, and so you can easily sell credit packs through Stripe, Lemon Squeezy, PayPal or any `pay`-supported processor.
+`usage_credits` integrates with the [`pay`](https://github.com/pay-rails/pay) gem both to refill credits through subscriptions, and so you can easily sell credit packs through Stripe, Lemon Squeezy, PayPal or any `pay`-supported processor.
 
 With `usage_credits`, you can:
 - Keep track of each user's credits
@@ -36,7 +36,7 @@ And perform operations:
 @user.has_enough_credits_to?(:send_email)
 => true
 
-# Estimate cost before performing the operation
+# You can estimate the total cost before performing the operation
 @user.estimate_credits_to(:send_email)
 => 1
 
@@ -177,7 +177,7 @@ end
 
 ## Sell credit packs
 
-> [!TIP]
+> [!IMPORTANT]
 > For all payment-related operations (sell credit packs, handle subscription-based fulfillment, etc. this gem relies on the [`pay`](https://github.com/pay-rails/pay) gem – make sure you have it installed and correctly configured before continuing)
 
 In the `config/initializers/usage_credits.rb` file, define packs of credits users can buy:
@@ -324,7 +324,7 @@ end
 
 ## Testing
 
-Testing is a breeze with our test helpers:
+Testing is easy with our test helpers:
 
 ```ruby
 # spec/rails_helper.rb

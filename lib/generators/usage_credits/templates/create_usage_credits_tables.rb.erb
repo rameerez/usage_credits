@@ -1,0 +1,48 @@
+# frozen_string_literal: true
+
+class CreateUsageCreditsTables < ActiveRecord::Migration<%= migration_version %>
+  def change
+    primary_key_type, foreign_key_type = primary_and_foreign_key_types
+
+    create_table :usage_credits_wallets, id: primary_key_type do |t|
+      t.references :owner, polymorphic: true, null: false, type: foreign_key_type
+      t.integer :balance, null: false, default: 0
+      t.integer :low_balance_threshold
+      t.jsonb :metadata, null: false, default: {}
+
+      t.timestamps
+    end
+
+    create_table :usage_credits_transactions, id: primary_key_type do |t|
+      t.references :wallet, null: false, foreign_key: { to_table: :usage_credits_wallets }, type: foreign_key_type
+      t.integer :amount, null: false
+      t.string :category, null: false
+      t.references :source, polymorphic: true, type: foreign_key_type
+      t.datetime :expires_at
+      t.jsonb :metadata, null: false, default: {}
+
+      t.timestamps
+    end
+
+    create_table :usage_credits_operations, id: primary_key_type do |t|
+      t.string :name, null: false, index: { unique: true }
+      t.integer :base_cost, null: false, default: 0
+      t.boolean :active, null: false, default: true
+      t.jsonb :cost_rules, null: false, default: {}
+      t.jsonb :validation_rules, null: false, default: {}
+      t.jsonb :metadata, null: false, default: {}
+
+      t.timestamps
+    end
+  end
+
+  private
+
+  def primary_and_foreign_key_types
+    config = Rails.configuration.generators
+    setting = config.options[config.orm][:primary_key_type]
+    primary_key_type = setting || :primary_key
+    foreign_key_type = setting || :bigint
+    [primary_key_type, foreign_key_type]
+  end
+end 

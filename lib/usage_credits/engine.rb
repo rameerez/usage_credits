@@ -30,15 +30,6 @@ module UsageCredits
       end
     end
 
-    # Add migrations to Rails migration path
-    initializer "usage_credits.migrations" do |app|
-      unless app.root.to_s.match?(root.to_s)
-        config.paths["db/migrate"].expanded.each do |expanded_path|
-          app.config.paths["db/migrate"] << expanded_path
-        end
-      end
-    end
-
     # Set up webhook handlers for Pay integration
     config.after_initialize do
       Pay::Webhooks.delegator.subscribe "stripe.checkout.session.completed" do |event|

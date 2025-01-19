@@ -9,7 +9,8 @@ module UsageCredits
       has_one :credit_wallet,
               class_name: "UsageCredits::Wallet",
               as: :owner,
-              dependent: :destroy
+              dependent: :destroy,
+              autosave: true
 
       after_create :create_credit_wallet, if: :should_create_wallet?
 
@@ -19,19 +20,27 @@ module UsageCredits
                :has_enough_credits_to?,
                :spend_credits_on,
                :give_credits,
-               to: :credit_wallet
+               to: :credit_wallet,
+               allow_nil: true
     end
 
     # Class methods added to the model
     class_methods do
       def has_credits(**options)
-        # Store options in class variable
-        class_variable_set(:@@credit_options, options)
+        # Initialize class instance variable instead of class variable
+        @credit_options = options
+
+        # Ensure wallet is created by default unless explicitly disabled
+        @credit_options[:auto_create] = true if @credit_options[:auto_create].nil?
+      end
+
+      def credit_options
+        @credit_options ||= { auto_create: true }
       end
     end
 
     def credit_options
-      self.class.class_variable_get(:@@credit_options) || {}
+      self.class.credit_options
     end
 
     private

@@ -1,0 +1,34 @@
+===============================================================================
+
+`usage_credits` has been installed! 🎉
+
+Quick Start:
+-----------
+
+1. Run the migrations:
+   $ rails db:migrate
+
+2. Check the initializer at config/initializers/usage_credits.rb
+   It contains example configurations for operations, credit packs, and subscription rules.
+
+3. Your User model has been configured with has_credits.
+   You can now use credit operations like:
+
+   user.credits  # Get current balance
+   user.give_credits(100, reason: "signup_bonus")  # Add credits
+   user.spend_credits_on(:process_image, size: 5.megabytes)  # Use credits
+
+4. Set up payment integration (optional):
+   - Add your payment processor keys (Stripe, Lemon Squeezy, PayPal etc.) via the pay gem
+   - Configure webhook endpoints for payment events
+   - Define credit packs in the initializer
+   - Test credit pack purchases with:
+     pack = UsageCredits.packs[:starter]
+     session = pack.create_checkout_session(current_user)
+
+Need help? Check out:
+--------------------
+* Documentation: https://github.com/rameerez/usage_credits
+* Issues: https://github.com/rameerez/usage_credits/issues
+
+=============================================================================== 

@@ -49,7 +49,7 @@ module UsageCredits
       add_credits(
         amount,
         metadata: { reason: reason },
-        category: reason || :manual_credit
+        category: :manual_adjustment
       )
     end
 

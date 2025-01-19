@@ -14,26 +14,19 @@ class CreateUsageCreditsTables < ActiveRecord::Migration<%= migration_version %>
     end
 
     create_table :usage_credits_transactions, id: primary_key_type do |t|
-      t.references :wallet, null: false, foreign_key: { to_table: :usage_credits_wallets }, type: foreign_key_type
+      t.references :wallet, null: false, type: foreign_key_type
+      t.references :source, polymorphic: true, type: foreign_key_type
       t.integer :amount, null: false
       t.string :category, null: false
-      t.references :source, polymorphic: true, type: foreign_key_type
       t.datetime :expires_at
       t.jsonb :metadata, null: false, default: {}
 
       t.timestamps
     end
 
-    create_table :usage_credits_operations, id: primary_key_type do |t|
-      t.string :name, null: false, index: { unique: true }
-      t.integer :base_cost, null: false, default: 0
-      t.boolean :active, null: false, default: true
-      t.jsonb :cost_rules, null: false, default: {}
-      t.jsonb :validation_rules, null: false, default: {}
-      t.jsonb :metadata, null: false, default: {}
-
-      t.timestamps
-    end
+    # Add indexes
+    add_index :usage_credits_transactions, :category
+    add_index :usage_credits_transactions, :expires_at
   end
 
   private

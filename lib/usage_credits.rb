@@ -49,9 +49,7 @@ module UsageCredits
 
     # More English-like operation definition
     def operation(name, &block)
-      builder = Operation::Builder.new(name)
-      builder.instance_eval(&block)
-      operations[name] = builder.build
+      operations[name.to_sym] = Operation.new(name, &block)
     end
 
     # More English-like credit pack definition

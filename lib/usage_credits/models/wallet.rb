@@ -23,17 +23,16 @@ module UsageCredits
 
     # More intuitive credit checks
     def has_enough_credits_to?(operation_name, **params)
-      operation = UsageCredits.operations[operation_name]
-      return false unless operation
+      operation = UsageCredits.operations[operation_name.to_sym]
+      raise InvalidOperation, "Operation not found: #{operation_name}" unless operation
 
       credits >= operation.calculate_cost(params)
     end
 
     # More intuitive credit spending
     def spend_credits_on(operation_name, **params)
-      operation = UsageCredits.operations[operation_name]
+      operation = UsageCredits.operations[operation_name.to_sym]
       raise InvalidOperation, "Operation not found: #{operation_name}" unless operation
-      raise InvalidOperation, "Operation is inactive" unless operation.active?
 
       cost = operation.calculate_cost(params)
       operation.validate!(params)
@@ -45,7 +44,7 @@ module UsageCredits
           params: params,
           cost: cost
         },
-        source: operation
+        category: :operation_charge
       )
     end
 

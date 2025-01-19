@@ -324,26 +324,7 @@ end
 
 ## Testing
 
-Testing is easy with our test helpers:
-
-```ruby
-# spec/rails_helper.rb
-RSpec.configure do |config|
-  config.include UsageCredits::TestHelpers
-end
-
-# In your tests
-RSpec.describe "Image Processing" do
-  it "charges correct credits" do
-    user = create(:user)
-    give_test_credits(user, 1000)
-    
-    expect {
-      user.spend_credits_on(:process_image, size: 5.megabytes)
-    }.to change { user.credits }.by(-35)
-  end
-end
-```
+TODO
 
 ## Development
 

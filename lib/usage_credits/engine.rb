@@ -12,12 +12,6 @@ module UsageCredits
       app.config.autoload_paths << root.join("lib/usage_credits/models/concerns")
     end
 
-    config.generators do |g|
-      g.test_framework :rspec
-      g.fixture_replacement :factory_bot
-      g.factory_bot dir: "spec/factories"
-    end
-
     # Add has_credits method to ActiveRecord::Base
     initializer "usage_credits.active_record" do
       ActiveSupport.on_load(:active_record) do

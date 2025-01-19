@@ -39,11 +39,7 @@ module UsageCredits
 
       deduct_credits(
         cost,
-        metadata: {
-          operation: operation_name,
-          params: params,
-          cost: cost
-        },
+        metadata: operation.to_audit_hash(params),
         category: :operation_charge
       )
     end

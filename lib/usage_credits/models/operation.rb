@@ -48,6 +48,19 @@ module UsageCredits
       end
     end
 
+    # Serialize the operation for audit purposes
+    def to_audit_hash(params = {})
+      {
+        name: name,
+        cost: calculate_cost(params),
+        cost_calculator_source: cost_calculator.source_location&.join(':'),
+        metadata: metadata,
+        executed_at: Time.current,
+        params: params,
+        version: UsageCredits::VERSION
+      }
+    end
+
     private
 
     def normalize_params(params)

@@ -27,14 +27,14 @@ module UsageCredits
         say "\nTo complete the setup:"
 
         say "  1. Run 'rails db:migrate' to create the necessary tables."
+        say "     ⚠️  You must run migrations before starting your app!", :yellow
 
         say "  2. Add 'has_credits' to your User model (or any model that should have credits)."
 
-        say "  3. Define your credit operations in config/initializers/usage_credits.rb"
+        say "  3. Define the actions that consume credits in config/initializers/usage_credits.rb"
+        say "     ➡️ See README.md for usage examples and detailed configuration options."
 
-        say "  4. Set up your subscription plans and credit packs if you're using them."
-
-        say "  5. Make sure you have the `pay` gem install and configured for your chosen payment processor(s) if you want to handle payments and subscriptions (for example, for credit refills)."
+        say "  4. Make sure you have the `pay` gem install and configured for your chosen payment processor(s) if you want to handle payments and subscriptions (f.ex. for credit refills)"
 
         say "\nEnjoy your new usage-based credits system! 💳✨\n", :green
       end

@@ -11,6 +11,13 @@ require "usage_credits/core_ext/numeric"
 require "usage_credits/version"
 require "usage_credits/configuration"
 
+# Require models
+require "usage_credits/models/operation"
+require "usage_credits/models/pack"
+require "usage_credits/models/subscription_rule"
+require "usage_credits/models/wallet"
+require "usage_credits/models/transaction"
+
 # Define base ApplicationRecord
 module UsageCredits
   class ApplicationRecord < ActiveRecord::Base

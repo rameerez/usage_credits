@@ -5,6 +5,13 @@ module UsageCredits
   class Engine < ::Rails::Engine
     isolate_namespace UsageCredits
 
+    # Set up autoloading paths
+    initializer "usage_credits.autoload", before: :set_autoload_paths do |app|
+      app.config.autoload_paths << root.join("lib")
+      app.config.autoload_paths << root.join("lib/usage_credits/models")
+      app.config.autoload_paths << root.join("lib/usage_credits/models/concerns")
+    end
+
     config.generators do |g|
       g.test_framework :rspec
       g.fixture_replacement :factory_bot

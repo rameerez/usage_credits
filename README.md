@@ -36,7 +36,7 @@ And perform operations:
 @user.has_enough_credits_to?(:send_email)
 => true
 
-# Spend credits and actually perform the operation
+# Spend credits after actually performing the operation
 @user.spend_credits_on(:send_email)
 
 # Then check the remaining balance
@@ -50,7 +50,7 @@ This gem keeps track of every transaction and its cost + origin, so you can keep
 => [["signup_bonus", 100], ["operation_charge", -1]]
 ```
 
-Each transaction stores comprehensive metadata about the action performed:
+Each transaction stores comprehensive metadata about the action that was performed:
 ```ruby
 @user.credit_history.last.metadata
 => {"operation"=>"send_email", "cost"=>1, "params"=>{}, "metadata"=>{}, "executed_at"=>"2025-01-12T01:12:12.123Z"}
@@ -58,20 +58,6 @@ Each transaction stores comprehensive metadata about the action performed:
 
 The `usage_credits` gem also allows you to expire credits, fulfill credits based on subscriptions, sell credit packs, rollover unused credits to the next billing period, and more! Keep reading to get a clear picture of what you can do.
 
-## How it works
-
-`usage_credits` makes it dead simple to add a usage-based credits system to your Rails app:
-
-1. Users can get credits by:
-   - Purchasing credit packs (e.g., "1000 credits for $49")
-   - Having a subscription (e.g., "Pro plan includes 10,000 credits/month")
-   - Getting bonuses (e.g., "100 free credits for referring a user")
-
-2. Users spend credits on operations you define:
-   - "Sending an email costs 1 credit"
-   - "Processing an image costs 10 credits + 0.5 credits per MB"
-
-That's it! Let's see how to set it up.
 
 ## Quick start
 
@@ -96,22 +82,46 @@ end
 
 That's it! Your app now has a usage credits system. Let's see how to use it:
 
-## Define credit costs
+## How it works
 
-In your `config/initializers/usage_credits.rb`:
+`usage_credits` makes it dead simple to add a usage-based credits system to your Rails app:
+
+1. Users can get credits by:
+  - Purchasing credit packs (e.g., "1000 credits for $49")
+  - Having a subscription (e.g., "Pro plan includes 10,000 credits/month")
+  - Getting bonuses (e.g., "100 free credits for referring a user")
+
+2. Users spend credits on operations you define:
+  - "Sending an email costs 1 credit"
+  - "Processing an image costs 10 credits + 0.5 credits per MB"
+
+Let's see how to define these credit-consuming operations.
+
+## Define credit-consuming operations and set credit costs
+
+Define all your operations and their cost in your `config/initializers/usage_credits.rb`.
+
+For example, create a simple operation named `send_email` that costs 1 credit to perform:
 
 ```ruby
 # Simple fixed cost
 operation :send_email do
   cost 1.credit
 end
+```
 
+You can get quite sophisticated in pricing, and define the cost of your operations based on some parameter:
+```ruby
 # Cost based on size
 operation :process_image do
   cost 10.credits + 0.5.credits_per(:mb)
   validate ->(params) { params[:size] <= 100.megabytes }, "File too large"
 end
+```
 
+It's also possible to add validations and metadata to your operations:
+
+```ruby
 # With custom validation
 operation :generate_ai_response do
   cost 5.credits
@@ -125,36 +135,39 @@ operation :analyze_data do
 end
 ```
 
-## Use credits in your code
+## Spend credits
+
+There's a handy `has_enough_credits_to?` method to nicely check the user has enough credits to perform a certain operation. After that, you can spend with `spend_credits_on`:
 
 ```ruby
 # Check if user has enough credits
 if user.has_enough_credits_to?(:process_image, size: 5.megabytes)
-  # Spend credits and do the operation
-  user.spend_credits_on(:process_image, size: 5.megabytes)
-  process_image(params)
+  # Spend credits and perform the actual operation
+  user.spend_credits_on(:process_image, size: 5.megabytes) if process_image(params)
 else
   redirect_to credits_path, alert: "Not enough credits!"
 end
-
-# Check balance
-user.credits  # => 1000
-
-# Give bonus credits
-user.give_credits(100, reason: "signup_bonus")
 ```
+
+> [!TIP]
+> Make the credit spend conditional to the actual operation, so users are not charged credits if the operation fails to perform.
 
 ## Sell credit packs
 
-Define packs users can buy:
+> [!TIP]
+> For all payment-related operations (sell credit packs, handle subscription-based fulfillment, etc. this gem relies on the [`pay`](https://github.com/pay-rails/pay) gem – make sure you have it installed and correctly configured before continuing)
+
+In the `config/initializers/usage_credits.rb` file, define packs of credits users can buy:
 
 ```ruby
 credit_pack :starter do
   includes 1000.credits
-  bonus 100.credits    # Optional bonus credits
   costs 49.dollars
 end
+```
 
+Then, you can prompt then to purchase it with our `pay`-based helpers:
+```ruby
 # Create a Stripe Checkout session for purchase
 pack = UsageCredits.packs[:starter]
 session = pack.create_checkout_session(current_user)
@@ -176,7 +189,7 @@ subscription_plan :pro do
 end
 ```
 
-When a user subscribes to a plan (via the `pay` gem), they'll automatically receive their credits.
+When a user subscribes to a plan (via the `pay` gem), they'll automatically have their credits refilled.
 
 ## Transaction history & audit trail
 
@@ -202,7 +215,6 @@ Each operation charge includes detailed audit metadata:
 {
   name: "process_image",                   # Operation name
   cost: 15,                                # Actual cost charged
-  cost_calculator_source: "config/initializers/usage_credits.rb:25", # Where defined
   metadata: { category: "image" },         # Custom metadata
   executed_at: "2024-01-19T16:57:16Z",     # When executed
   params: { size: 1024 },                  # Parameters used
@@ -218,14 +230,14 @@ This makes it easy to:
 
 ## Low balance alerts
 
-Get notified when users are running low on credits:
+Notify users when they are running low on credits (useful to upsell them a credit pack):
 
 ```ruby
 UsageCredits.configure do |config|
   # Alert when balance drops below 100 credits
   config.low_balance_threshold = 100.credits
   
-  # Handle alerts your way
+  # Handle low credit balance alerts
   config.on_low_balance do |user|
     UserMailer.low_credits_alert(user).deliver_later
   end

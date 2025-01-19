@@ -20,14 +20,12 @@ module UsageCredits
 
     initializer "usage_credits.active_record" do
       ActiveSupport.on_load(:active_record) do
-        require "usage_credits/models/concerns/has_wallet"
         ::ActiveRecord::Base.include UsageCredits::HasWallet
       end
     end
 
     initializer "usage_credits.pay_integration" do
       ActiveSupport.on_load(:pay) do
-        require "usage_credits/models/concerns/subscription_extension"
         ::Pay::Subscription.include UsageCredits::SubscriptionExtension
       end
     end

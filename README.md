@@ -2,7 +2,7 @@
 
 [![Gem Version](https://badge.fury.io/rb/usage_credits.svg)](https://badge.fury.io/rb/usage_credits)
 
-Allow your users to have credits they can use to perform operations.
+Allow your users to have in-app credits they can use to perform operations.
 
 Perfect for SaaS, AI apps, and API products that want to implement usage-based pricing.
 
@@ -17,6 +17,47 @@ With `usage_credits`, you can:
 
 All with a simple DSL that reads just like English.
 
+## Example
+
+Say you have a `User` model. You add `has_credits` to it and you're ready to go:
+
+```ruby
+@user.give_credits(100, reason: "signup")
+```
+
+Now you can check the balance:
+```ruby
+@user.credits
+=> 100
+```
+
+And perform operations:
+```ruby
+@user.has_enough_credits_to?(:send_email)
+=> true
+
+# Spend credits and actually perform the operation
+@user.spend_credits_on(:send_email)
+
+# Then check the remaining balance
+@user.credits
+=> 99
+```
+
+This gem keeps track of every transaction and its cost + origin, so you can keep a clean audit trail for clear invoicing and reference / auditing purposes:
+```ruby
+@user.credit_history.pluck(:category, :amount)
+=> [["signup_bonus", 100], ["operation_charge", -1]]
+```
+
+Each transaction stores comprehensive metadata about the action performed:
+```ruby
+@user.credit_history.last.metadata
+=> {"operation"=>"send_email", "cost"=>1, "params"=>{}, "metadata"=>{}, "executed_at"=>"2025-01-12T01:12:12.123Z"}
+```
+
+The `usage_credits` gem also allows you to expire credits, fulfill credits based on subscriptions, sell credit packs, rollover unused credits to the next billing period, and more! Keep reading to get a clear picture of what you can do.
+
 ## How it works
 
 `usage_credits` makes it dead simple to add a usage-based credits system to your Rails app:
@@ -24,7 +65,7 @@ All with a simple DSL that reads just like English.
 1. Users can get credits by:
    - Purchasing credit packs (e.g., "1000 credits for $49")
    - Having a subscription (e.g., "Pro plan includes 10,000 credits/month")
-   - Getting bonuses (e.g., "100 free credits for signing up")
+   - Getting bonuses (e.g., "100 free credits for referring a user")
 
 2. Users spend credits on operations you define:
    - "Sending an email costs 1 credit"
@@ -137,7 +178,7 @@ end
 
 When a user subscribes to a plan (via the `pay` gem), they'll automatically receive their credits.
 
-## Transaction History & Audit Trail
+## Transaction history & audit trail
 
 Every credit transaction is automatically tracked with detailed metadata:
 

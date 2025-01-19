@@ -35,7 +35,6 @@ Gem::Specification.new do |spec|
 
   spec.add_dependency "pay", "~> 6.0"
   spec.add_dependency "rails", ">= 6.1"
-  spec.add_dependency "zeitwerk", "~> 2.5"
 
   spec.add_development_dependency "rspec", "~> 3.12"
   spec.add_development_dependency "rubocop", "~> 1.50"

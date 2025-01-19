@@ -1,20 +1,8 @@
 # frozen_string_literal: true
 
-require "zeitwerk"
 require "rails"
 require "active_record"
 require "pay"
-
-# Set up autoloading
-loader = Zeitwerk::Loader.for_gem
-loader.setup
-
-# Define base ApplicationRecord
-module UsageCredits
-  class ApplicationRecord < ActiveRecord::Base
-    self.abstract_class = true
-  end
-end
 
 # Require core extensions first
 require "usage_credits/core_ext/numeric"
@@ -23,10 +11,12 @@ require "usage_credits/core_ext/numeric"
 require "usage_credits/version"
 require "usage_credits/configuration"
 
-# Require models
-require "usage_credits/models/operation"
-require "usage_credits/models/pack"
-require "usage_credits/models/subscription_rule"
+# Define base ApplicationRecord
+module UsageCredits
+  class ApplicationRecord < ActiveRecord::Base
+    self.abstract_class = true
+  end
+end
 
 # UsageCredits is a delightful credits system for Rails apps
 module UsageCredits

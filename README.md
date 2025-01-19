@@ -11,7 +11,7 @@ With `usage_credits`, you can:
 - Define how many credits any operation in your app costs
 - Create and sell credit packs
 - Refill credits through subscriptions (monthly, yearly, etc.)
-- Track every credit transaction with detailed history
+- Track every credit transaction with detailed history and audit trail
 
 All with a simple DSL that reads just like English.
 
@@ -44,6 +44,13 @@ rails generate usage_credits:install
 rails db:migrate
 ```
 
+Add to your user model:
+```ruby
+class User < ApplicationRecord
+  has_credits
+end
+```
+
 That's it! Your app now has a usage credits system. Let's see how to use it:
 
 ## Define credit costs
@@ -66,6 +73,12 @@ end
 operation :generate_ai_response do
   cost 5.credits
   validate ->(params) { params[:prompt].length <= 1000 }, "Prompt too long"
+end
+
+# With metadata for better tracking
+operation :analyze_data do
+  cost 20.credits
+  meta category: :analytics, description: "Deep data analysis"
 end
 ```
 
@@ -122,6 +135,44 @@ end
 
 When a user subscribes to a plan (via the `pay` gem), they'll automatically receive their credits.
 
+## Transaction History & Audit Trail
+
+Every credit transaction is automatically tracked with detailed metadata:
+
+```ruby
+# Get recent activity
+user.credit_history.recent
+
+# Filter by type
+user.credit_history.by_category(:operation_charge)
+user.credit_history.by_category(:subscription_monthly)
+
+# Audit operation usage
+wallet.transactions
+  .where(category: :operation_charge)
+  .where("metadata->>'name' = ?", 'process_image')
+  .where(created_at: 1.month.ago..)
+```
+
+Each operation charge includes detailed audit metadata:
+```ruby
+{
+  name: "process_image",                   # Operation name
+  cost: 15,                                # Actual cost charged
+  cost_calculator_source: "config/initializers/usage_credits.rb:25", # Where defined
+  metadata: { category: "image" },         # Custom metadata
+  executed_at: "2024-01-19T16:57:16Z",     # When executed
+  params: { size: 1024 },                  # Parameters used
+  version: "1.0.0"                         # Gem version
+}
+```
+
+This makes it easy to:
+- Track historical costs
+- Audit operation usage
+- Generate detailed invoices
+- Monitor usage patterns
+
 ## Low balance alerts
 
 Get notified when users are running low on credits:
@@ -168,18 +219,6 @@ UsageCredits.configure do |config|
 end
 ```
 
-### Transaction history
-
-```ruby
-# Get recent activity
-user.credit_history.recent
-
-# Filter by type
-user.credit_history.purchases
-user.credit_history.usage
-user.credit_history.subscription_credits
-```
-
 ### Credit expiration
 
 ```ruby
@@ -192,6 +231,16 @@ end
 subscription_plan :basic do
   gives 1000.credits.per_month
   expire_after 30.days.of_cancellation
+end
+```
+
+### Rounding strategy
+
+Configure how credit costs are rounded:
+
+```ruby
+UsageCredits.configure do |config|
+  config.rounding_strategy = :floor  # Options: :round, :floor, :ceil
 end
 ```
 
@@ -226,7 +275,9 @@ To install this gem onto your local machine, run `bundle exec rake install`.
 
 ## Contributing
 
-Bug reports and pull requests are welcome on GitHub at https://github.com/rameerez/usage_credits. Our code of conduct is: just be nice and make your mom proud of what you do and post online.
+Bug reports and pull requests are welcome on GitHub at https://github.com/rameerez/
+usage_credits. Our code of conduct is: just be nice and make your mom proud of what 
+you do and post online.
 
 ## License
 

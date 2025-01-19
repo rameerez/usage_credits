@@ -4,11 +4,13 @@ require "active_support/core_ext/numeric"
 
 class Numeric
   def credits
+    raise ArgumentError, "Credit cost amount must be a whole number (decimals are not allowed)" unless self == self.to_i
     UsageCredits::Cost::Fixed.new(self)
   end
   alias_method :credit, :credits
 
   def credits_per(unit)
+    raise ArgumentError, "Credit cost rate must be a whole number (decimals are not allowed)" unless self == self.to_i
     UsageCredits::Cost::Variable.new(self, unit)
   end
   alias_method :credit_per, :credits_per
@@ -41,6 +43,7 @@ module UsageCredits
       attr_reader :amount
 
       def initialize(amount)
+        raise ArgumentError, "Credit amount must be a whole number" unless amount == amount.to_i
         @amount = amount.to_i
       end
 
@@ -55,6 +58,14 @@ module UsageCredits
 
       def to_i
         calculate({})
+      end
+
+      protected
+
+      # Always round up partial credits to the next integer
+      # This ensures users are never charged less than the actual cost
+      def ceil_credits(amount)
+        amount.ceil
       end
     end
 
@@ -74,7 +85,8 @@ module UsageCredits
 
       def calculate(params = {})
         size = extract_size(params)
-        amount * size
+        # Round up to nearest integer to ensure we never charge fractional credits
+        (amount * size).ceil
       end
 
       private
@@ -82,7 +94,8 @@ module UsageCredits
       def extract_size(params)
         case unit
         when :megabyte, :megabytes, :mb
-          params.fetch(:size, 0).to_i
+          # Convert bytes to megabytes for calculation
+          params.fetch(:size, 0).to_f / 1.megabyte
         else
           raise ArgumentError, "Unknown unit: #{unit}"
         end
@@ -97,6 +110,7 @@ module UsageCredits
       end
 
       def calculate(params = {})
+        # Calculate each cost and sum them up
         costs.sum { |cost| cost.calculate(params) }
       end
 

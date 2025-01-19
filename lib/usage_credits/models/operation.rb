@@ -79,15 +79,15 @@ module UsageCredits
       size = if params[:size].respond_to?(:to_i)
                params[:size].to_i
              elsif params[:size_mb]
-               params[:size_mb].to_i
+               params[:size_mb].megabytes
              elsif params[:size_megabytes]
-               params[:size_megabytes].to_i
+               params[:size_megabytes].megabytes
              end
 
       params.merge(
         size: size,
-        size_mb: size,
-        size_megabytes: size
+        size_mb: size.to_f / 1.megabyte,
+        size_megabytes: size.to_f / 1.megabyte
       )
     end
 

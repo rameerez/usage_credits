@@ -24,13 +24,25 @@ module UsageCredits
       operation = UsageCredits.operations[operation_name.to_sym]
       raise InvalidOperation, "Operation not found: #{operation_name}" unless operation
 
+      # First validate the operation parameters
+      operation.validate!(params)
+
+      # Then check if we have enough credits
       credits >= operation.calculate_cost(params)
+    rescue InvalidOperation => e
+      raise e
+    rescue StandardError => e
+      raise InvalidOperation, "Error checking credits: #{e.message}"
     end
 
     def estimate_credits_to(operation_name, **params)
       operation = UsageCredits.operations[operation_name.to_sym]
       raise InvalidOperation, "Operation not found: #{operation_name}" unless operation
 
+      # First validate the operation parameters
+      operation.validate!(params)
+
+      # Then calculate the cost
       operation.calculate_cost(params)
     rescue InvalidOperation => e
       raise e
@@ -42,8 +54,11 @@ module UsageCredits
       operation = UsageCredits.operations[operation_name.to_sym]
       raise InvalidOperation, "Operation not found: #{operation_name}" unless operation
 
-      cost = operation.calculate_cost(params)
+      # First validate the operation parameters
       operation.validate!(params)
+
+      # Then calculate cost and deduct credits
+      cost = operation.calculate_cost(params)
 
       deduct_credits(
         cost,

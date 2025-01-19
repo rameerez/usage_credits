@@ -36,7 +36,11 @@ And perform operations:
 @user.has_enough_credits_to?(:send_email)
 => true
 
-# Spend credits after actually performing the operation
+# Estimate cost before performing the operation
+@user.estimate_credits_to(:send_email)
+=> 1
+
+# Spend credits (make sure to actually perform the operation too)
 @user.spend_credits_on(:send_email)
 
 # Then check the remaining balance
@@ -93,9 +97,9 @@ That's it! Your app now has a usage credits system. Let's see how to use it:
 
 2. Users spend credits on operations you define:
   - "Sending an email costs 1 credit"
-  - "Processing an image costs 10 credits + 0.5 credits per MB"
+  - "Processing an image costs 10 credits + 1 credit per MB"
 
-Forst, let's see how to define these credit-consuming operations.
+First, let's see how to define these credit-consuming operations.
 
 ## Define credit-consuming operations and set credit costs
 
@@ -114,10 +118,23 @@ You can get quite sophisticated in pricing, and define the cost of your operatio
 ```ruby
 # Cost based on size
 operation :process_image do
-  cost 10.credits + 0.5.credits_per(:mb)
+  cost 10.credits + 1.credits_per(:mb)
   validate ->(params) { params[:size] <= 100.megabytes }, "File too large"
 end
 ```
+
+> [!IMPORTANT]
+> Credit costs must be whole numbers. Decimals are not allowed to avoid floating-point issues and ensure predictable billing.
+> ```ruby
+> 1.credit           # ✅ Valid: whole number
+> 10.credits         # ✅ Valid: whole number
+> 1.credits_per(:mb) # ✅ Valid: whole number rate
+> 
+> 0.5.credits        # ❌ Invalid: decimal credits
+> 1.5.credits_per(:mb) # ❌ Invalid: decimal rate
+> ```
+> For variable costs (like per MB), the final cost is always rounded up to the nearest credit.
+> For example, with `1.credits_per(:mb)`, using 2.3 MB will cost 3 credits.
 
 It's also possible to add validations and metadata to your operations:
 
@@ -137,9 +154,13 @@ end
 
 ## Spend credits
 
-There's a handy `has_enough_credits_to?` method to nicely check the user has enough credits to perform a certain operation. After that, you can spend with `spend_credits_on`:
+There's a handy `has_enough_credits_to?` method to nicely check the user has enough credits to perform a certain operation. There's also a `estimate_credits_to` method so you can estimate the cost of an operation for your users without spending any credits. After that, you can actually spend credits with `spend_credits_on`:
 
 ```ruby
+# Estimate cost before performing
+cost = user.estimate_credits_to(:process_image, size: 5.megabytes)
+=> 15 # (10 base + 5 MB * 1 credit/MB)
+
 # Check if user has enough credits
 if user.has_enough_credits_to?(:process_image, size: 5.megabytes)
   # Spend credits and perform the actual operation
@@ -150,7 +171,9 @@ end
 ```
 
 > [!TIP]
-> Make the credit spend conditional to the actual operation, so users are not charged credits if the operation fails to perform.
+> Always estimate and check credits before performing expensive operations.
+> If validation fails (e.g., file too large), both methods will raise `InvalidOperation`.
+> Make the credit spend conditional to the actual operation, so users are not charged if the operation fails.
 
 ## Sell credit packs
 

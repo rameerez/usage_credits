@@ -19,22 +19,6 @@ class Numeric
     self * 100 # Convert to cents for payment processors
   end
   alias_method :dollar, :dollars
-
-  def megabytes
-    self * 1024 * 1024 # Convert to bytes
-  end
-  alias_method :megabyte, :megabytes
-  alias_method :mb, :megabytes
-
-  def days
-    self * 24 * 60 * 60 # Convert to seconds
-  end
-  alias_method :day, :days
-
-  def years
-    self * 365 * 24 * 60 * 60 # Convert to seconds
-  end
-  alias_method :year, :years
 end
 
 module UsageCredits

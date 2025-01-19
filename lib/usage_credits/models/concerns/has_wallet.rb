@@ -27,6 +27,8 @@ module UsageCredits
     # Class methods added to the model
     class_methods do
       def has_credits(**options)
+        include UsageCredits::HasWallet unless included_modules.include?(UsageCredits::HasWallet)
+
         # Initialize class instance variable instead of class variable
         @credit_options = options
 

@@ -18,9 +18,10 @@ module UsageCredits
       g.factory_bot dir: "spec/factories"
     end
 
+    # Add has_credits method to ActiveRecord::Base
     initializer "usage_credits.active_record" do
       ActiveSupport.on_load(:active_record) do
-        ::ActiveRecord::Base.include UsageCredits::HasWallet
+        extend UsageCredits::HasWallet::ClassMethods
       end
     end
 

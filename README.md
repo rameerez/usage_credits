@@ -56,7 +56,7 @@ Each transaction stores comprehensive metadata about the action that was perform
 => {"operation"=>"send_email", "cost"=>1, "params"=>{}, "metadata"=>{}, "executed_at"=>"2025-01-12T01:12:12.123Z"}
 ```
 
-The `usage_credits` gem also allows you to expire credits, fulfill credits based on subscriptions, sell credit packs, rollover unused credits to the next billing period, and more! Keep reading to get a clear picture of what you can do.
+The `usage_credits` gem also allows you to expire credits, fulfill credits based on monthly / yearly subscriptions, sell credit packs, rollover unused credits to the next billing period, and more! Keep reading to get a clear picture of what you can do.
 
 
 ## Quick start

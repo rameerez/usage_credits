@@ -20,8 +20,16 @@ module UsageCredits
                :has_enough_credits_to?,
                :spend_credits_on,
                :give_credits,
-               to: :credit_wallet,
-               allow_nil: true
+               to: :ensure_credit_wallet,
+               allow_nil: false # Never return nil for these methods
+
+      # Fix recursion by properly aliasing the original method
+      alias_method :original_credit_wallet, :credit_wallet
+
+      # Then override it
+      define_method(:credit_wallet) do
+        ensure_credit_wallet
+      end
     end
 
     # Class methods added to the model
@@ -51,11 +59,18 @@ module UsageCredits
       credit_options[:auto_create] != false
     end
 
-    def create_credit_wallet
+    def ensure_credit_wallet
+      return original_credit_wallet if original_credit_wallet.present?
+      return unless should_create_wallet?
+
       build_credit_wallet(
         balance: credit_options[:initial_balance] || 0,
         low_balance_threshold: credit_options[:low_balance_threshold]
-      ).save!
+      ).tap(&:save!)
+    end
+
+    def create_credit_wallet
+      ensure_credit_wallet
     end
   end
 end

@@ -5,11 +5,11 @@ require_relative "lib/usage_credits/version"
 Gem::Specification.new do |spec|
   spec.name = "usage_credits"
   spec.version = UsageCredits::VERSION
-  spec.authors = ["Javi R"]
-  spec.email = ["4920956+rameerez@users.noreply.github.com"]
+  spec.authors = ["rameerez"]
+  spec.email = ["rubygems@rameerez.com"]
 
-  spec.summary = "Add a delightful credits system to your Rails app in minutes."
-  spec.description = "A Ruby gem that makes it dead simple to add a credits system to your Rails app. Perfect for SaaS and API products that want to implement usage-based pricing. Seamlessly integrates with the pay gem for handling purchases and subscriptions. Define credit operations, sell credit packs, and manage subscription-based credit allowances with a beautiful, intuitive DSL that reads like English."
+  spec.summary = "Add a usage-based credits system to your Rails app."
+  spec.description = "A Ruby gem that makes it dead simple to add a credits system to your Rails app to allow your users to have in-app credits they can use to perform operations. Perfect for SaaS, AI apps, and API products that want to implement usage-based pricing."
   spec.homepage = "https://github.com/rameerez/usage_credits"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.1.0"
@@ -36,10 +36,4 @@ Gem::Specification.new do |spec|
   spec.add_dependency "pay", "~> 6.0"
   spec.add_dependency "rails", ">= 6.1"
 
-  spec.add_development_dependency "rspec", "~> 3.12"
-  spec.add_development_dependency "rubocop", "~> 1.50"
-  spec.add_development_dependency "rubocop-performance", "~> 1.17"
-  spec.add_development_dependency "rubocop-rails", "~> 2.19"
-  spec.add_development_dependency "rubocop-rspec", "~> 2.22"
-  spec.add_development_dependency "sqlite3", "~> 1.6"
 end

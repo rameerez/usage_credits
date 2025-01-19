@@ -7,7 +7,7 @@ module UsageCredits
 
     def initialize(name, &block)
       @name = name
-      @cost_calculator = ->(params) { 0 }
+      @cost_calculator = Cost::Fixed.new(0)
       @validation_rules = []
       @metadata = {}
       instance_eval(&block) if block_given?
@@ -15,10 +15,11 @@ module UsageCredits
 
     # DSL methods for operation definition
     def cost(amount_or_calculator)
-      @cost_calculator = if amount_or_calculator.is_a?(UsageCredits::Amount)
-        ->(_) { amount_or_calculator.to_i }
-      else
+      @cost_calculator = case amount_or_calculator
+      when Cost::Base
         amount_or_calculator
+      else
+        Cost::Fixed.new(amount_or_calculator)
       end
     end
 
@@ -34,7 +35,10 @@ module UsageCredits
 
     # Calculate the total cost for this operation
     def calculate_cost(params = {})
-      total = cost_calculator.call(normalize_params(params))
+      normalized_params = normalize_params(params)
+      validate!(normalized_params) # Validate before calculating cost
+
+      total = cost_calculator.calculate(normalized_params)
       apply_rounding(total)
     end
 
@@ -44,7 +48,13 @@ module UsageCredits
 
       validation_rules.each do |condition, message|
         next unless condition.is_a?(Proc)
-        raise InvalidOperation, message unless condition.call(normalized)
+
+        begin
+          result = condition.call(normalized)
+          raise InvalidOperation, message unless result
+        rescue StandardError => e
+          raise InvalidOperation, "Validation error: #{e.message}"
+        end
       end
     end
 
@@ -64,9 +74,21 @@ module UsageCredits
 
     def normalize_params(params)
       params = params.symbolize_keys
-      # Convert various size parameters to a standard format
-      size = params[:size_mb] || params[:size]&.to_i || params[:size_megabytes]
-      params.merge(size: size)
+
+      # Handle Rails numeric extensions properly
+      size = if params[:size].respond_to?(:to_i)
+               params[:size].to_i
+             elsif params[:size_mb]
+               params[:size_mb].to_i
+             elsif params[:size_megabytes]
+               params[:size_megabytes].to_i
+             end
+
+      params.merge(
+        size: size,
+        size_mb: size,
+        size_megabytes: size
+      )
     end
 
     def apply_rounding(amount)

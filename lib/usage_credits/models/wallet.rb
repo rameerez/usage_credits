@@ -16,12 +16,10 @@ module UsageCredits
       balance
     end
 
-    # More intuitive transaction history
     def credit_history
       transactions
     end
 
-    # More intuitive credit checks
     def has_enough_credits_to?(operation_name, **params)
       operation = UsageCredits.operations[operation_name.to_sym]
       raise InvalidOperation, "Operation not found: #{operation_name}" unless operation
@@ -29,7 +27,17 @@ module UsageCredits
       credits >= operation.calculate_cost(params)
     end
 
-    # More intuitive credit spending
+    def estimate_credits_to(operation_name, **params)
+      operation = UsageCredits.operations[operation_name.to_sym]
+      raise InvalidOperation, "Operation not found: #{operation_name}" unless operation
+
+      operation.calculate_cost(params)
+    rescue InvalidOperation => e
+      raise e
+    rescue StandardError => e
+      raise InvalidOperation, "Error estimating cost: #{e.message}"
+    end
+
     def spend_credits_on(operation_name, **params)
       operation = UsageCredits.operations[operation_name.to_sym]
       raise InvalidOperation, "Operation not found: #{operation_name}" unless operation
@@ -44,7 +52,6 @@ module UsageCredits
       )
     end
 
-    # More intuitive credit giving
     def give_credits(amount, reason: nil)
       category = case reason&.to_s
                 when "signup" then :signup_bonus

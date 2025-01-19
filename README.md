@@ -73,7 +73,7 @@ rails generate usage_credits:install
 rails db:migrate
 ```
 
-Add to your user model:
+Add `has_credits` your user model (or any model that needs to have credits):
 ```ruby
 class User < ApplicationRecord
   has_credits
@@ -95,7 +95,7 @@ That's it! Your app now has a usage credits system. Let's see how to use it:
   - "Sending an email costs 1 credit"
   - "Processing an image costs 10 credits + 0.5 credits per MB"
 
-Let's see how to define these credit-consuming operations.
+Forst, let's see how to define these credit-consuming operations.
 
 ## Define credit-consuming operations and set credit costs
 
@@ -110,7 +110,7 @@ operation :send_email do
 end
 ```
 
-You can get quite sophisticated in pricing, and define the cost of your operations based on some parameter:
+You can get quite sophisticated in pricing, and define the cost of your operations based on parameters:
 ```ruby
 # Cost based on size
 operation :process_image do

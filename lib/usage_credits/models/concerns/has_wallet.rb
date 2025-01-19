@@ -18,6 +18,7 @@ module UsageCredits
       delegate :credits,
                :credit_history,
                :has_enough_credits_to?,
+               :estimate_credits_to,
                :spend_credits_on,
                :give_credits,
                to: :ensure_credit_wallet,

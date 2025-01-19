@@ -4,7 +4,9 @@
 
 Allow your users to have credits they can use to perform operations.
 
-Perfect for SaaS and API products that want to implement usage-based pricing. `usage_credits` integrates with the `pay` gem both to refill credits through subscriptions, and so you can easily sell credit packs through Stripe, Lemon Squeezy, PayPal or any `pay`-supported processor.
+Perfect for SaaS, AI apps, and API products that want to implement usage-based pricing.
+
+`usage_credits` integrates with the `pay` gem both to refill credits through subscriptions, and so you can easily sell credit packs through Stripe, Lemon Squeezy, PayPal or any `pay`-supported processor.
 
 With `usage_credits`, you can:
 - Keep track of each user's credits

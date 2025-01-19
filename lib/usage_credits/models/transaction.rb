@@ -13,15 +13,13 @@ module UsageCredits
 
     # Define transaction categories
     CATEGORIES = %w[
-      credit_added
-      credit_deducted
-      subscription_monthly
-      subscription_trial
-      subscription_signup_bonus
-      subscription_monthly_reset
-      credit_pack_purchase
-      credit_expiration
+      signup_bonus
+      referral_bonus
+      subscription_credits
+      trial_credits
+      credit_pack
       operation_charge
+      credit_expiration
       manual_adjustment
     ].freeze
 

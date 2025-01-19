@@ -51,13 +51,12 @@ module UsageCredits
     # Serialize the operation for audit purposes
     def to_audit_hash(params = {})
       {
-        name: name,
+        operation: name,
         cost: calculate_cost(params),
-        cost_calculator_source: cost_calculator.source_location&.join(':'),
+        params: params,
         metadata: metadata,
         executed_at: Time.current,
-        params: params,
-        version: UsageCredits::VERSION
+        gem_version: UsageCredits::VERSION
       }
     end
 

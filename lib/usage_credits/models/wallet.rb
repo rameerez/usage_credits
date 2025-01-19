@@ -46,10 +46,16 @@ module UsageCredits
 
     # More intuitive credit giving
     def give_credits(amount, reason: nil)
+      category = case reason&.to_s
+                when "signup" then :signup_bonus
+                when "referral" then :referral_bonus
+                else :manual_adjustment
+                end
+
       add_credits(
         amount,
         metadata: { reason: reason },
-        category: :manual_adjustment
+        category: category
       )
     end
 

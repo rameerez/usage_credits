@@ -1,10 +1,12 @@
-# 💳 `usage_credits` - Add a usage-based credits system to your Rails app
+# 💳✨ `usage_credits` - Add a usage-based credits system to your Rails app
 
 [![Gem Version](https://badge.fury.io/rb/usage_credits.svg)](https://badge.fury.io/rb/usage_credits)
 
 Allow your users to have in-app credits they can use to perform operations.
 
-Perfect for SaaS, AI apps, and API products that want to implement usage-based pricing.
+_Example: generating this image costs 10 credits. The user had 100 credits, 90 credits remaining._
+
+✨ Perfect for SaaS, AI apps, and API products that want to implement usage-based pricing.
 
 > [!NOTE]
 > `usage_credits` integrates with the [`pay`](https://github.com/pay-rails/pay) gem both to refill credits through subscriptions, and so you can easily sell credit packs through Stripe, Lemon Squeezy, PayPal or any `pay`-supported processor.

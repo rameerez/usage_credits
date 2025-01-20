@@ -3,6 +3,7 @@
 require "rails"
 require "active_record"
 require "pay"
+require "active_support/all"
 
 # Require core extensions first
 require "usage_credits/core_ext/numeric"
@@ -49,7 +50,7 @@ module UsageCredits
 
     # More English-like operation definition
     def operation(name, &block)
-      operations[name.to_sym] = Operation.new(name, &block)
+      operations[name] = Operation.new(name).tap { |op| op.instance_eval(&block) }
     end
 
     # More English-like credit pack definition
@@ -61,9 +62,7 @@ module UsageCredits
 
     # More English-like subscription plan definition
     def subscription_plan(name, &block)
-      rule = SubscriptionRule.new(name)
-      rule.instance_eval(&block)
-      subscription_rules[name] = rule
+      subscription_rules[name] = SubscriptionRule.new(name).tap { |rule| rule.instance_eval(&block) }
     end
 
     def operations
@@ -83,6 +82,18 @@ module UsageCredits
       @operations = {}
       @packs = {}
       @subscription_rules = {}
+    end
+
+    def notify_low_balance(owner)
+      return unless configuration.low_balance_callback
+      configuration.low_balance_callback.call(owner)
+    end
+
+    def handle_event(event, **params)
+      case event
+      when :low_balance_reached
+        notify_low_balance(params[:wallet].owner)
+      end
     end
   end
 end

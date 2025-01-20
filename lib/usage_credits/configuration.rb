@@ -15,19 +15,22 @@ module UsageCredits
     # Customize credit rounding behavior
     attr_accessor :rounding_strategy
 
+    attr_reader :low_balance_callback, :credit_formatter
+
     def initialize
       @default_currency = :usd
-      @low_balance_threshold = 100
+      @low_balance_threshold = nil
       @allow_negative_balance = false
-      @credit_formatter = ->(amount) { "#{amount} credits" }
+      @credit_formatter = ->(amount) { format("%+d credits", amount) }
       @rounding_strategy = :round
-      @event_handlers = {}
+      @low_balance_callback = nil
       @credit_expiration = nil
     end
 
     # More intuitive low balance threshold setting
-    def low_balance_threshold=(amount)
-      @low_balance_threshold = amount.is_a?(UsageCredits::Amount) ? amount.to_i : amount
+    def low_balance_threshold=(value)
+      raise ArgumentError, "Low balance threshold must be positive" if value && value.negative?
+      @low_balance_threshold = value
     end
 
     # More intuitive credit formatting
@@ -41,14 +44,14 @@ module UsageCredits
 
     # More intuitive event handling
     def on_low_balance(&block)
-      @event_handlers[:low_balance] = block
+      @low_balance_callback = block
     end
 
     def event_handler
       lambda do |event, data|
         case event
         when :low_balance_reached
-          @event_handlers[:low_balance]&.call(data[:wallet].owner)
+          @low_balance_callback&.call(data[:wallet].owner)
         else
           # Handle other events
         end
@@ -57,7 +60,7 @@ module UsageCredits
 
     # More intuitive credit expiration
     def expire_credits_after(duration)
-      @credit_expiration = duration.is_a?(UsageCredits::TimeAmount) ? duration.to_i : duration
+      @credit_expiration = duration
     end
 
     def credit_expiration_period

@@ -121,6 +121,7 @@ module UsageCredits
         amount = amount.to_i
         raise InsufficientCredits, "Insufficient credits (#{credits} < #{amount})" if insufficient_credits?(amount)
 
+        previous_balance = balance
         self.balance -= amount
         save!
 
@@ -132,7 +133,7 @@ module UsageCredits
         )
 
         notify_balance_change(:credits_deducted, amount)
-        check_low_balance
+        check_low_balance if !was_low_balance?(previous_balance) && low_balance?
       end
     end
 
@@ -147,7 +148,7 @@ module UsageCredits
     end
 
     def notify_balance_change(event, amount)
-      UsageCredits.configuration.event_handler&.call(
+      UsageCredits.handle_event(
         event,
         wallet: self,
         amount: amount,
@@ -156,16 +157,19 @@ module UsageCredits
     end
 
     def check_low_balance
-      return unless low_balance?
-
       notify_balance_change(:low_balance_reached, credits)
     end
 
     def low_balance?
       threshold = UsageCredits.configuration.low_balance_threshold
       return false if threshold.nil?
-
       credits <= threshold
+    end
+
+    def was_low_balance?(previous_balance)
+      threshold = UsageCredits.configuration.low_balance_threshold
+      return false if threshold.nil?
+      previous_balance <= threshold
     end
   end
 end

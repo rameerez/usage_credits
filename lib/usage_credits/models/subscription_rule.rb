@@ -41,7 +41,7 @@ module UsageCredits
     # More intuitive expiration setting
     def expire_after(duration)
       @expire_credits_on_cancel = true
-      @credit_expiration_period = duration.is_a?(UsageCredits::TimeAmount) ? duration.to_i : duration
+      @credit_expiration_period = duration.to_i
     end
 
     # Add metadata

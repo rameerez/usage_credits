@@ -42,8 +42,7 @@ And perform operations:
 
 # Spend credits
 @user.spend_credits_on(:send_email) do
-  # actually perform the thing here
-  # it will not spend credits if it fails / raises an error
+  # actually perform the thing here – no credits will be spent if it fails
 end
 
 # Then check the remaining balance
@@ -164,10 +163,12 @@ There's a handy `has_enough_credits_to?` method to nicely check the user has eno
 cost = user.estimate_credits_to(:process_image, size: 5.megabytes)
 => 15 # (10 base + 5 MB * 1 credit/MB)
 
-# Check if user has enough credits
+# Then check if user has enough credits
 if user.has_enough_credits_to?(:process_image, size: 5.megabytes)
-  # Spend credits and perform the actual operation
-  user.spend_credits_on(:process_image, size: 5.megabytes) if process_image(params)
+  # Finally, spend credits and perform the operation
+  user.spend_credits_on(:process_image, size: 5.megabytes) do
+    process_image(params)  # Credits are only spent if this succeeds
+  end
 else
   redirect_to credits_path, alert: "Not enough credits!"
 end
@@ -176,22 +177,20 @@ end
 To ensure credits are not substracted to users from failed operations, you can pass a block to `spend_credits_on`. No credits are spent if the block doesn't succeed (no errors, no exceptions, no raises, etc.) This way, you ensure credits are only spent if the operation succeeds:
 
 ```ruby
-# The block form ensures credits are only spent if the operation succeeds
+# Credits are only spent if the block succeeds
 user.spend_credits_on(:process_image, size: 5.megabytes) do
-  process_image(params)  # If this raises an error, credits won't be spent
+  process_image(params)  # If this raises an error, no credits are spent
 end
 
-# This is equivalent to wrapping in a transaction:
-ActiveRecord::Base.transaction do
-  user.spend_credits_on(:process_image, size: 5.megabytes)
-  process_image(params)
-end
+# Non-block form - credits are spent immediately
+user.spend_credits_on(:process_image, size: 5.megabytes)
+process_image(params)  # If this fails, credits are already spent!
 ```
 
 > [!TIP]
 > Always estimate and check credits before performing expensive operations.
 > If validation fails (e.g., file too large), both methods will raise `InvalidOperation`.
-> Make the credit spend conditional to the actual operation, so users are not charged if the operation fails.
+> Perform your operation inside the `spend_credits_on` block OR make the credit spend conditional to the actual operation, so users are not charged if the operation fails.
 
 ## Sell credit packs
 

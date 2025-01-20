@@ -4,7 +4,7 @@
 
 Allow your users to have in-app credits they can use to perform operations.
 
-_Example: generating this image costs 10 credits. The user had 100 credits, 90 credits remaining._
+_Example: generating an AI reply costs 10 credits. The user had 100 credits, 90 credits remaining now._
 
 ✨ Perfect for SaaS, AI apps, and API products that want to implement usage-based pricing.
 

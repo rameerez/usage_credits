@@ -4,8 +4,6 @@
 
 Allow your users to have in-app credits they can use to perform operations.
 
-_Example: generating an AI reply costs 10 credits. The user had 100 credits, 90 credits remaining now._
-
 ✨ Perfect for SaaS, AI apps, and API products that want to implement usage-based pricing.
 
 > [!NOTE]
@@ -20,7 +18,7 @@ With `usage_credits`, you can:
 
 All with a simple DSL that reads just like English.
 
-## Example
+## 👨‍💻 Example
 
 Say you have a `User` model. You add `has_credits` to it and you're ready to go:
 
@@ -353,7 +351,7 @@ end
 
 ## Testing
 
-TODO
+Run the test suite with `bundle exec rake test`
 
 ## Development
 

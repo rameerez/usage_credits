@@ -330,5 +330,45 @@ module UsageCredits
       transaction = @user.credit_history.last
       assert_match /^\+/, transaction.formatted_amount
     end
+
+    ########################
+    # Operation Definition #
+    ########################
+
+    test "operation costs must be whole numbers" do
+      assert_raises(ArgumentError) do
+        UsageCredits.configure do |config|
+          config.operation :invalid_op do
+            cost 10.5.credits
+          end
+        end
+      end
+    end
+
+    test "operation rates must be whole numbers" do
+      assert_raises(ArgumentError) do
+        UsageCredits.configure do |config|
+          config.operation :invalid_op do
+            cost 1.5.credits_per(:mb)
+          end
+        end
+      end
+    end
+
+    test "operation metadata is included in charges" do
+      UsageCredits.configure do |config|
+        config.operation :meta_op do
+          cost 10.credits
+          meta category: :test, description: "Test operation"
+        end
+      end
+
+      @user.give_credits(100, reason: "test")
+      @user.spend_credits_on(:meta_op)
+
+      charge = @user.credit_history.operation_charges.last
+      assert_equal :test, charge.metadata["category"]
+      assert_equal "Test operation", charge.metadata["description"]
+    end
   end
 end

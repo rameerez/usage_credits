@@ -9,9 +9,9 @@ module UsageCredits
       @wallet = @user.credit_wallet
     end
 
-    #####################
-    # Core Wallet Tests #
-    #####################
+    #######################
+    # Core Wallet System #
+    #######################
 
     test "user has a wallet automatically created" do
       new_user = users(:no_wallet)
@@ -28,6 +28,11 @@ module UsageCredits
       @user.give_credits(100, reason: "signup")
       assert_kind_of Integer, @user.credits
       assert_kind_of Integer, @wallet.balance
+    end
+
+    test "wallet balance matches user credits" do
+      @user.give_credits(100, reason: "signup")
+      assert_equal @wallet.balance, @user.credits
     end
 
     #######################
@@ -62,6 +67,18 @@ module UsageCredits
       end
     end
 
+    test "can give credits with multiple reasons" do
+      @user.give_credits(100, reason: "signup")
+      @user.give_credits(50, reason: "referral")
+      assert_equal 150, @user.credits
+
+      reasons = @user.credit_history
+        .order(:created_at)
+        .pluck(Arel.sql("metadata->>'reason'"))
+
+      assert_equal ["signup", "referral"], reasons
+    end
+
     ######################
     # Operation Spending #
     ######################
@@ -75,6 +92,11 @@ module UsageCredits
     test "can estimate operation cost" do
       cost = @user.estimate_credits_to(:test_operation)
       assert_equal 1, cost
+    end
+
+    test "can estimate operation cost with parameters" do
+      cost = @user.estimate_credits_to(:process_image, size: 5.megabytes)
+      assert_equal 15, cost # 10 base + 5 MB * 1 credit/MB
     end
 
     test "can spend credits on operation" do
@@ -99,6 +121,20 @@ module UsageCredits
         end
       end
       assert_equal 10, @user.credits, "Credits should not be spent if operation fails"
+    end
+
+    test "spending credits with parameters" do
+      @user.give_credits(100, reason: "signup")
+      @user.spend_credits_on(:process_image, size: 5.megabytes)
+      assert_equal 85, @user.credits # 100 - (10 base + 5 MB * 1 credit/MB)
+    end
+
+    test "operation validation prevents spending" do
+      @user.give_credits(1000, reason: "signup")
+      assert_raises(InvalidOperation) do
+        @user.spend_credits_on(:process_image, size: 101.megabytes)
+      end
+      assert_equal 1000, @user.credits, "Credits should not be spent if validation fails"
     end
 
     ####################
@@ -128,9 +164,12 @@ module UsageCredits
       @user.spend_credits_on(:test_operation)
 
       charge = @user.credit_history.operation_charges.last
-      assert_equal "test_operation", charge.metadata["operation"]
-      assert_equal 1, charge.metadata["cost"]
-      assert_not_nil charge.metadata["executed_at"]
+      metadata = charge.metadata
+
+      assert_equal "test_operation", metadata["operation"]
+      assert_equal 1, metadata["cost"]
+      assert_not_nil metadata["executed_at"]
+      assert_not_nil charge.metadata["gem_version"]
     end
 
     test "can filter history by category" do
@@ -139,6 +178,27 @@ module UsageCredits
 
       assert_equal 1, @user.credit_history.by_category(:signup_bonus).count
       assert_equal 1, @user.credit_history.by_category(:operation_charge).count
+    end
+
+    test "history is ordered chronologically" do
+      @user.give_credits(100, reason: "first")
+      @user.give_credits(50, reason: "second")
+
+      reasons = @user.credit_history
+        .pluck(Arel.sql("metadata->>'reason'"))
+
+      assert_equal ["first", "second"], reasons
+    end
+
+    test "history includes all transaction details" do
+      @user.give_credits(100, reason: "signup")
+      @user.spend_credits_on(:test_operation)
+
+      transaction = @user.credit_history.last
+      assert_not_nil transaction.created_at
+      assert_not_nil transaction.updated_at
+      assert_not_nil transaction.id
+      assert_equal @wallet.id, transaction.wallet_id
     end
   end
 end

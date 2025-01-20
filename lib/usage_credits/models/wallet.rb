@@ -17,7 +17,7 @@ module UsageCredits
     end
 
     def credit_history
-      transactions
+      transactions.order(created_at: :asc)
     end
 
     def has_enough_credits_to?(operation_name, **params)

@@ -10,6 +10,11 @@ UsageCredits.configure do |config|
     cost 1000.credits
   end
 
+  operation :process_image do
+    cost 10.credits + 1.credit_per(:mb)
+    validate ->(params) { params[:size] <= 100.megabytes }, "File too large"
+  end
+
   # Allow negative credit balance (default: false)
   # config.allow_negative_balance = false
 
@@ -35,7 +40,7 @@ UsageCredits.configure do |config|
   # end
   #
   # operation :process_image do
-  #   cost 10.credits + 0.5.credits_per(:mb)
+  #   cost 10.credits + 2.credits_per(:mb)
   #   validate ->(params) { params[:size] <= 100.megabytes }, "File too large"
   # end
   #

@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-class CreateUsageCreditsTables < ActiveRecord::Migration<%= migration_version %>
+class CreateUsageCreditsTables < ActiveRecord::Migration[8.0]
   def change
     primary_key_type, foreign_key_type = primary_and_foreign_key_types
 

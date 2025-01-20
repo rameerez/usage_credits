@@ -1,0 +1,4 @@
+default:
+  id: 1
+  email: user@example.com
+  name: Test User

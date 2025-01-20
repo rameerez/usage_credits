@@ -7,4 +7,15 @@
 /spec/reports/
 /tmp/
 
+test/dummy/db/*.sqlite3*
+test/dummy/log/*.log
+test/dummy/tmp/
+test/dummy/public/packs/
+test/dummy/public/packs-test/
+test/dummy/node_modules/
+test/dummy/config/credentials.yml.enc
+test/dummy/config/master.key
+test/dummy/storage
+.DS_Store
+
 TODO

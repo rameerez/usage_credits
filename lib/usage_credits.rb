@@ -57,7 +57,19 @@ module UsageCredits
     def credit_pack(name, &block)
       pack = Pack::Builder.new(name)
       pack.instance_eval(&block)
-      packs[name] = pack.build
+      built_pack = pack.build
+      configuration.credit_packs[name] = built_pack
+      packs[name] = built_pack
+    end
+
+    # Find a credit pack by name
+    def find_pack(name)
+      packs[name] || configuration.credit_packs[name]
+    end
+
+    # List all available credit packs
+    def available_packs
+      (packs.values + configuration.credit_packs.values).uniq
     end
 
     # More English-like subscription plan definition

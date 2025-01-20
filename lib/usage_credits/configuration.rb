@@ -15,7 +15,7 @@ module UsageCredits
     # Customize credit rounding behavior
     attr_accessor :rounding_strategy
 
-    attr_reader :low_balance_callback, :credit_formatter
+    attr_reader :low_balance_callback, :credit_formatter, :credit_packs
 
     def initialize
       @default_currency = :usd
@@ -25,6 +25,14 @@ module UsageCredits
       @rounding_strategy = :round
       @low_balance_callback = nil
       @credit_expiration = nil
+      @credit_packs = {}
+    end
+
+    # Define a credit pack
+    def credit_pack(name, &block)
+      builder = Pack::Builder.new(name)
+      builder.instance_eval(&block)
+      @credit_packs[name] = builder.build
     end
 
     # More intuitive low balance threshold setting

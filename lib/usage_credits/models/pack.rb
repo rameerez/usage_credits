@@ -2,14 +2,27 @@
 
 module UsageCredits
   # Defines credit packs that can be purchased
-  class Pack < ApplicationRecord
-    self.table_name = "usage_credits_packs"
+  class Pack
+    attr_reader :name, :credits, :bonus_credits, :price_cents, :price_currency, :metadata
 
-    validates :name, presence: true, uniqueness: true
-    validates :credits, presence: true, numericality: { greater_than: 0 }
-    validates :bonus_credits, numericality: { greater_than_or_equal_to: 0 }
-    validates :price_cents, presence: true, numericality: { greater_than: 0 }
-    validates :price_currency, presence: true
+    def initialize(name:, credits:, bonus_credits: 0, price_cents:, price_currency: nil, metadata: {})
+      @name = name
+      @credits = credits
+      @bonus_credits = bonus_credits
+      @price_cents = price_cents
+      @price_currency = price_currency || UsageCredits.configuration.default_currency.to_s.upcase
+      @metadata = metadata
+
+      validate!
+    end
+
+    def validate!
+      raise ArgumentError, "Name can't be blank" if name.blank?
+      raise ArgumentError, "Credits must be greater than 0" unless credits.to_i.positive?
+      raise ArgumentError, "Bonus credits must be greater than or equal to 0" if bonus_credits.to_i.negative?
+      raise ArgumentError, "Price must be greater than 0" unless price_cents.to_i.positive?
+      raise ArgumentError, "Currency can't be blank" if price_currency.blank?
+    end
 
     # DSL methods for pack definition
     class Builder
@@ -75,23 +88,22 @@ module UsageCredits
     # Get credits per dollar ratio
     def credits_per_dollar
       return 0 if price.zero?
-
       total_credits / price
     end
 
     # Apply the pack to a wallet
-    def apply_to_wallet(wallet, source: nil)
-      wallet.add_credits(
+    def fulfill_purchase(user)
+      user.credit_wallet.add_credits(
         total_credits,
         metadata: {
-          pack_name: name,
+          pack: name,
           price_cents: price_cents,
           price_currency: price_currency,
           credits: credits,
-          bonus_credits: bonus_credits
+          bonus_credits: bonus_credits,
+          purchased_at: Time.current
         },
-        category: :credit_pack_purchase,
-        source: source
+        category: :credit_pack_purchase
       )
     end
 

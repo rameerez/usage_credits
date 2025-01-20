@@ -200,5 +200,135 @@ module UsageCredits
       assert_not_nil transaction.id
       assert_equal @wallet.id, transaction.wallet_id
     end
+
+    ######################
+    # Low Balance Alerts #
+    ######################
+
+    test "triggers low balance alert when threshold is reached" do
+      original_threshold = UsageCredits.configuration.low_balance_threshold
+
+      UsageCredits.configure do |config|
+        config.low_balance_threshold = 50
+        config.on_low_balance do |user|
+          @alert_triggered = true
+          assert_equal @user, user
+        end
+      end
+
+      @alert_triggered = false
+      @user.give_credits(100, reason: "signup")
+
+      # Spend 60 credits to drop below the 50 credit threshold
+      @user.spend_credits_on(:test_operation, cost: 60)
+
+      assert @alert_triggered, "Low balance alert should have been triggered"
+
+      # Reset configuration
+      UsageCredits.configure do |config|
+        config.low_balance_threshold = original_threshold
+      end
+    end
+
+    test "does not trigger low balance alert when no threshold set" do
+      original_threshold = UsageCredits.configuration.low_balance_threshold
+
+      UsageCredits.configure do |config|
+        config.low_balance_threshold = nil
+        config.on_low_balance do |user|
+          @alert_triggered = true
+        end
+      end
+
+      @alert_triggered = false
+      @user.give_credits(100, reason: "signup")
+      @user.spend_credits_on(:test_operation)
+
+      assert_not @alert_triggered, "Low balance alert should not have been triggered"
+
+      # Reset configuration
+      UsageCredits.configure do |config|
+        config.low_balance_threshold = original_threshold
+      end
+    end
+
+    test "low balance threshold must be positive" do
+      assert_raises(ArgumentError) do
+        UsageCredits.configure do |config|
+          config.low_balance_threshold = -10
+        end
+      end
+    end
+
+    ####################
+    # Credit Expiration #
+    ####################
+
+    test "can add credits with expiration" do
+      expiry_time = 1.day.from_now
+      @wallet.add_credits(100, expires_at: expiry_time)
+
+      transaction = @user.credit_history.last
+      assert_equal expiry_time.to_i, transaction.expires_at.to_i
+    end
+
+    test "expired credits are marked as such" do
+      @wallet.add_credits(100, expires_at: 1.day.ago)
+      transaction = @user.credit_history.last
+
+      assert transaction.expired?
+    end
+
+    test "future expiring credits are not marked as expired" do
+      @wallet.add_credits(100, expires_at: 1.day.from_now)
+      transaction = @user.credit_history.last
+
+      assert_not transaction.expired?
+    end
+
+    test "credits without expiration are never marked as expired" do
+      @wallet.add_credits(100)
+      transaction = @user.credit_history.last
+
+      assert_not transaction.expired?
+    end
+
+    #########################
+    # Credit Formatting #
+    #########################
+
+    test "can format credits with custom formatter" do
+      original_formatter = UsageCredits.configuration.credit_formatter
+
+      UsageCredits.configure do |config|
+        config.format_credits do |amount|
+          "#{amount} awesome credits"
+        end
+      end
+
+      @user.give_credits(100, reason: "signup")
+      transaction = @user.credit_history.last
+
+      assert_equal "+100 awesome credits", transaction.formatted_amount
+
+      # Reset formatter
+      UsageCredits.configure do |config|
+        config.format_credits(&original_formatter)
+      end
+    end
+
+    test "negative amounts are properly formatted" do
+      @user.give_credits(100, reason: "signup")
+      @user.spend_credits_on(:test_operation)
+
+      transaction = @user.credit_history.last
+      assert_match /^-/, transaction.formatted_amount
+    end
+
+    test "positive amounts include plus sign" do
+      @user.give_credits(100, reason: "signup")
+      transaction = @user.credit_history.last
+      assert_match /^\+/, transaction.formatted_amount
+    end
   end
 end

@@ -9,7 +9,6 @@ module UsageCredits
     has_many :transactions, class_name: "UsageCredits::Transaction", dependent: :destroy
 
     validates :balance, numericality: { greater_than_or_equal_to: 0 }, unless: :allow_negative_balance?
-    validates :low_balance_threshold, numericality: { greater_than: 0 }, allow_nil: true
 
     # Alias for more intuitive access
     def credits
@@ -57,8 +56,11 @@ module UsageCredits
       # First validate the operation parameters
       operation.validate!(params)
 
-      # Then calculate cost
+      # Calculate cost
       cost = operation.calculate_cost(params)
+
+      # Check if user has enough credits
+      raise InsufficientCredits, "Insufficient credits (#{credits} < #{cost})" unless has_enough_credits_to?(operation_name, **params)
 
       deduct_params = {
         metadata: operation.to_audit_hash(params),
@@ -79,7 +81,6 @@ module UsageCredits
     rescue StandardError => e
       raise e
     end
-
 
     def give_credits(amount, reason: nil)
       raise ArgumentError, "Cannot give negative credits" if amount.negative?
@@ -155,15 +156,16 @@ module UsageCredits
     end
 
     def check_low_balance
-      return unless low_balance? && UsageCredits.configuration.enable_alerts
+      return unless low_balance?
 
       notify_balance_change(:low_balance_reached, credits)
     end
 
     def low_balance?
-      return false if low_balance_threshold.nil?
+      threshold = UsageCredits.configuration.low_balance_threshold
+      return false if threshold.nil?
 
-      credits <= low_balance_threshold
+      credits <= threshold
     end
   end
 end

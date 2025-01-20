@@ -282,11 +282,16 @@ Notify users when they are running low on credits (useful to upsell them a credi
 ```ruby
 UsageCredits.configure do |config|
   # Alert when balance drops below 100 credits
+  # Set to nil to disable low balance alerts
   config.low_balance_threshold = 100.credits
   
   # Handle low credit balance alerts
   config.on_low_balance do |user|
+    # Send notification to user
     UserMailer.low_credits_alert(user).deliver_later
+    
+    # Or trigger any other business logic
+    SlackNotifier.notify("User #{user.id} is running low on credits!")
   end
 end
 ```

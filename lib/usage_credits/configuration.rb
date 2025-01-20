@@ -6,7 +6,7 @@ module UsageCredits
     # Default currency for credit pack pricing
     attr_accessor :default_currency
 
-    # Default threshold for low balance alerts
+    # Default threshold for low balance alerts (nil disables alerts)
     attr_reader :low_balance_threshold
 
     # Whether to allow negative balances (useful for enterprise customers)

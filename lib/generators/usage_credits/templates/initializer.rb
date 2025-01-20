@@ -1,34 +1,47 @@
 # frozen_string_literal: true
 
 UsageCredits.configure do |config|
+  # Alert when balance drops below this threshold (default: 100 credits)
+  # Set to nil to disable low balance alerts
+  # config.low_balance_threshold = 100.credits
+
+  # Handle low credit balance alerts
+  # config.on_low_balance do |user|
+    # Send notification to user when their balance drops below the threshold
+    # UserMailer.low_credits_alert(user).deliver_later
+  # end
+
   # Allow negative credit balance (default: false)
   # config.allow_negative_balance = false
-
-  # Enable low balance alerts (default: true)
-  # config.enable_alerts = true
 
   # Rounding strategy for credit calculations (default: :round)
   # config.rounding_strategy = :round # or :floor, :ceil
 
-  # Handle events (balance changes, low balance alerts, etc.)
-  # config.event_handler = ->(event, **params) do
-  #   case event
-  #   when :low_balance_reached
-  #     # Send notification to user
-  #     UserMailer.low_credits_alert(params[:wallet].owner).deliver_later
-  #   end
+  # Format credits for display (default: "X credits")
+  # config.format_credits do |amount|
+  #   "#{number_with_delimiter(amount)} credits remaining"
   # end
 
-  # Example operations (uncomment and modify as needed):
+  # Define your credit-consuming operations below
+  #
+  # Example:
   #
   # operation :send_email do
   #   cost 1.credit
   # end
   #
   # operation :process_image do
-  #   cost 10.credits + 2.credits_per(:mb)
+  #   cost 10.credits + 1.credit_per(:mb)
   #   validate ->(params) { params[:size] <= 100.megabytes }, "File too large"
   # end
+  #
+  # operation :generate_ai_response do
+  #   cost 5.credits
+  #   validate ->(params) { params[:prompt].length <= 1000 }, "Prompt too long"
+  #   meta category: :ai, description: "Generate AI response"
+  # end
+
+  # Example operations (uncomment and modify as needed):
   #
   # credit_pack :starter do
   #   includes 1000.credits
@@ -42,12 +55,6 @@ UsageCredits.configure do |config|
   #   trial_includes 500.credits
   #   unused_credits :rollover # or :expire
   # end
-
-  # Define your credit operations here
-  # Example:
-  # config.operation :send_email, cost: 1
-  # config.operation :process_image, cost: 5
-  # config.operation :generate_report, cost: 10
 
   # Optional: Define credit packs for one-time purchases
   # Example:

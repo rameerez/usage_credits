@@ -9,8 +9,7 @@ module UsageCredits
       has_one :credit_wallet,
               class_name: "UsageCredits::Wallet",
               as: :owner,
-              dependent: :destroy,
-              autosave: true
+              dependent: :destroy
 
       after_create :create_credit_wallet, if: :should_create_wallet?
 
@@ -65,8 +64,7 @@ module UsageCredits
       return unless should_create_wallet?
 
       build_credit_wallet(
-        balance: credit_options[:initial_balance] || 0,
-        low_balance_threshold: credit_options[:low_balance_threshold]
+        balance: credit_options[:initial_balance] || 0
       ).tap(&:save!)
     end
 

@@ -7,7 +7,6 @@ class CreateUsageCreditsTables < ActiveRecord::Migration[8.0]
     create_table :usage_credits_wallets, id: primary_key_type do |t|
       t.references :owner, polymorphic: true, null: false, type: foreign_key_type
       t.integer :balance, null: false, default: 0
-      t.integer :low_balance_threshold
       t.send(json_column_type, :metadata, null: false, default: {})
 
       t.timestamps
@@ -43,4 +42,4 @@ class CreateUsageCreditsTables < ActiveRecord::Migration[8.0]
     return :jsonb if connection.adapter_name.downcase.include?('postgresql')
     :json
   end
-end 
+end

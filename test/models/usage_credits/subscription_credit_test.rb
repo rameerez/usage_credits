@@ -16,6 +16,11 @@ module UsageCredits
           trial_includes 50.credits
           unused_credits :rollover
         end
+
+        config.subscription_plan :no_rollover_plan do
+          gives 1000.credits
+          unused_credits :expire
+        end
       end
     end
 
@@ -43,13 +48,6 @@ module UsageCredits
     end
 
     test "subscription plan can be configured without rollover" do
-      UsageCredits.configure do |config|
-        config.subscription_plan :no_rollover_plan do
-          gives 1000.credits
-          unused_credits :expire
-        end
-      end
-
       rule = UsageCredits.subscription_rules[:no_rollover_plan]
       assert_not rule.rollover_enabled
     end
@@ -110,13 +108,6 @@ module UsageCredits
     end
 
     test "monthly credits reset balance when rollover disabled" do
-      UsageCredits.configure do |config|
-        config.subscription_plan :no_rollover_plan do
-          gives 1000.credits
-          unused_credits :expire
-        end
-      end
-
       subscription = create_subscription(plan: :no_rollover_plan)
       rule = UsageCredits.subscription_rules[:no_rollover_plan]
 
@@ -145,6 +136,79 @@ module UsageCredits
       rule = UsageCredits.subscription_rules[:expiring_plan]
       assert rule.expire_credits_on_cancel
       assert_equal 30.days.to_i, rule.credit_expiration_period
+    end
+
+    #######################
+    # Pay Integration #
+    #######################
+
+    test "credits are given when subscription is created via Pay" do
+      customer = create_customer
+      subscription = Pay::Subscription.create!(
+        customer: customer,
+        processor_id: "sub_#{SecureRandom.hex(8)}",
+        processor_plan: :test_plan,
+        status: "active",
+        name: "default"
+      )
+
+      assert_equal 1100, @user.credits # 100 signup bonus + 1000 monthly
+      assert_equal 2, @user.credit_history.count # signup bonus + monthly credits
+    end
+
+    test "credits are given when subscription trial starts via Pay" do
+      customer = create_customer
+      subscription = Pay::Subscription.create!(
+        customer: customer,
+        processor_id: "sub_#{SecureRandom.hex(8)}",
+        processor_plan: :test_plan,
+        status: "trialing",
+        trial_ends_at: 1.month.from_now,
+        name: "default"
+      )
+
+      assert_equal 50, @user.credits # trial credits only
+      transaction = @user.credit_history.last
+      assert_equal "subscription_trial", transaction.category
+    end
+
+    test "credits are reset when subscription is cancelled via Pay" do
+      customer = create_customer
+      subscription = Pay::Subscription.create!(
+        customer: customer,
+        processor_id: "sub_#{SecureRandom.hex(8)}",
+        processor_plan: :no_rollover_plan,
+        status: "active",
+        name: "default"
+      )
+
+      assert_equal 1000, @user.credits
+
+      subscription.update!(status: "canceled")
+      assert_equal 0, @user.credits
+    end
+
+    test "credits expire when subscription is cancelled with expiration" do
+      UsageCredits.configure do |config|
+        config.subscription_plan :expiring_plan do
+          gives 1000.credits
+          expire_after 30.days
+        end
+      end
+
+      customer = create_customer
+      subscription = Pay::Subscription.create!(
+        customer: customer,
+        processor_id: "sub_#{SecureRandom.hex(8)}",
+        processor_plan: :expiring_plan,
+        status: "active",
+        name: "default"
+      )
+
+      subscription.update!(status: "canceled", ends_at: 30.days.from_now)
+
+      transaction = @user.credit_history.last
+      assert_equal subscription.ends_at.to_i, transaction.expires_at.to_i
     end
 
     private

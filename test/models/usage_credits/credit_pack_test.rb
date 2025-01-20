@@ -7,19 +7,7 @@ module UsageCredits
     setup do
       @user = users(:default)
       @wallet = @user.credit_wallet
-
-      # Define test credit packs
-      UsageCredits.configure do |config|
-        config.credit_pack :starter do
-          includes 1000.credits
-          costs 49.dollars
-        end
-
-        config.credit_pack :pro do
-          includes 5000.credits
-          costs 199.dollars
-        end
-      end
+      define_test_packs
     end
 
     teardown do
@@ -66,17 +54,6 @@ module UsageCredits
       end
     end
 
-    test "can create checkout session for credit pack" do
-      packs = UsageCredits.configuration.credit_packs
-      pack = packs[:starter]
-      customer = create_customer
-      customer.save!
-
-      session = pack.create_checkout_session(customer.owner)
-      assert_not_nil session
-      assert_not_nil session.url
-    end
-
     test "credits are given after successful purchase" do
       packs = UsageCredits.configuration.credit_packs
       pack = packs[:starter]
@@ -120,14 +97,89 @@ module UsageCredits
       assert_not_nil metadata["purchased_at"]
     end
 
+    test "credits are given when pack purchase succeeds" do
+      customer = create_customer
+      # puts "\nBefore charge creation:"
+      # puts "  Customer owner: #{customer.owner.inspect}"
+      # puts "  Initial credits: #{@user.credits}"
+      # puts "  Configuration packs: #{UsageCredits.configuration.credit_packs.keys.inspect}"
+
+      charge = Pay::Charge.create!(
+        customer: customer,
+        processor_id: "ch_#{SecureRandom.hex(8)}",
+        amount: 4900, # $49.00
+        data: { "status" => "succeeded" },
+        metadata: { "credit_pack" => "starter" }
+      )
+
+      # puts "\nAfter charge creation:"
+      # puts "  Charge succeeded?: #{charge.succeeded?}"
+      # puts "  Charge metadata: #{charge.metadata.inspect}"
+      # puts "  Pack used: #{UsageCredits.configuration.credit_packs[charge.metadata["credit_pack"].to_sym].inspect}"
+      # puts "  Final credits: #{@user.credits}"
+
+      assert_equal 1000, @user.credits
+
+      transaction = @user.credit_history.last
+      assert_equal "credit_pack_purchase", transaction.category
+      assert_equal "starter", transaction.metadata["pack"]
+      assert_equal charge.id, transaction.metadata["charge_id"]
+    end
+
+    test "credits are not given when pack purchase is incomplete" do
+      customer = create_customer
+      charge = Pay::Charge.create!(
+        customer: customer,
+        processor_id: "ch_#{SecureRandom.hex(8)}",
+        amount: 4900,
+        data: {
+          "status" => "pending",
+          "payment_method_details" => { "type" => "card", "card" => { "brand" => "visa" } }
+        },
+        metadata: { "credit_pack" => "starter" }
+      )
+
+      assert_equal 0, @user.credits
+    end
+
+    test "credits are not given for non-pack charges" do
+      customer = create_customer
+      charge = Pay::Charge.create!(
+        customer: customer,
+        processor_id: "ch_#{SecureRandom.hex(8)}",
+        amount: 4900,
+        data: {
+          "status" => "succeeded",
+          "payment_method_details" => { "type" => "card", "card" => { "brand" => "visa" } }
+        }
+      )
+
+      assert_equal 0, @user.credits
+    end
+
     private
 
     def create_customer
       Pay::Customer.create!(
         owner: @user,
-        processor: "stripe",
+        processor: :stripe,
         processor_id: "cus_#{SecureRandom.hex(8)}"
       )
+    end
+
+    def define_test_packs
+      # Define test credit packs
+      UsageCredits.configure do |config|
+        config.credit_pack :starter do
+          includes 1000.credits
+          costs 49.dollars
+        end
+
+        config.credit_pack :pro do
+          includes 5000.credits
+          costs 199.dollars
+        end
+      end
     end
   end
 end

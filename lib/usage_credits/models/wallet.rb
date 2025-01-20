@@ -138,6 +138,15 @@ module UsageCredits
       end
     end
 
+    def expire_credits_at(expiry_date, metadata: {})
+      transactions.create!(
+        amount: 0,  # No credits added/removed, just setting expiration
+        category: :credit_expiration,
+        metadata: metadata,
+        expires_at: expiry_date
+      )
+    end
+
     private
 
     def insufficient_credits?(amount)

@@ -16,8 +16,13 @@ module UsageCredits
       signup_bonus
       referral_bonus
       subscription_credits
+      subscription_monthly
+      subscription_trial
+      subscription_signup_bonus
+      subscription_monthly_reset
       trial_credits
       credit_pack
+      credit_pack_purchase
       operation_charge
       credit_expiration
       manual_adjustment

@@ -53,7 +53,7 @@ module UsageCredits
     def apply_to_subscription(subscription)
       wallet = subscription.customer.owner.credit_wallet
 
-      if subscription.trial?
+      if subscription.on_trial?
         apply_trial_credits(wallet, subscription)
       else
         apply_regular_credits(wallet, subscription)

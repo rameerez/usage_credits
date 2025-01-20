@@ -226,7 +226,21 @@ session = pack.create_checkout_session(current_user)
 redirect_to session.url
 ```
 
-The gem automatically handles Stripe webhooks to credit the user's wallet after purchase.
+The gem automatically handles:
+- Credit fulfillment after successful payment
+- Proportional credit removal on refunds (e.g., if 50% is refunded, 50% of credits are removed)
+- Prevention of double-processing through metadata flags
+- Detailed transaction tracking with metadata like:
+  ```ruby
+  {
+    pack: "starter",                # Pack identifier
+    charge_id: "ch_xxx",            # Payment processor charge ID
+    processor: "stripe",            # Payment processor used
+    price_cents: 4900,              # Amount paid in cents
+    credits: 1000,                  # Credits given
+    purchased_at: "2024-01-20"      # Purchase timestamp
+  }
+  ```
 
 ## Subscription plans with credits
 

@@ -57,7 +57,7 @@ module UsageCredits
       # First validate the operation parameters
       operation.validate!(params)
 
-      # Then calculate cost and deduct credits
+      # Then calculate cost
       cost = operation.calculate_cost(params)
 
       deduct_params = {
@@ -66,16 +66,24 @@ module UsageCredits
       }
 
       if block_given?
-        transaction do
-          deduct_credits(cost, **deduct_params)
-          yield
+        ActiveRecord::Base.transaction do
+          lock!  # Row-level lock for concurrency safety
+
+          yield  # Perform the operation first
+
+          deduct_credits(cost, **deduct_params)  # Deduct credits only if the block was successful
         end
       else
         deduct_credits(cost, **deduct_params)
       end
+    rescue StandardError => e
+      raise e
     end
 
+
     def give_credits(amount, reason: nil)
+      raise ArgumentError, "Cannot give negative credits" if amount.negative?
+
       category = case reason&.to_s
                 when "signup" then :signup_bonus
                 when "referral" then :referral_bonus
@@ -92,11 +100,11 @@ module UsageCredits
     # Internal methods for credit management
     def add_credits(amount, metadata: {}, category: :credit_added, expires_at: nil, source: nil)
       with_lock do
-        self.balance += amount.to_i
+        self.balance += amount
         save!
 
         transactions.create!(
-          amount: amount.to_i,
+          amount: amount,
           category: category,
           metadata: metadata,
           expires_at: expires_at,

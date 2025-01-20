@@ -108,7 +108,7 @@ First, let's see how to define these credit-consuming operations.
 
 ## Define credit-consuming operations and set credit costs
 
-Define all your operations and their cost in your `config/initializers/usage_credits.rb`.
+Define all your operations and their cost in your `config/initializers/usage_credits.rb` file.
 
 For example, create a simple operation named `send_email` that costs 1 credit to perform:
 
@@ -121,8 +121,8 @@ end
 
 You can get quite sophisticated in pricing, and define the cost of your operations based on parameters:
 ```ruby
-# Cost based on size
 operation :process_image do
+  # Cost based on size
   cost 10.credits + 1.credits_per(:mb)
   validate ->(params) { params[:size] <= 100.megabytes }, "File too large"
 end
@@ -131,12 +131,12 @@ end
 > [!IMPORTANT]
 > Credit costs must be whole numbers. Decimals are not allowed to avoid floating-point issues and ensure predictable billing.
 > ```ruby
-> 1.credit           # ✅ Valid: whole number
-> 10.credits         # ✅ Valid: whole number
-> 1.credits_per(:mb) # ✅ Valid: whole number rate
+> 1.credit              # ✅ Valid: whole number
+> 10.credits            # ✅ Valid: whole number
+> 1.credits_per(:mb)    # ✅ Valid: whole number rate
 > 
-> 0.5.credits        # ❌ Invalid: decimal credits
-> 1.5.credits_per(:mb) # ❌ Invalid: decimal rate
+> 0.5.credits           # ❌ Invalid: decimal credits
+> 1.5.credits_per(:mb)  # ❌ Invalid: decimal rate
 > ```
 > For variable costs (like per MB), the final cost is always rounded up to the nearest credit.
 > For example, with `1.credits_per(:mb)`, using 2.3 MB will cost 3 credits.

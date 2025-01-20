@@ -4,8 +4,9 @@ require "active_support/core_ext/numeric"
 
 class Numeric
   def credits
-    raise ArgumentError, "Credit cost amount must be a whole number (decimals are not allowed)" unless self == self.to_i
-    UsageCredits::Cost::Fixed.new(self)
+    raise ArgumentError, "Credit amount must be a whole number (decimals are not allowed)" unless self == self.to_i
+    raise ArgumentError, "Credit amount cannot be negative" if self.negative?
+    UsageCredits::Cost::Fixed.new(self.to_i)
   end
   alias_method :credit, :credits
 
@@ -19,6 +20,13 @@ class Numeric
     self * 100 # Convert to cents for payment processors
   end
   alias_method :dollar, :dollars
+end
+
+class Proc
+  def credits
+    UsageCredits::Cost::Fixed.new(self)
+  end
+  alias_method :credit, :credits
 end
 
 module UsageCredits
@@ -54,8 +62,20 @@ module UsageCredits
     end
 
     class Fixed < Base
+      def initialize(amount)
+        @amount = amount
+      end
+
       def calculate(params = {})
-        amount
+        value = amount.is_a?(Proc) ? amount.call(params) : amount
+        case value
+        when UsageCredits::Cost::Fixed
+          value.calculate(params)
+        else
+          raise ArgumentError, "Credit amount must be a whole number" unless value == value.to_i
+          raise ArgumentError, "Credit amount cannot be negative" if value.negative?
+          value.to_i
+        end
       end
     end
 
@@ -106,6 +126,14 @@ module UsageCredits
           raise ArgumentError, "Cannot add #{other.class} to #{self.class}"
         end
       end
+    end
+
+    def self.credits(amount)
+      Fixed.new(amount)
+    end
+
+    class_eval do
+      singleton_class.alias_method :credit, :credits
     end
   end
 end

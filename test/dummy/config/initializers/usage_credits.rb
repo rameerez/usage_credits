@@ -3,7 +3,7 @@
 UsageCredits.configure do |config|
 
   operation :test_operation do
-    cost 1.credit
+    cost ->(params) { (params[:cost] || 1).credits }
   end
 
   operation :expensive_operation do

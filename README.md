@@ -6,6 +6,8 @@ Allow your users to have in-app credits they can use to perform operations.
 
 ✨ Perfect for SaaS, AI apps, and API products that want to implement usage-based pricing.
 
+Refill user credits with subscriptions, allow your users to purchase booster credit packs, rollover unused credits to the next billing period, and more!
+
 > [!NOTE]
 > `usage_credits` integrates with the [`pay`](https://github.com/pay-rails/pay) gem both to refill credits through subscriptions, and so you can easily sell credit packs through Stripe, Lemon Squeezy, PayPal or any `pay`-supported processor.
 

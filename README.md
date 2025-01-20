@@ -124,7 +124,6 @@ You can get quite sophisticated in pricing, and define the cost of your operatio
 operation :process_image do
   # Cost based on size
   cost 10.credits + 1.credits_per(:mb)
-  validate ->(params) { params[:size] <= 100.megabytes }, "File too large"
 end
 ```
 

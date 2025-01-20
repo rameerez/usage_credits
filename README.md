@@ -11,12 +11,17 @@ Refill user credits with subscriptions, allow your users to purchase booster cre
 > [!NOTE]
 > `usage_credits` integrates with the [`pay`](https://github.com/pay-rails/pay) gem both to refill credits through subscriptions, and so you can easily sell credit packs through Stripe, Lemon Squeezy, PayPal or any `pay`-supported processor.
 
-With `usage_credits`, you can:
+---
+
+Your new superpowers:
+
 - Keep track of each user's credits
 - Define how many credits any operation in your app costs
+- Spend credits securely (credits won't get spent if the operation fails)
 - Create and sell credit packs
 - Refill credits through subscriptions (monthly, yearly, etc.)
-- Track every credit transaction with detailed history and audit trail
+- Rollover and expire credits
+- Track every credit transaction with detailed history and audit trail for billing / reporting
 
 All with a simple DSL that reads just like English.
 

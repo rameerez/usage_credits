@@ -8,7 +8,7 @@ module UsageCredits
     belongs_to :wallet
     belongs_to :source, polymorphic: true, optional: true
 
-    validates :amount, presence: true
+    validates :amount, presence: true, numericality: { only_integer: true }
     validates :category, presence: true
 
     # Define transaction categories
@@ -21,6 +21,8 @@ module UsageCredits
       operation_charge
       credit_expiration
       manual_adjustment
+      credit_added
+      credit_deducted
     ].freeze
 
     validates :category, inclusion: { in: CATEGORIES }
@@ -31,6 +33,7 @@ module UsageCredits
     scope :recent, -> { order(created_at: :desc) }
     scope :expired, -> { where("expires_at < ?", Time.current) }
     scope :not_expired, -> { where("expires_at IS NULL OR expires_at > ?", Time.current) }
+    scope :operation_charges, -> { where(category: :operation_charge) }
 
     # Format the amount for display
     def formatted_amount

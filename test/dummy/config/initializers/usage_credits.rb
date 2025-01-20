@@ -7,7 +7,7 @@ UsageCredits.configure do |config|
   end
 
   operation :expensive_operation do
-    cost 10.credits
+    cost 1000.credits
   end
 
   # Allow negative credit balance (default: false)

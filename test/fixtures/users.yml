@@ -1,4 +1,11 @@
+# User with an existing wallet (created in setup)
 default:
-  id: 1
+  id: 06623276-6486-4ab0-850c-fec277764073
   email: user@example.com
   name: Test User
+
+# User without a wallet (for testing auto-creation)
+no_wallet:
+  id: 16623276-6486-4ab0-850c-fec277764074
+  email: new@example.com
+  name: New User

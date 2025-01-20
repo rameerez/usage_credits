@@ -40,8 +40,11 @@ And perform operations:
 @user.estimate_credits_to(:send_email)
 => 1
 
-# Spend credits (make sure to actually perform the operation too)
-@user.spend_credits_on(:send_email)
+# Spend credits
+@user.spend_credits_on(:send_email) do
+  # actually perform the thing here
+  # it will not spend credits if it fails / raises an error
+end
 
 # Then check the remaining balance
 @user.credits
@@ -167,6 +170,21 @@ if user.has_enough_credits_to?(:process_image, size: 5.megabytes)
   user.spend_credits_on(:process_image, size: 5.megabytes) if process_image(params)
 else
   redirect_to credits_path, alert: "Not enough credits!"
+end
+```
+
+To ensure credits are not substracted to users from failed operations, you can pass a block to `spend_credits_on`. No credits are spent if the block doesn't succeed (no errors, no exceptions, no raises, etc.) This way, you ensure credits are only spent if the operation succeeds:
+
+```ruby
+# The block form ensures credits are only spent if the operation succeeds
+user.spend_credits_on(:process_image, size: 5.megabytes) do
+  process_image(params)  # If this raises an error, credits won't be spent
+end
+
+# This is equivalent to wrapping in a transaction:
+ActiveRecord::Base.transaction do
+  user.spend_credits_on(:process_image, size: 5.megabytes)
+  process_image(params)
 end
 ```
 

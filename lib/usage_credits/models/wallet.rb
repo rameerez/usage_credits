@@ -60,11 +60,19 @@ module UsageCredits
       # Then calculate cost and deduct credits
       cost = operation.calculate_cost(params)
 
-      deduct_credits(
-        cost,
+      deduct_params = {
         metadata: operation.to_audit_hash(params),
         category: :operation_charge
-      )
+      }
+
+      if block_given?
+        transaction do
+          deduct_credits(cost, **deduct_params)
+          yield
+        end
+      else
+        deduct_credits(cost, **deduct_params)
+      end
     end
 
     def give_credits(amount, reason: nil)

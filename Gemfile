@@ -25,9 +25,8 @@ gem "prawn"
 gem "receipts"
 
 # Test against different databases
-gem "mysql2"
-gem "pg"
 gem "sqlite3"
+gem "pg"
 
 # Used for the dummy Rails app integration
 gem "puma"

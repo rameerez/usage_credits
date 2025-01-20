@@ -186,7 +186,7 @@ To ensure credits are not substracted to users from failed operations, you can p
 end
 ```
 
-That way, credits are only spent if the block succeeds. But if you want to spend the credits immediately, you can use the non-block form:
+If you want to spend the credits immediately, you can use the non-block form:
 
 ```ruby
 @user.spend_credits_on(:process_image, size: 5.megabytes)

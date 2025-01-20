@@ -60,7 +60,7 @@ This gem keeps track of every transaction and its cost + origin, so you can keep
 Each transaction stores comprehensive metadata about the action that was performed:
 ```ruby
 @user.credit_history.last.metadata
-=> {"operation"=>"send_email", "cost"=>1, "params"=>{}, "metadata"=>{}, "executed_at"=>"2025-01-12T01:12:12.123Z"}
+=> {"operation"=>"send_email", "cost"=>1, "params"=>{}, "metadata"=>{}, "executed_at"=>"..."}
 ```
 
 The `usage_credits` gem also allows you to expire credits, fulfill credits based on monthly / yearly subscriptions, sell credit packs, rollover unused credits to the next billing period, and more! Keep reading to get a clear picture of what you can do.
@@ -157,34 +157,39 @@ end
 
 ## Spend credits
 
-There's a handy `has_enough_credits_to?` method to nicely check the user has enough credits to perform a certain operation. There's also a `estimate_credits_to` method so you can estimate the cost of an operation for your users without spending any credits. After that, you can actually spend credits with `spend_credits_on`:
+There's a handy `estimate_credits_to` method to can estimate the total cost of an operation before spending any credits:
 
 ```ruby
-# Estimate cost before performing
-cost = user.estimate_credits_to(:process_image, size: 5.megabytes)
+@user.estimate_credits_to(:process_image, size: 5.megabytes)
 => 15 # (10 base + 5 MB * 1 credit/MB)
+```
 
-# Then check if user has enough credits
-if user.has_enough_credits_to?(:process_image, size: 5.megabytes)
-  # Finally, spend credits and perform the operation
-  user.spend_credits_on(:process_image, size: 5.megabytes) do
-    process_image(params)  # Credits are only spent if this succeeds
-  end
+There's also a `has_enough_credits_to?` method to nicely check the user has enough credits to perform a certain operation:
+```ruby
+if @user.has_enough_credits_to?(:process_image, size: 5.megabytes)
+  # do whatever
 else
   redirect_to credits_path, alert: "Not enough credits!"
 end
 ```
 
+Finally, you can actually spend credits with `spend_credits_on`:
+```ruby
+@user.spend_credits_on(:process_image, size: 5.megabytes)
+```
+
 To ensure credits are not substracted to users from failed operations, you can pass a block to `spend_credits_on`. No credits are spent if the block doesn't succeed (no errors, no exceptions, no raises, etc.) This way, you ensure credits are only spent if the operation succeeds:
 
 ```ruby
-# Credits are only spent if the block succeeds
-user.spend_credits_on(:process_image, size: 5.megabytes) do
+@user.spend_credits_on(:process_image, size: 5.megabytes) do
   process_image(params)  # If this raises an error, no credits are spent
 end
+```
 
-# Non-block form - credits are spent immediately
-user.spend_credits_on(:process_image, size: 5.megabytes)
+That way, credits are only spent if the block succeeds. But if you want to spend the credits immediately, you can use the non-block form:
+
+```ruby
+@user.spend_credits_on(:process_image, size: 5.megabytes)
 process_image(params)  # If this fails, credits are already spent!
 ```
 

@@ -11,6 +11,7 @@ require "usage_credits/core_ext/numeric"
 # Require concerns first (needed by models)
 require "usage_credits/models/concerns/has_wallet"
 require "usage_credits/models/concerns/subscription_extension"
+require "usage_credits/models/concerns/charge_extension"
 
 # Require core files
 require "usage_credits/version"

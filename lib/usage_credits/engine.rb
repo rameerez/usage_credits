@@ -22,26 +22,18 @@ module UsageCredits
     initializer "usage_credits.pay_integration" do
       ActiveSupport.on_load(:pay) do
         ::Pay::Subscription.include UsageCredits::SubscriptionExtension
+        ::Pay::Charge.include UsageCredits::ChargeExtension
       end
     end
 
-    # Set up webhook handlers for Pay integration
-    config.after_initialize do
-      Pay::Webhooks.delegator.subscribe "stripe.checkout.session.completed" do |event|
-        UsageCredits::Webhooks::StripeHandler.handle_checkout_completed(event)
-      end
+    config.to_prepare do
+      Pay::Subscription.include UsageCredits::SubscriptionExtension
+      Pay::Charge.include UsageCredits::ChargeExtension
+    end
 
-      Pay::Webhooks.delegator.subscribe "stripe.subscription.created" do |event|
-        UsageCredits::Webhooks::StripeHandler.handle_subscription_created(event)
-      end
 
-      Pay::Webhooks.delegator.subscribe "stripe.subscription.updated" do |event|
-        UsageCredits::Webhooks::StripeHandler.handle_subscription_updated(event)
-      end
-
-      Pay::Webhooks.delegator.subscribe "stripe.subscription.deleted" do |event|
-        UsageCredits::Webhooks::StripeHandler.handle_subscription_deleted(event)
-      end
+    initializer "usage_credits.configs" do
+      # Initialize any config settings
     end
   end
 end

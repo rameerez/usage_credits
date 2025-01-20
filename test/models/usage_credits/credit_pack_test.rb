@@ -70,8 +70,9 @@ module UsageCredits
       packs = UsageCredits.configuration.credit_packs
       pack = packs[:starter]
       customer = create_customer
+      customer.save!
 
-      session = pack.create_checkout_session(@user)
+      session = pack.create_checkout_session(customer.owner)
       assert_not_nil session
       assert_not_nil session.url
     end

@@ -22,6 +22,7 @@ module UsageCredits
       raise ArgumentError, "Bonus credits must be greater than or equal to 0" if bonus_credits.to_i.negative?
       raise ArgumentError, "Price must be greater than 0" unless price_cents.to_i.positive?
       raise ArgumentError, "Currency can't be blank" if price_currency.blank?
+      raise ArgumentError, "Price must be in whole dollars" if price_cents % 100 != 0
     end
 
     # DSL methods for pack definition
@@ -109,6 +110,8 @@ module UsageCredits
 
     # Create a Stripe Checkout session for this pack
     def create_checkout_session(user)
+      raise ArgumentError, "User must have a payment processor" unless user.respond_to?(:payment_processor) && user.payment_processor
+
       user.payment_processor.checkout(
         mode: "payment",
         line_items: [{

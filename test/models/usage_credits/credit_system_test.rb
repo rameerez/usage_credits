@@ -367,7 +367,7 @@ module UsageCredits
       @user.spend_credits_on(:meta_op)
 
       charge = @user.credit_history.operation_charges.last
-      assert_equal :test, charge.metadata["category"]
+      assert_equal "test", charge.metadata["category"]
       assert_equal "Test operation", charge.metadata["description"]
     end
   end

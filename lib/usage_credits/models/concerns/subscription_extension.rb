@@ -7,6 +7,7 @@ module UsageCredits
 
     included do
       after_create :setup_subscription_credits
+      after_update :handle_subscription_status_change
 
       # TODO: undefined method `before_cancel' for class Pay::Subscription (NoMethodError)
       # before_cancel :handle_subscription_cancellation
@@ -110,13 +111,31 @@ module UsageCredits
       )
     end
 
+    def handle_subscription_status_change
+      return unless saved_change_to_status?
+
+      case status
+      when "canceled"
+        handle_subscription_cancellation
+      when "active"
+        handle_subscription_resumed if status_before_last_save == "canceled"
+      end
+    end
+
     def handle_subscription_cancellation
       return unless provides_credits?
 
       # Handle any cleanup needed when subscription is cancelled
-      # For example, schedule credit expiration
-      if credit_rule.expire_credits_on_cancel
-        schedule_credit_expiration
+      if credit_rule.expire_credits_on_cancel && ends_at.present?
+        customer.owner.credit_wallet.transactions.create!(
+          amount: 0,  # No credits added, just setting expiration
+          metadata: {
+            subscription_id: id,
+            reason: "subscription_cancelled"
+          },
+          expires_at: ends_at,
+          category: :subscription_credits
+        )
       end
     end
 
@@ -125,16 +144,6 @@ module UsageCredits
 
       # Re-add monthly credits if needed
       add_monthly_credits
-    end
-
-    def schedule_credit_expiration
-      return unless credit_rule.credit_expiration_period
-
-      expiration_date = Time.current + credit_rule.credit_expiration_period
-
-      # Schedule a background job to expire credits
-      UsageCredits::ExpireCreditsJob.set(wait_until: expiration_date)
-                                   .perform_later(customer.owner.credit_wallet)
     end
   end
 end

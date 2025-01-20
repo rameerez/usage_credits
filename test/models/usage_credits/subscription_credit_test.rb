@@ -207,7 +207,7 @@ module UsageCredits
 
       subscription.update!(status: "canceled", ends_at: 30.days.from_now)
 
-      transaction = @user.credit_history.last
+      transaction = customer.owner.credit_history.last
       assert_equal subscription.ends_at.to_i, transaction.expires_at.to_i
     end
 

@@ -62,8 +62,9 @@ module UsageCredits
       # Check if user has enough credits
       raise InsufficientCredits, "Insufficient credits (#{credits} < #{cost})" unless has_enough_credits_to?(operation_name, **params)
 
+      audit_data = operation.to_audit_hash(params)
       deduct_params = {
-        metadata: operation.to_audit_hash(params),
+        metadata: audit_data.merge(operation.metadata),
         category: :operation_charge
       }
 

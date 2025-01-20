@@ -30,7 +30,7 @@ module UsageCredits
 
     # Add metadata
     def meta(hash)
-      @metadata.merge!(hash)
+      @metadata = @metadata.merge(hash.transform_keys(&:to_sym))
     end
 
     # Calculate the total cost for this operation

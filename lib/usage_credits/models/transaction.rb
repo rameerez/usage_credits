@@ -86,6 +86,17 @@ module UsageCredits
       end
     end
 
+    # Override metadata getter to support both string and symbol keys
+    def metadata
+      @indifferent_metadata ||= ActiveSupport::HashWithIndifferentAccess.new(super || {})
+    end
+
+    # Override metadata setter to ensure consistent storage
+    def metadata=(hash)
+      @indifferent_metadata = nil  # Clear cache
+      super(hash.is_a?(Hash) ? hash.to_h : {})
+    end
+
     private
 
     def operation_description

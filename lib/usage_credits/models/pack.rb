@@ -10,8 +10,13 @@ module UsageCredits
       @credits = credits
       @bonus_credits = bonus_credits
       @price_cents = price_cents
-      @price_currency = price_currency || UsageCredits.configuration.default_currency.to_s.upcase
-      @metadata = metadata
+      price_currency = price_currency || UsageCredits.configuration.default_currency
+      price_currency = price_currency.to_s.downcase.to_sym
+      unless UsageCredits::Configuration::VALID_CURRENCIES.include?(price_currency)
+        raise ArgumentError, "Invalid currency. Must be one of: #{UsageCredits::Configuration::VALID_CURRENCIES.join(', ')}"
+      end
+      @price_currency = price_currency.to_s.upcase
+      @metadata = metadata.transform_keys(&:to_sym)
 
       validate!
     end
@@ -22,7 +27,7 @@ module UsageCredits
       raise ArgumentError, "Bonus credits must be greater than or equal to 0" if bonus_credits.to_i.negative?
       raise ArgumentError, "Price must be greater than 0" unless price_cents.to_i.positive?
       raise ArgumentError, "Currency can't be blank" if price_currency.blank?
-      raise ArgumentError, "Price must be in whole dollars" if price_cents % 100 != 0
+      raise ArgumentError, "Price must be in whole cents ($49 = 4900)" if price_cents % 100 != 0
     end
 
     # DSL methods for pack definition
@@ -53,9 +58,18 @@ module UsageCredits
         @price_cents = cents
       end
 
+      # More intuitive currency setting
+      def currency(currency)
+        currency = currency.to_s.downcase.to_sym
+        unless UsageCredits::Configuration::VALID_CURRENCIES.include?(currency)
+          raise ArgumentError, "Invalid currency. Must be one of: #{UsageCredits::Configuration::VALID_CURRENCIES}"
+        end
+        @price_currency = currency.to_s.upcase
+      end
+
       # Add metadata
       def meta(hash)
-        @metadata.merge!(hash)
+        @metadata.merge!(hash.transform_keys(&:to_s))
       end
 
       # Build the pack
@@ -69,6 +83,17 @@ module UsageCredits
           metadata: metadata
         )
       end
+    end
+
+    # Override metadata getter to support both string and symbol keys
+    def metadata
+      @indifferent_metadata ||= ActiveSupport::HashWithIndifferentAccess.new(@metadata)
+    end
+
+    # Override metadata setter to ensure consistent storage
+    def metadata=(hash)
+      @indifferent_metadata = nil  # Clear cache
+      @metadata = hash.transform_keys(&:to_sym)
     end
 
     # Get total credits (including bonus)
@@ -92,18 +117,35 @@ module UsageCredits
       total_credits / price
     end
 
+    def display_credits
+      if bonus_credits.positive?
+        "#{credits} + #{bonus_credits} bonus credits"
+      else
+        "#{credits} credits"
+      end
+    end
+
+    def display_name
+      "#{display_credits} pack"
+    end
+
+    def display_description
+      display_credits
+    end
+
+    # Generate human-friendly button text for purchase links
+    def button_text
+      "Get #{display_credits} for #{formatted_price}"
+    end
+
     # Apply the pack to a wallet
     def fulfill_purchase(user)
       user.credit_wallet.add_credits(
         total_credits,
-        metadata: {
-          pack: name,
-          price_cents: price_cents,
-          price_currency: price_currency,
-          credits: credits,
-          bonus_credits: bonus_credits,
-          purchased_at: Time.current
-        },
+        metadata: base_metadata.merge(
+          purchased_at: Time.current,
+          **metadata
+        ),
         category: :credit_pack_purchase
       )
     end
@@ -119,18 +161,29 @@ module UsageCredits
             currency: price_currency.downcase,
             unit_amount: price_cents,
             product_data: {
-              name: "#{credits} Credits Pack",
-              description: bonus_credits.positive? ? "Includes #{bonus_credits} bonus credits!" : nil
+              name: display_name,
+              description: display_description
             }
           },
           quantity: 1
         }],
-        metadata: {
-          credit_pack: name,
-          credits: credits,
-          bonus_credits: bonus_credits
-        }
+        payment_intent_data: {
+          metadata: base_metadata
+        },
+        metadata: base_metadata
       )
     end
+
+    def base_metadata
+      {
+        purchase_type: "credit_pack",
+        pack_name: name,
+        price_cents: price_cents,
+        price_currency: price_currency,
+        credits: credits,
+        bonus_credits: bonus_credits
+      }
+    end
+
   end
 end

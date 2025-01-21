@@ -5,6 +5,10 @@ module UsageCredits
   class Engine < ::Rails::Engine
     isolate_namespace UsageCredits
 
+    # Ensure our models load first
+    config.autoload_paths << File.expand_path("../models", __dir__)
+    config.autoload_paths << File.expand_path("../models/concerns", __dir__)
+
     # Set up autoloading paths
     initializer "usage_credits.autoload", before: :set_autoload_paths do |app|
       app.config.autoload_paths << root.join("lib")
@@ -21,16 +25,10 @@ module UsageCredits
 
     initializer "usage_credits.pay_integration" do
       ActiveSupport.on_load(:pay) do
-        ::Pay::Subscription.include UsageCredits::SubscriptionExtension
-        ::Pay::Charge.include UsageCredits::ChargeExtension
+        Pay::Subscription.include UsageCredits::PaySubscriptionExtension
+        Pay::Charge.include UsageCredits::PayChargeExtension
       end
     end
-
-    config.to_prepare do
-      Pay::Subscription.include UsageCredits::SubscriptionExtension
-      Pay::Charge.include UsageCredits::ChargeExtension
-    end
-
 
     initializer "usage_credits.configs" do
       # Initialize any config settings

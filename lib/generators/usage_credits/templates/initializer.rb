@@ -1,27 +1,7 @@
 # frozen_string_literal: true
 
 UsageCredits.configure do |config|
-  # Alert when balance drops below this threshold (default: 100 credits)
-  # Set to nil to disable low balance alerts
-  # config.low_balance_threshold = 100.credits
-
-  # Handle low credit balance alerts
-  # config.on_low_balance do |user|
-    # Send notification to user when their balance drops below the threshold
-    # UserMailer.low_credits_alert(user).deliver_later
-  # end
-
-  # Allow negative credit balance (default: false)
-  # config.allow_negative_balance = false
-
-  # Rounding strategy for credit calculations (default: :round)
-  # config.rounding_strategy = :round # or :floor, :ceil
-
-  # Format credits for display (default: "X credits")
-  # config.format_credits do |amount|
-  #   "#{number_with_delimiter(amount)} credits remaining"
-  # end
-
+  #
   # Define your credit-consuming operations below
   #
   # Example:
@@ -40,37 +20,72 @@ UsageCredits.configure do |config|
   #   validate ->(params) { params[:prompt].length <= 1000 }, "Prompt too long"
   #   meta category: :ai, description: "Generate AI response"
   # end
-
-  # Example operations (uncomment and modify as needed):
+  #
+  # operation :process_items do
+  #   cost 1.credit_per(:units)  # Cost per item processed
+  #   meta category: :batch, description: "Process items in batch"
+  # end
+  #
+  #
+  #
+  # Example credit packs (uncomment and modify as needed):
   #
   # credit_pack :starter do
   #   includes 1000.credits
-  #   bonus 100.credits
+  #   bonus 100.credits  # Optional bonus credits
   #   costs 49.dollars
+  # end
+  #
+  # credit_pack :pro do
+  #   includes 5000.credits
+  #   bonus 1000.credits
+  #   costs 199.dollars
+  # end
+  #
+  #
+  #
+  # Example subscription plans (uncomment and modify as needed):
+  #
+  # subscription_plan :basic do
+  #   gives 1000.credits.per_month
+  #   signup_bonus 100.credits
+  #   unused_credits :expire  # Credits reset each month
   # end
   #
   # subscription_plan :pro do
   #   gives 10_000.credits.per_month
   #   signup_bonus 1_000.credits
   #   trial_includes 500.credits
-  #   unused_credits :rollover # or :expire
+  #   unused_credits :rollover  # Credits roll over to next month
   # end
-
-  # Optional: Define credit packs for one-time purchases
-  # Example:
-  # config.credit_pack :starter, credits: 100, price: 9.99
-  # config.credit_pack :pro, credits: 500, price: 39.99
-  # config.credit_pack :enterprise, credits: 2000, price: 149.99
-
-  # Optional: Define subscription plans with monthly credit allowances
-  # Example:
-  # config.subscription_plan :basic, credits_per_month: 100, price_per_month: 9.99
-  # config.subscription_plan :pro, credits_per_month: 500, price_per_month: 39.99
-  # config.subscription_plan :enterprise, credits_per_month: 2000, price_per_month: 149.99
-
-  # Optional: Configure default behavior
-  # config.default_starting_credits = 0  # Credits given to new users
-  # config.allow_negative_balance = false # Whether to allow operations when user has insufficient credits
-  # config.rollover_credits = false      # Whether unused credits roll over to next month for subscription plans
-  # config.credit_expiration = 12.months # How long credits are valid for (nil for no expiration)
+  #
+  #
+  #
+  # Alert when balance drops below this threshold (default: 100 credits)
+  # Set to nil to disable low balance alerts
+  #
+  # config.low_balance_threshold = 100.credits
+  #
+  #
+  # Handle low credit balance alerts
+  #
+  # config.on_low_balance do |user|
+    # Send notification to user when their balance drops below the threshold
+    # UserMailer.low_credits_alert(user).deliver_later
+  # end
+  #
+  #
+  # Rounding strategy for credit calculations (default: :ceil)
+  # :ceil - Always round up (2.1 => 3)
+  # :floor - Always round down (2.9 => 2)
+  # :round - Standard rounding (2.4 => 2, 2.6 => 3)
+  #
+  # config.rounding_strategy = :ceil
+  #
+  #
+  # Format credits for display (default: "X credits")
+  #
+  # config.format_credits do |amount|
+  #   "#{number_with_delimiter(amount)} credits remaining"
+  # end
 end

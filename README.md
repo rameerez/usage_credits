@@ -18,12 +18,13 @@ Your new superpowers:
 - Keep track of each user's credits
 - Define how many credits any operation in your app costs
 - Spend credits securely (credits won't get spent if the operation fails)
-- Create and sell credit packs at any time (including mid-billing cycle)
+- Allow users to purchase credit packs at any time (including mid-billing cycle)
 - Refill credits through subscriptions (monthly, yearly, etc.)
 - Give users bonus credits (for referrals, trial subscriptions, etc.)
 - Handle subscription upgrades and downgrades gracefully
 - Handle refunds
-- Rollover and expire credits
+- Rollover credits to the next period
+- Expire credits after a certain date
 - Track every credit transaction with detailed history and audit trail for billing / reporting
 
 All with a simple DSL that reads just like English.
@@ -146,7 +147,7 @@ end
 > 1.5.credits_per(:mb)  # ❌ Invalid: decimal rate
 > ```
 > For variable costs (like per MB), the final cost is rounded according to your configured rounding strategy (defaults to rounding up).
-> For example, with `1.credits_per(:mb)`, using 2.3 MB will cost 3 credits by default.
+> For example, with `1.credits_per(:mb)`, using 2.3 MB will cost 3 credits by default, to avoid undercharging users.
 
 ### Units and Rounding
 
@@ -252,7 +253,6 @@ In the `config/initializers/usage_credits.rb` file, define packs of credits user
 ```ruby
 credit_pack :starter do
   includes 1000.credits
-  bonus 100.credits  # Optional bonus credits
   costs 49.dollars
 end
 ```
@@ -273,12 +273,11 @@ The gem automatically handles:
   ```ruby
   {
     pack: "starter",                # Pack identifier
-    charge_id: "ch_xxx",           # Payment processor charge ID
+    charge_id: "ch_xxx",            # Payment processor charge ID
     processor: "stripe",            # Payment processor used
-    price_cents: 4900,             # Amount paid in cents
-    credits: 1000,                 # Base credits given
-    bonus_credits: 100,            # Bonus credits given
-    purchased_at: "2024-01-20"     # Purchase timestamp
+    price_cents: 4900,              # Amount paid in cents
+    credits: 1000,                  # Base credits given
+    purchased_at: "2024-01-20"      # Purchase timestamp
   }
   ```
 

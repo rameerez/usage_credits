@@ -28,7 +28,7 @@ module UsageCredits
       amount_refunded > 0
     end
 
-    # private
+    private
 
     # Returns true if the charge has a valid credit wallet to operate on
     def has_valid_wallet?
@@ -109,13 +109,19 @@ module UsageCredits
       end
     end
 
+    def credits_already_refunded?
+      # Check if refund was already processed with credits deducted by looking for a refund transaction
+      credit_wallet&.transactions&.where(category: "credit_pack_refund")
+        .exists?(['metadata @> ?', { refunded_purchase_charge_id: id, credits_refunded: true }.to_json])
+    end
+
     def handle_refund!
       # Guard clauses for required data and state
       return unless refunded?
       return unless pack_identifier
-      return if metadata["credits_refunded"]
       return unless has_valid_wallet?
       return unless amount.is_a?(Numeric) && amount.positive?
+      return if credits_already_refunded?
 
       pack_name = pack_identifier.to_sym
       pack = UsageCredits.find_pack(pack_name)
@@ -139,26 +145,20 @@ module UsageCredits
       begin
         Rails.logger.info "Processing refund for charge #{id}: #{credits_to_remove} credits (#{(refund_ratio * 100).round(2)}% of #{pack.total_credits})"
 
-        # Wrap credit deduction and metadata update in a transaction for atomicity
+        # Wrap credit deduction in a transaction for atomicity
         ActiveRecord::Base.transaction do
           credit_wallet.deduct_credits(
             credits_to_remove,
             category: "credit_pack_refund",
             metadata: {
-              refund_percentage: refund_ratio,
-              charge_id: id,
-              refund_amount_cents: amount_refunded,
+              refunded_purchase_charge_id: id,
+              credits_refunded: true,
               refunded_at: Time.current,
+              refund_percentage: refund_ratio,
+              refund_amount_cents: amount_refunded,
               **pack.base_metadata
             }
           )
-
-          # Update metadata using update! to ensure validations run
-          update!(metadata: metadata.merge(
-            "credits_refunded" => true,
-            "refunded_at" => Time.current.iso8601,
-            "refunded_credits" => credits_to_remove
-          ))
         end
 
         Rails.logger.info "Successfully processed refund for charge #{id}"

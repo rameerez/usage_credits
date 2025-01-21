@@ -2,82 +2,131 @@
 
 UsageCredits.configure do |config|
 
+  # Default test operations
   operation :test_operation do
-    cost ->(params) { (params[:cost] || 1).credits }
+    cost 1.credits
   end
 
   operation :expensive_operation do
+    cost 10.credits
+  end
+
+  operation :absurdly_expensive_operation do
     cost 1000.credits
   end
 
-  operation :process_image do
-    cost 10.credits + 1.credit_per(:mb)
-    validate ->(params) { params[:size] <= 100.megabytes }, "File too large"
+  operation :variable_op do
+    cost 10.credits + 2.credits_per(:units)
   end
 
-  # Allow negative credit balance (default: false)
-  # config.allow_negative_balance = false
+  operation :edge_op do
+    cost 10.credits + 1.credits_per(:mb)
+  end
 
-  # Enable low balance alerts (default: true)
-  # config.enable_alerts = true
+  operation :mb_op do
+    cost 1.credits_per(:megabytes)
+  end
 
-  # Rounding strategy for credit calculations (default: :round)
-  # config.rounding_strategy = :round # or :floor, :ceil
+  operation :kb_op do
+    cost 1.credits_per(:kilobytes)
+  end
 
-  # Handle events (balance changes, low balance alerts, etc.)
-  # config.event_handler = ->(event, **params) do
-  #   case event
-  #   when :low_balance_reached
-  #     # Send notification to user
-  #     UserMailer.low_credits_alert(params[:wallet].owner).deliver_later
-  #   end
-  # end
+  operation :gb_op do
+    cost 1.credits_per(:gigabytes)
+  end
 
-  # Example operations (uncomment and modify as needed):
-  #
-  # operation :send_email do
-  #   cost 1.credit
-  # end
-  #
-  # operation :process_image do
-  #   cost 10.credits + 2.credits_per(:mb)
-  #   validate ->(params) { params[:size] <= 100.megabytes }, "File too large"
-  # end
-  #
-  # credit_pack :starter do
-  #   includes 1000.credits
-  #   bonus 100.credits
-  #   costs 49.dollars
-  # end
-  #
-  # subscription_plan :pro do
-  #   gives 10_000.credits.per_month
-  #   signup_bonus 1_000.credits
-  #   trial_includes 500.credits
-  #   unused_credits :rollover # or :expire
-  # end
+  operation :unit_op do
+    cost 1.credits_per(:units)
+  end
 
-  # Define your credit operations here
-  # Example:
-  # config.operation :send_email, cost: 1
-  # config.operation :process_image, cost: 5
-  # config.operation :generate_report, cost: 10
+  operation :compound_op do
+    cost 10.credits + 1.credits_per(:mb) + 2.credits_per(:units)
+  end
 
-  # Optional: Define credit packs for one-time purchases
-  # Example:
-  # config.credit_pack :starter, credits: 100, price: 9.99
-  # config.credit_pack :pro, credits: 500, price: 39.99
-  # config.credit_pack :enterprise, credits: 2000, price: 149.99
+  operation :size_op do
+    cost 1.credits_per(:mb)
+  end
 
-  # Optional: Define subscription plans with monthly credit allowances
-  # Example:
-  # config.subscription_plan :basic, credits_per_month: 100, price_per_month: 9.99
-  # config.subscription_plan :pro, credits_per_month: 500, price_per_month: 39.99
-  # config.subscription_plan :enterprise, credits_per_month: 2000, price_per_month: 149.99
+  operation :process_image do
+    cost 10.credits + 1.credits_per(:mb)
+    validate ->(params) { params[:size].to_i <= 100.megabytes }, "File too large (max: 100 MB)"
+  end
 
-  # Optional: Configure default behavior
-  # config.default_starting_credits = 0  # Credits given to new users
-  # config.allow_negative_balance = false # Whether to allow operations when user has insufficient credits
-  # config.rollover_credits = false      # Whether unused credits roll over to next month for subscription plans
-  # config.credit_expiration = 12.months # How long credits are valid for (nil for no expiration)
+  operation :meta_op do
+    cost 10.credits
+    meta category: :test, description: "Test operation", version: "1.0"
+  end
+
+  operation :validated_op do
+    cost 10.credits
+    validate ->(params) { params[:value] > 0 }, "Value must be positive"
+  end
+
+  operation :multi_validated_op do
+    cost 10.credits
+    validate ->(params) { params[:value] > 0 }, "Value must be positive"
+    validate ->(params) { params[:value] < 100 }, "Value must be less than 100"
+  end
+
+  operation :dynamic_op do
+    cost ->(params) { params[:base_cost].to_i + 2 * params[:multiplier].to_i }.credits
+  end
+
+  operation :invalid_op do
+    cost ->(params) { 1.5 }.credits
+  end
+
+  # Define test subscription plans
+  subscription_plan :test_plan do
+    gives 1000.credits
+    signup_bonus 100.credits
+    trial_includes 50
+    unused_credits :rollover
+  end
+
+  subscription_plan :no_trial_plan do
+    gives 1000.credits
+  end
+
+  subscription_plan :no_rollover_plan do
+    gives 1000.credits
+    unused_credits :expire
+  end
+
+  subscription_plan :rollover_plan do
+    gives 1000.credits
+    unused_credits :rollover
+  end
+
+  subscription_plan :trial_plan do
+    gives 1000.credits
+    trial_includes 50
+    unused_credits :expire
+  end
+
+  subscription_plan :expiring_plan do
+    gives 1000.credits
+    unused_credits :expire
+    expire_after 30.days
+  end
+
+  # Define test credit packs
+  credit_pack :starter do
+    includes 1000.credits
+    costs 49.dollars
+    meta currency: :usd
+  end
+
+  credit_pack :pro do
+    includes 5000.credits
+    costs 199.dollars
+    meta currency: :usd
+  end
+
+  credit_pack :euro_pack do
+    includes 1000.credits
+    costs 49.dollars
+    meta currency: :eur
+  end
+
 end

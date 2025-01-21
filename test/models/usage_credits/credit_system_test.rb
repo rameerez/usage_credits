@@ -30,7 +30,7 @@ module UsageCredits
       assert_kind_of Integer, @wallet.balance
     end
 
-    test "wallet balance matches user credits" do
+    test "wallet balance matches user credits upon funding" do
       @user.give_credits(100, reason: "signup")
       assert_equal @wallet.balance, @user.credits
     end
@@ -62,7 +62,7 @@ module UsageCredits
     end
 
     test "credits must be integers" do
-      assert_raises(ActiveRecord::RecordInvalid) do
+      assert_raises(ArgumentError) do
         @user.give_credits(10.5, reason: "signup")
       end
     end
@@ -86,7 +86,7 @@ module UsageCredits
     test "can check if user has enough credits" do
       @user.give_credits(100, reason: "signup")
       assert @user.has_enough_credits_to?(:test_operation)
-      assert_not @user.has_enough_credits_to?(:expensive_operation)
+      assert_not @user.has_enough_credits_to?(:absurdly_expensive_operation)
     end
 
     test "can estimate operation cost" do
@@ -220,7 +220,7 @@ module UsageCredits
       @user.give_credits(100, reason: "signup")
 
       # Spend 60 credits to drop below the 50 credit threshold
-      @user.spend_credits_on(:test_operation, cost: 60)
+      @user.spend_credits_on(:mb_op, mb: 60)
 
       assert @alert_triggered, "Low balance alert should have been triggered"
 
@@ -338,7 +338,7 @@ module UsageCredits
     test "operation costs must be whole numbers" do
       assert_raises(ArgumentError) do
         UsageCredits.configure do |config|
-          config.operation :invalid_op do
+          operation :invalid_op do
             cost 10.5.credits
           end
         end
@@ -348,7 +348,7 @@ module UsageCredits
     test "operation rates must be whole numbers" do
       assert_raises(ArgumentError) do
         UsageCredits.configure do |config|
-          config.operation :invalid_op do
+          operation :invalid_op do
             cost 1.5.credits_per(:mb)
           end
         end
@@ -357,7 +357,7 @@ module UsageCredits
 
     test "operation metadata is included in charges" do
       UsageCredits.configure do |config|
-        config.operation :meta_op do
+        operation :meta_op do
           cost 10.credits
           meta category: :test, description: "Test operation"
         end
@@ -369,6 +369,347 @@ module UsageCredits
       charge = @user.credit_history.operation_charges.last
       assert_equal "test", charge.metadata["category"]
       assert_equal "Test operation", charge.metadata["description"]
+    end
+
+    test "operation validation prevents invalid parameters" do
+      UsageCredits.configure do |config|
+        operation :validated_op do
+          cost 10.credits
+          validate ->(params) { params[:value] > 0 }, "Value must be positive"
+        end
+      end
+
+      @user.give_credits(100, reason: "test")
+
+      assert_raises(InvalidOperation, "Value must be positive") do
+        @user.spend_credits_on(:validated_op, value: -1)
+      end
+
+      assert_equal 100, @user.credits, "Credits should not be spent if validation fails"
+    end
+
+    test "operation can have multiple validations" do
+      UsageCredits.configure do |config|
+        operation :multi_validated_op do
+          cost 10.credits
+          validate ->(params) { params[:value] > 0 }, "Value must be positive"
+          validate ->(params) { params[:value] < 100 }, "Value must be less than 100"
+        end
+      end
+
+      @user.give_credits(100, reason: "test")
+
+      assert_raises(InvalidOperation, "Value must be less than 100") do
+        @user.spend_credits_on(:multi_validated_op, value: 150)
+      end
+
+      assert_nothing_raised do
+        @user.spend_credits_on(:multi_validated_op, value: 50)
+      end
+    end
+
+    test "operation metadata is included in transaction" do
+      UsageCredits.configure do |config|
+        operation :meta_op do
+          cost 10.credits
+          meta category: :test,
+               description: "Test operation",
+               version: "1.0"
+        end
+      end
+
+      @user.give_credits(100, reason: "test")
+      @user.spend_credits_on(:meta_op)
+
+      transaction = @user.credit_history.operation_charges.last
+      assert_equal "test", transaction.metadata["category"]
+      assert_equal "Test operation", transaction.metadata["description"]
+      assert_equal "1.0", transaction.metadata["version"]
+    end
+
+    test "operation cost can depend on parameters" do
+      UsageCredits.configure do |config|
+        operation :variable_op do
+          cost 10.credits + 2.credits_per(:units)
+        end
+      end
+
+      @user.give_credits(100, reason: "test")
+
+      # Test different unit amounts
+      assert_equal 14, @user.estimate_credits_to(:variable_op, units: 2)
+      assert_equal 20, @user.estimate_credits_to(:variable_op, units: 5)
+
+      @user.spend_credits_on(:variable_op, units: 2)
+      assert_equal 86, @user.credits # 100 - (10 + 2 * 2)
+    end
+
+    test "operation cost calculation handles edge cases" do
+      UsageCredits.configure do |config|
+        operation :edge_op do
+          cost 10.credits + 1.credits_per(:mb)
+        end
+      end
+
+      @user.give_credits(100, reason: "test")
+
+      # Test zero units
+      assert_equal 10, @user.estimate_credits_to(:edge_op, mb: 0)
+
+      # Test fractional units (should round up)
+      assert_equal 12, @user.estimate_credits_to(:edge_op, mb: 1.2)
+
+      # Test large numbers
+      assert_equal 1010, @user.estimate_credits_to(:edge_op, mb: 1000)
+    end
+
+    test "operation execution is tracked with timestamps" do
+      @user.give_credits(100, reason: "test")
+
+      time = 10.seconds.ago
+      @user.spend_credits_on(:test_operation)
+
+      transaction = @user.credit_history.operation_charges.last
+      assert_not_nil transaction.metadata["executed_at"]
+      assert Time.parse(transaction.metadata["executed_at"]) >= time
+    end
+
+    ########################
+    # Rounding Behavior #
+    ########################
+
+    test "rounding strategy can be configured" do
+      original_strategy = UsageCredits.configuration.rounding_strategy
+
+      UsageCredits.configure do |config|
+        operation :mb_variable_op do
+          cost 1.credits_per(:mb)
+        end
+      end
+
+      # Test rounding up
+      UsageCredits.configuration.rounding_strategy = :ceil
+      assert_equal 2, @user.estimate_credits_to(:mb_variable_op, mb: 1.1)
+
+      # Test rounding down
+      UsageCredits.configuration.rounding_strategy = :floor
+      assert_equal 1, @user.estimate_credits_to(:mb_variable_op, mb: 1.1)
+
+      # Test normal rounding
+      UsageCredits.configuration.rounding_strategy = :round
+      assert_equal 1, @user.estimate_credits_to(:mb_variable_op, mb: 1.1)
+      assert_equal 2, @user.estimate_credits_to(:mb_variable_op, mb: 1.6)
+
+      # Reset configuration
+      UsageCredits.configuration.rounding_strategy = original_strategy
+    end
+
+    test "defaults to ceiling rounding when strategy is invalid" do
+      original_strategy = UsageCredits.configuration.rounding_strategy
+
+      UsageCredits.configure do |config|
+        operation :variable_op do
+          cost 1.credits_per(:mb)
+        end
+        config.rounding_strategy = :invalid
+      end
+
+      assert_equal 2, @user.estimate_credits_to(:variable_op, mb: 1.1)
+
+      # Reset configuration
+      UsageCredits.configuration.rounding_strategy = original_strategy
+    end
+
+    ########################
+    # Unit Handling #
+    ########################
+
+    test "can handle different unit formats" do
+      UsageCredits.configure do |config|
+        operation :size_op do
+          cost 1.credits_per(:mb)
+        end
+      end
+
+      # Test direct MB specification
+      assert_equal 5, @user.estimate_credits_to(:size_op, mb: 5)
+
+      # Test byte conversion
+      assert_equal 5, @user.estimate_credits_to(:size_op, size: 5.megabytes)
+
+      # Test zero values
+      assert_equal 0, @user.estimate_credits_to(:size_op, mb: 0)
+      assert_equal 0, @user.estimate_credits_to(:size_op, size: 0)
+    end
+
+    test "accepts various unit names" do
+      UsageCredits.configure do |config|
+        operation :mb_op do
+          cost 1.credits_per(:megabytes)
+        end
+
+        operation :kb_op do
+          cost 1.credits_per(:kilobytes)
+        end
+
+        operation :gb_op do
+          cost 1.credits_per(:gigabytes)
+        end
+
+        operation :unit_op do
+          cost 1.credits_per(:units)
+        end
+      end
+
+      assert_equal 5, @user.estimate_credits_to(:mb_op, mb: 5)
+      assert_equal 5, @user.estimate_credits_to(:unit_op, units: 5)
+
+      # Test direct unit parameter handling
+      assert_equal 5, @user.estimate_credits_to(:mb_op, mb: 5)
+      assert_equal 5, @user.estimate_credits_to(:mb_op, size_mb: 5)
+      assert_equal 5, @user.estimate_credits_to(:mb_op, size_megabytes: 5)
+      assert_equal 5, @user.estimate_credits_to(:mb_op, size: 5.megabytes)
+
+      # Test fractional values with different rounding strategies
+      original_strategy = UsageCredits.configuration.rounding_strategy
+
+      UsageCredits.configuration.rounding_strategy = :ceil
+      assert_equal 6, @user.estimate_credits_to(:mb_op, mb: 5.1)
+
+      UsageCredits.configuration.rounding_strategy = :floor
+      assert_equal 5, @user.estimate_credits_to(:mb_op, mb: 5.1)
+
+      UsageCredits.configuration.rounding_strategy = :round
+      assert_equal 5, @user.estimate_credits_to(:mb_op, mb: 5.1)
+      assert_equal 6, @user.estimate_credits_to(:mb_op, mb: 5.6)
+
+      UsageCredits.configuration.rounding_strategy = original_strategy
+    end
+
+    # test "raises error for unknown units" do
+    #   assert_raises(ArgumentError) do
+    #     UsageCredits.configure do |config|
+    #       operation :invalid_op do
+    #         cost 1.credits_per(:invalid_unit)
+    #       end
+    #     end
+    #   end
+    # end
+
+    test "compound operations use configured rounding strategy" do
+      original_strategy = UsageCredits.configuration.rounding_strategy
+
+      UsageCredits.configure do |config|
+        operation :compound_op do
+          cost 10.credits + 1.credits_per(:mb)
+        end
+        config.rounding_strategy = :ceil
+      end
+
+      # 10 base + 1.1 MB = 11.1 credits, should round up to 12
+      assert_equal 12, @user.estimate_credits_to(:compound_op, mb: 1.1)
+
+      UsageCredits.configuration.rounding_strategy = :floor
+      # 10 base + 1.1 MB = 11.1 credits, should round down to 11
+      assert_equal 11, @user.estimate_credits_to(:compound_op, mb: 1.1)
+
+      # Reset configuration
+      UsageCredits.configuration.rounding_strategy = original_strategy
+    end
+
+    ########################
+    # Cost Classes #
+    ########################
+
+    test "fixed cost validates amount" do
+      assert_raises(ArgumentError, "Credit amount must be a whole number (got: 1.5)") do
+        UsageCredits::Cost::Fixed.new(1.5)
+      end
+
+      assert_raises(ArgumentError, "Credit amount cannot be negative (got: -1)") do
+        UsageCredits::Cost::Fixed.new(-1)
+      end
+
+      # Valid amounts should work
+      assert_nothing_raised do
+        UsageCredits::Cost::Fixed.new(1)
+      end
+    end
+
+    test "variable cost validates amount" do
+      assert_raises(ArgumentError, "Credit amount must be a whole number (got: 1.5)") do
+        UsageCredits::Cost::Variable.new(1.5, :mb)
+      end
+
+      assert_raises(ArgumentError, "Credit amount cannot be negative (got: -1)") do
+        UsageCredits::Cost::Variable.new(-1, :mb)
+      end
+
+      # Valid amounts should work
+      assert_nothing_raised do
+        UsageCredits::Cost::Variable.new(1, :mb)
+      end
+    end
+
+    test "compound cost addition works correctly" do
+      UsageCredits.configure do |config|
+        operation :compound_op do
+          cost 10.credits + 1.credits_per(:mb) + 2.credits_per(:units)
+        end
+      end
+
+      # Test that costs are summed correctly
+      # 10 base + (1 credit * 5 MB) + (2 credits * 3 units) = 10 + 5 + 6 = 21
+      assert_equal 21, @user.estimate_credits_to(:compound_op, mb: 5, units: 3)
+    end
+
+    test "compound cost uses configured rounding strategy" do
+      original_strategy = UsageCredits.configuration.rounding_strategy
+
+      UsageCredits.configure do |config|
+        operation :compound_op do
+          cost 10.credits + 1.credits_per(:mb) + 2.credits_per(:units)
+        end
+      end
+
+      # Test with different rounding strategies
+      # 10 base + (1 credit * 1.6 MB) + (2 credits * 1.7 units)
+      # = 10 + 1.6 + 3.4 = 15 (round)
+      UsageCredits.configuration.rounding_strategy = :round
+      assert_equal 15, @user.estimate_credits_to(:compound_op, mb: 1.6, units: 1.7)
+
+      # Same calculation but floor = 14
+      UsageCredits.configuration.rounding_strategy = :floor
+      assert_equal 14, @user.estimate_credits_to(:compound_op, mb: 1.6, units: 1.7)
+
+      # Same calculation but ceil = 16
+      UsageCredits.configuration.rounding_strategy = :ceil
+      assert_equal 16, @user.estimate_credits_to(:compound_op, mb: 1.6, units: 1.7)
+
+      # Reset configuration
+      UsageCredits.configuration.rounding_strategy = original_strategy
+    end
+
+    test "compound cost handles proc costs" do
+      UsageCredits.configure do |config|
+        operation :dynamic_op do
+          cost ->(params) { params[:base_cost].to_i }.credits + 1.credits_per(:mb)
+        end
+      end
+
+      assert_equal 15, @user.estimate_credits_to(:dynamic_op, base_cost: 10, mb: 5)
+    end
+
+    test "compound cost validates proc results" do
+      UsageCredits.configure do |config|
+        operation :invalid_op do
+          cost ->(params) { 1.5 }.credits
+        end
+      end
+
+      assert_raises(InvalidOperation, "Error estimating cost: Credit amount must be a whole number (got: 1.5)") do
+        @user.estimate_credits_to(:invalid_op)
+      end
     end
   end
 end

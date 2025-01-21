@@ -18,11 +18,13 @@ module UsageCredits
       subscription_credits
       subscription_monthly
       subscription_trial
+      subscription_trial_expired
       subscription_signup_bonus
       subscription_monthly_reset
       trial_credits
       credit_pack
       credit_pack_purchase
+      credit_pack_refund
       operation_charge
       credit_expiration
       manual_adjustment
@@ -37,7 +39,22 @@ module UsageCredits
     scope :by_category, ->(category) { where(category: category) }
     scope :recent, -> { order(created_at: :desc) }
     scope :expired, -> { where("expires_at < ?", Time.current) }
-    scope :not_expired, -> { where("expires_at IS NULL OR expires_at > ?", Time.current) }
+    scope :not_expired, -> {
+      # A transaction is not expired if:
+      # 1. It has no expiration date
+      # 2. Its expiration date is in the future
+      # 3. AND there are no expiration records for it (including same-second expirations)
+      where(<<-SQL, Time.current, Time.current)
+        (expires_at IS NULL OR expires_at > ?) AND
+        NOT EXISTS (
+          SELECT 1 FROM usage_credits_transactions exp
+          WHERE exp.wallet_id = usage_credits_transactions.wallet_id
+            AND exp.category = 'credit_expiration'
+            AND exp.expires_at <= ?
+            AND exp.created_at > usage_credits_transactions.created_at
+        )
+      SQL
+    }
     scope :operation_charges, -> { where(category: :operation_charge) }
 
     # Format the amount for display

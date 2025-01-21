@@ -63,9 +63,13 @@ module UsageCredits
       return original_credit_wallet if original_credit_wallet.present?
       return unless should_create_wallet?
 
-      build_credit_wallet(
-        balance: credit_options[:initial_balance] || 0
-      ).tap(&:save!)
+      if persisted?
+        build_credit_wallet(
+          balance: credit_options[:initial_balance] || 0
+        ).tap(&:save!)
+      else
+        raise "Cannot create wallet for unsaved owner"
+      end
     end
 
     def create_credit_wallet

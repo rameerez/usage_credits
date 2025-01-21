@@ -114,19 +114,19 @@ UsageCredits.configure do |config|
   credit_pack :starter do
     includes 1000.credits
     costs 49.dollars
-    meta currency: :usd
+    currency :usd
   end
 
   credit_pack :pro do
     includes 5000.credits
     costs 199.dollars
-    meta currency: :usd
+    currency :usd
   end
 
   credit_pack :euro_pack do
     includes 1000.credits
     costs 49.dollars
-    meta currency: :eur
+    currency :eur
   end
 
 end

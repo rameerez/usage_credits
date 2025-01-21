@@ -22,7 +22,7 @@ Your new superpowers:
 - Refill credits through subscriptions (monthly, yearly, etc.)
 - Give users bonus credits (for referrals, trial subscriptions, etc.)
 - Handle subscription upgrades and downgrades gracefully
-- Handle refunds
+- Handle refunds (partial and total)
 - Rollover credits to the next period
 - Expire credits after a certain date
 - Track every credit transaction with detailed history and audit trail for billing / reporting

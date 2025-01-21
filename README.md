@@ -18,8 +18,11 @@ Your new superpowers:
 - Keep track of each user's credits
 - Define how many credits any operation in your app costs
 - Spend credits securely (credits won't get spent if the operation fails)
-- Create and sell credit packs
+- Create and sell credit packs at any time (including mid-billing cycle)
 - Refill credits through subscriptions (monthly, yearly, etc.)
+- Give users bonus credits (for referrals, trial subscriptions, etc.)
+- Handle subscription upgrades and downgrades gracefully
+- Handle refunds
 - Rollover and expire credits
 - Track every credit transaction with detailed history and audit trail for billing / reporting
 
@@ -142,8 +145,43 @@ end
 > 0.5.credits           # ❌ Invalid: decimal credits
 > 1.5.credits_per(:mb)  # ❌ Invalid: decimal rate
 > ```
-> For variable costs (like per MB), the final cost is always rounded up to the nearest credit.
-> For example, with `1.credits_per(:mb)`, using 2.3 MB will cost 3 credits.
+> For variable costs (like per MB), the final cost is rounded according to your configured rounding strategy (defaults to rounding up).
+> For example, with `1.credits_per(:mb)`, using 2.3 MB will cost 3 credits by default.
+
+### Units and Rounding
+
+For variable costs, you can specify units in different ways:
+
+```ruby
+# Using megabytes
+operation :process_image do
+  cost 1.credits_per(:mb)  # or :megabytes, :megabyte
+end
+
+# Using units
+operation :process_items do
+  cost 1.credits_per(:units)  # or :unit
+end
+```
+
+When using the operation, you can specify the size directly in the unit:
+```ruby
+# Direct MB specification
+@user.estimate_credits_to(:process_image, mb: 5)  # => 5 credits
+
+# Or using byte size (automatically converted)
+@user.estimate_credits_to(:process_image, size: 5.megabytes)  # => 5 credits
+```
+
+You can configure how fractional costs are rounded:
+```ruby
+UsageCredits.configure do |config|
+  # :ceil (default) - Always round up (2.1 => 3)
+  # :floor - Always round down (2.9 => 2)
+  # :round - Standard rounding (2.4 => 2, 2.6 => 3)
+  config.rounding_strategy = :ceil
+end
+```
 
 It's also possible to add validations and metadata to your operations:
 
@@ -214,6 +252,7 @@ In the `config/initializers/usage_credits.rb` file, define packs of credits user
 ```ruby
 credit_pack :starter do
   includes 1000.credits
+  bonus 100.credits  # Optional bonus credits
   costs 49.dollars
 end
 ```
@@ -234,26 +273,56 @@ The gem automatically handles:
   ```ruby
   {
     pack: "starter",                # Pack identifier
-    charge_id: "ch_xxx",            # Payment processor charge ID
+    charge_id: "ch_xxx",           # Payment processor charge ID
     processor: "stripe",            # Payment processor used
-    price_cents: 4900,              # Amount paid in cents
-    credits: 1000,                  # Credits given
-    purchased_at: "2024-01-20"      # Purchase timestamp
+    price_cents: 4900,             # Amount paid in cents
+    credits: 1000,                 # Base credits given
+    bonus_credits: 100,            # Bonus credits given
+    purchased_at: "2024-01-20"     # Purchase timestamp
   }
   ```
 
+## Low balance alerts
+
+Notify users when they are running low on credits (useful to upsell them a credit pack):
+
+```ruby
+UsageCredits.configure do |config|
+  # Alert when balance drops below 100 credits
+  # Set to nil to disable low balance alerts
+  config.low_balance_threshold = 100.credits
+  
+  # Handle low credit balance alerts
+  config.on_low_balance do |user|
+    # Send notification to user
+    UserMailer.low_credits_alert(user).deliver_later
+    
+    # Or trigger any other business logic
+    SlackNotifier.notify("User #{user.id} is running low on credits!")
+  end
+end
+```
+
 ## Subscription plans with credits
 
-Give credits with subscriptions:
+Subscription plans have three components:
+1. Monthly credits: Base credits given each billing cycle
+2. Signup bonus: One-time credits given when subscription becomes active
+3. Trial credits: Credits given during trial period
 
 ```ruby
 subscription_plan :pro do
-  gives 10_000.credits.per_month
-  signup_bonus 1_000.credits
-  trial_includes 500.credits
-  unused_credits :rollover  # Credits roll over to next month
+  gives 10_000.credits.per_month    # Monthly credits
+  signup_bonus 1_000.credits        # One-time bonus
+  trial_includes 500.credits        # Trial period credits
+  unused_credits :rollover          # Credits roll over to next month
 end
 ```
+
+When handling plan changes:
+- Upgrades cause an immediate reset to the new amount (if not rollover)
+- Downgrades maintain existing credits until the next billing cycle
+- Trial credits are automatically expired (converted to a negative transaction) if the trial expires without payment
 
 When a user subscribes to a plan (via the `pay` gem), they'll automatically have their credits refilled.
 
@@ -294,27 +363,6 @@ This makes it easy to:
 - Generate detailed invoices
 - Monitor usage patterns
 
-## Low balance alerts
-
-Notify users when they are running low on credits (useful to upsell them a credit pack):
-
-```ruby
-UsageCredits.configure do |config|
-  # Alert when balance drops below 100 credits
-  # Set to nil to disable low balance alerts
-  config.low_balance_threshold = 100.credits
-  
-  # Handle low credit balance alerts
-  config.on_low_balance do |user|
-    # Send notification to user
-    UserMailer.low_credits_alert(user).deliver_later
-    
-    # Or trigger any other business logic
-    SlackNotifier.notify("User #{user.id} is running low on credits!")
-  end
-end
-```
-
 ## Advanced usage
 
 ### Numeric extensions
@@ -330,8 +378,8 @@ The gem adds several convenient methods to Ruby's `Numeric` class to make the DS
 49.dollars    # => 4900 cents (for Stripe)
 
 # Sizes and rates
-0.5.credits_per(:mb)  # => 0.5 credits per megabyte
-100.megabytes        # => 100 MB (uses Rails' numeric extensions)
+1.credits_per(:mb)  # => 1 credit per megabyte
+100.megabytes      # => 100 MB (uses Rails' numeric extensions)
 ```
 
 ### Custom credit formatting
@@ -366,7 +414,10 @@ Configure how credit costs are rounded:
 
 ```ruby
 UsageCredits.configure do |config|
-  config.rounding_strategy = :floor  # Options: :round, :floor, :ceil
+  # :ceil (default) - Always round up (2.1 => 3)
+  # :floor - Always round down (2.9 => 2)
+  # :round - Standard rounding (2.4 => 2, 2.6 => 3)
+  config.rounding_strategy = :ceil
 end
 ```
 

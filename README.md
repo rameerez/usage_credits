@@ -4,7 +4,7 @@
 
 Allow your users to have in-app credits they can use to perform operations.
 
-✨ Perfect for SaaS, AI apps, and API products that want to implement usage-based pricing.
+✨ Perfect for SaaS, AI apps, games, and API products that want to implement usage-based pricing.
 
 Refill user credits with subscriptions, allow your users to purchase booster credit packs, rollover unused credits to the next billing period, and more!
 
@@ -22,8 +22,8 @@ Your new superpowers:
 - Refill credits through subscriptions (monthly, yearly, etc.)
 - Give users bonus credits (for referrals, trial subscriptions, etc.)
 - Handle subscription upgrades and downgrades gracefully
-- Handle refunds (partial and total)
 - Rollover credits to the next period
+- Handle refunds (partial and total)
 - Expire credits after a certain date
 - Track every credit transaction with detailed history and audit trail for billing / reporting
 

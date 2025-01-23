@@ -1,72 +1,145 @@
 # frozen_string_literal: true
 
 module UsageCredits
-  # Configuration class for UsageCredits
+  # Configuration for the UsageCredits gem. This is the single source of truth for all settings.
+  # This is what turns what's defined in the initializer DSL into actual objects we can use and operate with.
   class Configuration
-    # Default currency for credit pack pricing
-    attr_accessor :default_currency
+    VALID_ROUNDING_STRATEGIES = [:ceil, :floor, :round].freeze
+    VALID_CURRENCIES = [:usd, :eur, :gbp, :sgd].freeze
 
-    # Default threshold for low balance alerts (nil disables alerts)
-    attr_reader :low_balance_threshold
+    # =========================================
+    # Basic Settings
+    # =========================================
 
-    # Whether to allow negative balances (useful for enterprise customers)
+    attr_reader :default_currency
+
+    attr_reader :rounding_strategy
+
+    # How to format credit amounts in the UI
+    attr_reader :credit_formatter
+
+    # =========================================
+    # Low balance
+    # =========================================
+
     attr_accessor :allow_negative_balance
 
-    # Customize credit rounding behavior
-    attr_accessor :rounding_strategy
+    attr_reader :low_balance_threshold
 
-    attr_reader :low_balance_callback, :credit_formatter, :credit_packs
+    # Called when user hits low_balance_threshold
+    attr_reader :low_balance_callback
+
+    # =========================================
+    # Core Data Stores
+    # =========================================
+
+    # Stores all the things users can do with credits
+    attr_reader :operations                   # Credit-consuming operations (e.g., "send_email: 1 credit")
+
+    # Stores all the things users can buy or subscribe to
+    attr_reader :credit_packs                 # One-time purchases (e.g., "100 credits for $49")
+    attr_reader :credit_subscription_plans    # Recurring plans (e.g., "1000 credits/month for $99")
 
     def initialize
+      # Initialize empty stores
+      @operations = {}
+      @credit_packs = {}
+      @credit_subscription_plans = {}
+
+      # Set sensible defaults
       @default_currency = :usd
+      @rounding_strategy = :ceil  # Always round up to ensure we never undercharge
+      @credit_formatter = ->(amount) { "#{amount} credits" }
       @low_balance_threshold = nil
       @allow_negative_balance = false
-      @credit_formatter = ->(amount) { format("%+d credits", amount) }
-      @rounding_strategy = :round
       @low_balance_callback = nil
       @credit_expiration = nil
-      @credit_packs = {}
     end
 
-    # Define a credit pack
+    # =========================================
+    # DSL Methods for Defining Things
+    # =========================================
+
+    # Define a credit-consuming operation
+    def operation(name, &block)
+      raise ArgumentError, "Block is required for operation definition" unless block_given?
+      operation = Operation.new(name)
+      operation.instance_eval(&block)
+      @operations[name.to_sym] = operation
+      operation
+    end
+
+    # Define a one-time purchase credit pack
     def credit_pack(name, &block)
-      builder = Pack::Builder.new(name)
-      builder.instance_eval(&block)
-      @credit_packs[name] = builder.build
+      raise ArgumentError, "Block is required for credit pack definition" unless block_given?
+      raise ArgumentError, "Credit pack name can't be blank" if name.blank?
+
+      name = name.to_sym
+      pack = CreditPack.new(name)
+      pack.instance_eval(&block)
+      pack.validate!
+      @credit_packs[name] = pack
     end
 
-    # More intuitive low balance threshold setting
+    # Define a recurring subscription plan
+    def subscription_plan(name, &block)
+      raise ArgumentError, "Block is required for subscription plan definition" unless block_given?
+      raise ArgumentError, "Subscription plan name can't be blank" if name.blank?
+
+      name = name.to_sym
+      plan = CreditSubscriptionPlan.new(name)
+      plan.instance_eval(&block)
+      plan.validate!
+      @credit_subscription_plans[name] = plan
+    end
+
+    # =========================================
+    # Configuration Setters
+    # =========================================
+
+    # Set default currency with validation
+    def default_currency=(value)
+      value = value.to_s.downcase.to_sym
+      unless VALID_CURRENCIES.include?(value)
+        raise ArgumentError, "Invalid currency. Must be one of: #{VALID_CURRENCIES.join(', ')}"
+      end
+      @default_currency = value
+    end
+
+    # Set low balance threshold with validation
     def low_balance_threshold=(value)
-      raise ArgumentError, "Low balance threshold must be positive" if value && value.negative?
+      if value
+        value = value.to_i
+        raise ArgumentError, "Low balance threshold must be greater than or equal to zero" if value.negative?
+      end
       @low_balance_threshold = value
     end
 
-    # More intuitive credit formatting
+    # Set rounding strategy with validation
+    def rounding_strategy=(strategy)
+      strategy = strategy.to_sym if strategy.respond_to?(:to_sym)
+      unless VALID_ROUNDING_STRATEGIES.include?(strategy)
+        strategy = :ceil  # Default to ceiling if invalid
+      end
+      @rounding_strategy = strategy
+    end
+
+    # =========================================
+    # Callback & Formatter Configuration
+    # =========================================
+
+    # Set how credits are displayed in the UI
     def format_credits(&block)
       @credit_formatter = block
     end
 
-    def credit_formatter
-      @credit_formatter
-    end
-
-    # More intuitive event handling
+    # Set what happens when credits are low
     def on_low_balance(&block)
+      raise ArgumentError, "Block is required for low balance callback" unless block_given?
       @low_balance_callback = block
     end
 
-    def event_handler
-      lambda do |event, data|
-        case event
-        when :low_balance_reached
-          @low_balance_callback&.call(data[:wallet].owner)
-        else
-          # Handle other events
-        end
-      end
-    end
-
-    # More intuitive credit expiration
+    # Set credit expiration period
     def expire_credits_after(duration)
       @credit_expiration = duration
     end
@@ -75,7 +148,11 @@ module UsageCredits
       @credit_expiration
     end
 
-    # Validate configuration
+    # =========================================
+    # Validation
+    # =========================================
+
+    # Ensure configuration is valid
     def validate!
       validate_currency!
       validate_threshold!
@@ -86,22 +163,22 @@ module UsageCredits
     private
 
     def validate_currency!
-      return if [:usd, :eur, :gbp].include?(@default_currency)
-
-      raise ArgumentError, "Invalid currency: #{@default_currency}"
+      raise ArgumentError, "Default currency can't be blank" if default_currency.blank?
+      unless VALID_CURRENCIES.include?(default_currency.to_s.downcase.to_sym)
+        raise ArgumentError, "Invalid currency. Must be one of: #{VALID_CURRENCIES.join(', ')}"
+      end
     end
 
     def validate_threshold!
-      return if @low_balance_threshold.nil? ||
-                (@low_balance_threshold.is_a?(Integer) && @low_balance_threshold.positive?)
-
-      raise ArgumentError, "Invalid low balance threshold: #{@low_balance_threshold}"
+      if @low_balance_threshold && @low_balance_threshold.negative?
+        raise ArgumentError, "Low balance threshold must be greater than or equal to zero"
+      end
     end
 
     def validate_rounding_strategy!
-      return if [:round, :floor, :ceil].include?(@rounding_strategy)
-
-      raise ArgumentError, "Invalid rounding strategy: #{@rounding_strategy}"
+      unless VALID_ROUNDING_STRATEGIES.include?(@rounding_strategy)
+        raise ArgumentError, "Invalid rounding strategy. Must be one of: #{VALID_ROUNDING_STRATEGIES.join(', ')}"
+      end
     end
   end
 end

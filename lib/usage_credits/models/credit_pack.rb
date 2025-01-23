@@ -107,13 +107,10 @@ module UsageCredits
         "#{credits} credits"
       end
     end
+    alias_method :display_description, :display_credits
 
     def display_name
-      "#{display_credits} pack"
-    end
-
-    def display_description
-      display_credits
+      "#{name.to_s.titleize} pack"
     end
 
     # Generate human-friendly button text for purchase links

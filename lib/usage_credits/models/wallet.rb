@@ -245,4 +245,5 @@ module UsageCredits
       previous_balance <= threshold
     end
   end
+
 end

@@ -45,8 +45,14 @@ module UsageCredits
 
     # Set base credits given each period
     def gives(amount)
-      @credits_per_period = amount.to_i
-      CreditGiver.new(self)
+      if amount.is_a?(UsageCredits::Cost::Fixed)
+        @credits_per_period = amount.amount
+        @fulfillment_period = normalize_period(amount.period) if amount.period
+        self
+      else
+        @credits_per_period = amount.to_i
+        CreditGiver.new(self)
+      end
     end
 
     # One-time signup bonus credits

@@ -223,7 +223,7 @@ Finally, you can actually spend credits with `spend_credits_on`:
 @user.spend_credits_on(:process_image, size: 5.megabytes)
 ```
 
-To ensure credits are not substracted to users from failed operations, you can pass a block to `spend_credits_on`. No credits are spent if the block doesn't succeed (no errors, no exceptions, no raises, etc.) This way, you ensure credits are only spent if the operation succeeds:
+To ensure credits are not subtracted from users during failed operations, you can pass a block to `spend_credits_on`. No credits are spent if the block doesn't succeed (no errors, no exceptions, no raises, etc.) This way, you ensure credits are only spent if the operation succeeds:
 
 ```ruby
 @user.spend_credits_on(:process_image, size: 5.megabytes) do
@@ -248,20 +248,20 @@ process_image(params)  # If this fails, credits are already spent!
 > [!IMPORTANT]
 > For all payment-related operations (sell credit packs, handle subscription-based fulfillment, etc. this gem relies on the [`pay`](https://github.com/pay-rails/pay) gem – make sure you have it installed and correctly configured before continuing)
 
-In the `config/initializers/usage_credits.rb` file, define packs of credits users can buy:
+In the `config/initializers/usage_credits.rb` file, define credit packs users can buy:
 
 ```ruby
 credit_pack :starter do
-  includes 1000.credits
+  gives 1000.credits
   costs 49.dollars
 end
 ```
 
-Then, you can prompt then to purchase it with our `pay`-based helpers:
+Then, you can prompt them to purchase it with our `pay`-based helpers:
 ```ruby
 # Create a Stripe Checkout session for purchase
-pack = UsageCredits.packs[:starter]
-session = pack.create_checkout_session(current_user)
+credit_pack = UsageCredits.credit_packs[:starter]
+session = credit_pack.create_checkout_session(current_user)
 redirect_to session.url
 ```
 
@@ -269,13 +269,15 @@ The gem automatically handles:
 - Credit fulfillment after successful payment
 - Proportional credit removal on refunds (e.g., if 50% is refunded, 50% of credits are removed)
 - Prevention of double-processing through metadata flags
+- Support for multiple currencies (USD, EUR, etc.)
 - Detailed transaction tracking with metadata like:
   ```ruby
   {
-    pack: "starter",                # Pack identifier
+    credit_pack: "starter",         # Credit pack identifier
     charge_id: "ch_xxx",            # Payment processor charge ID
     processor: "stripe",            # Payment processor used
     price_cents: 4900,              # Amount paid in cents
+    currency: "usd",                # Currency used for payment
     credits: 1000,                  # Base credits given
     purchased_at: "2024-01-20"      # Purchase timestamp
   }
@@ -311,10 +313,12 @@ Subscription plans have three components:
 
 ```ruby
 subscription_plan :pro do
+  stripe_price "price_XYZ"          # Link it to your Stripe price
   gives 10_000.credits.per_month    # Monthly credits
   signup_bonus 1_000.credits        # One-time bonus
   trial_includes 500.credits        # Trial period credits
-  unused_credits :rollover          # Credits roll over to next month
+  unused_credits :rollover          # Credits roll over to next month (:rollover or :expire)
+  expire_after 30.days              # Optional: credits expire after cancellation
 end
 ```
 
@@ -322,6 +326,7 @@ When handling plan changes:
 - Upgrades cause an immediate reset to the new amount (if not rollover)
 - Downgrades maintain existing credits until the next billing cycle
 - Trial credits are automatically expired (converted to a negative transaction) if the trial expires without payment
+- Unused credits can either roll over (`:rollover`) or expire (`:expire`) at the end of each billing cycle
 
 When a user subscribes to a plan (via the `pay` gem), they'll automatically have their credits refilled.
 
@@ -338,21 +343,21 @@ user.credit_history.by_category(:operation_charge)
 user.credit_history.by_category(:subscription_monthly)
 
 # Audit operation usage
-wallet.transactions
+user.credit_history
   .where(category: :operation_charge)
-  .where("metadata->>'name' = ?", 'process_image')
+  .where("metadata->>'operation' = ?", 'process_image')
   .where(created_at: 1.month.ago..)
 ```
 
 Each operation charge includes detailed audit metadata:
 ```ruby
 {
-  name: "process_image",                   # Operation name
-  cost: 15,                                # Actual cost charged
-  metadata: { category: "image" },         # Custom metadata
-  executed_at: "2024-01-19T16:57:16Z",     # When executed
-  params: { size: 1024 },                  # Parameters used
-  version: "1.0.0"                         # Gem version
+  operation: "process_image",             # Operation name
+  cost: 15,                               # Actual cost charged
+  params: { size: 1024 },                 # Parameters used
+  metadata: { category: "image" },        # Custom metadata
+  executed_at: "2024-01-19T16:57:16Z",    # When executed
+  gem_version: "1.0.0"                    # Gem version
 }
 ```
 

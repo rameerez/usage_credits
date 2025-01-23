@@ -35,4 +35,13 @@ class ActiveSupport::TestCase
   def give_credits(user, amount, reason: "test")
     user.credit_wallet.give_credits(amount, reason: reason)
   end
+
+  # Helper to create a customer for testing
+  def create_customer
+    Pay::Customer.create!(
+      owner: @user,
+      processor: :stripe,
+      processor_id: "cus_#{SecureRandom.hex(12)}"
+    )
+  end
 end

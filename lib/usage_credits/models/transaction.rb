@@ -23,11 +23,9 @@ module UsageCredits
 
       # Subscription-related
       "subscription_credits",           # Generic subscription credits
-      "subscription_monthly",           # Monthly subscription credits
       "subscription_trial",             # Trial period credits
       "subscription_trial_expired",     # Trial ended
       "subscription_signup_bonus",      # Bonus for subscribing
-      "subscription_monthly_reset",     # Monthly credit reset
 
       # One-time purchases
       "credit_pack",           # Generic credit pack

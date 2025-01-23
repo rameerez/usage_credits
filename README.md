@@ -341,7 +341,7 @@ user.credit_history.recent
 
 # Filter by type
 user.credit_history.by_category(:operation_charge)
-user.credit_history.by_category(:subscription_monthly)
+user.credit_history.by_category(:subscription_credits)
 
 # Audit operation usage
 user.credit_history

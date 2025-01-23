@@ -12,16 +12,6 @@ module UsageCredits
     self.table_name = "usage_credits_transactions"
 
     # =========================================
-    # Associations & Validations
-    # =========================================
-
-    belongs_to :wallet
-    belongs_to :source, polymorphic: true, optional: true
-
-    validates :amount, presence: true, numericality: { only_integer: true }
-    validates :category, presence: true, inclusion: { in: CATEGORIES }
-
-    # =========================================
     # Transaction Categories
     # =========================================
 
@@ -51,6 +41,16 @@ module UsageCredits
       "credit_added",          # Generic addition
       "credit_deducted"        # Generic deduction
     ].freeze
+
+    # =========================================
+    # Associations & Validations
+    # =========================================
+
+    belongs_to :wallet
+    belongs_to :source, polymorphic: true, optional: true
+
+    validates :amount, presence: true, numericality: { only_integer: true }
+    validates :category, presence: true, inclusion: { in: CATEGORIES }
 
     # =========================================
     # Scopes

@@ -1,32 +1,50 @@
 # frozen_string_literal: true
 
 module UsageCredits
-  # Manages credit balance and transactions for an owner
+  # A Wallet manages credit balance and transactions for a user/owner.
+  #
+  # It's responsible for:
+  #   1. Tracking credit balance
+  #   2. Performing credit operations (add/deduct)
+  #   3. Managing credit expiration
+  #   4. Handling low balance alerts
+
   class Wallet < ApplicationRecord
     self.table_name = "usage_credits_wallets"
+
+    # =========================================
+    # Associations & Validations
+    # =========================================
 
     belongs_to :owner, polymorphic: true
     has_many :transactions, class_name: "UsageCredits::Transaction", dependent: :destroy
 
     validates :balance, numericality: { greater_than_or_equal_to: 0 }, unless: :allow_negative_balance?
 
-    # Alias for more intuitive access
+    # =========================================
+    # Credit Balance & History
+    # =========================================
+
+    # Get current credit balance as a sum of all non-expired credits
     def credits
-      balance
+      active_credits = transactions.not_expired.sum(:amount)
+      [active_credits, 0].max  # Never return negative credits
     end
 
+    # Get transaction history (oldest first)
     def credit_history
       transactions.order(created_at: :asc)
     end
 
+    # =========================================
+    # Credit Operations
+    # =========================================
+
+    # Check if wallet has enough credits for an operation
     def has_enough_credits_to?(operation_name, **params)
-      operation = UsageCredits.operations[operation_name.to_sym]
-      raise InvalidOperation, "Operation not found: #{operation_name}" unless operation
+      operation = find_and_validate_operation(operation_name, params)
 
-      # First validate the operation parameters
-      operation.validate!(params)
-
-      # Then check if we have enough credits
+      # Then check if we actually have enough credits
       credits >= operation.calculate_cost(params)
     rescue InvalidOperation => e
       raise e
@@ -34,12 +52,9 @@ module UsageCredits
       raise InvalidOperation, "Error checking credits: #{e.message}"
     end
 
+    # Calculate how many credits an operation would cost
     def estimate_credits_to(operation_name, **params)
-      operation = UsageCredits.operations[operation_name.to_sym]
-      raise InvalidOperation, "Operation not found: #{operation_name}" unless operation
-
-      # First validate the operation parameters
-      operation.validate!(params)
+      operation = find_and_validate_operation(operation_name, params)
 
       # Then calculate the cost
       operation.calculate_cost(params)
@@ -49,26 +64,30 @@ module UsageCredits
       raise InvalidOperation, "Error estimating cost: #{e.message}"
     end
 
+    # Spend credits on an operation
+    # @param operation_name [Symbol] The operation to perform
+    # @param params [Hash] Parameters for the operation
+    # @yield Optional block that must succeed before credits are deducted
     def spend_credits_on(operation_name, **params)
-      operation = UsageCredits.operations[operation_name.to_sym]
-      raise InvalidOperation, "Operation not found: #{operation_name}" unless operation
+      operation = find_and_validate_operation(operation_name, params)
 
-      # First validate the operation parameters
-      operation.validate!(params)
-
-      # Calculate cost
       cost = operation.calculate_cost(params)
 
       # Check if user has enough credits
       raise InsufficientCredits, "Insufficient credits (#{credits} < #{cost})" unless has_enough_credits_to?(operation_name, **params)
 
+      # Create audit trail
       audit_data = operation.to_audit_hash(params)
       deduct_params = {
-        metadata: audit_data.merge(operation.metadata),
+        metadata: audit_data.merge(operation.metadata).merge(
+          "executed_at" => Time.current,
+          "gem_version" => UsageCredits::VERSION
+        ),
         category: :operation_charge
       }
 
       if block_given?
+        # If block given, only deduct credits if it succeeds
         ActiveRecord::Base.transaction do
           lock!  # Row-level lock for concurrency safety
 
@@ -83,8 +102,12 @@ module UsageCredits
       raise e
     end
 
+    # Give credits to the wallet
+    # @param amount [Integer] Number of credits to give
+    # @param reason [String] Why credits were given (for auditing)
     def give_credits(amount, reason: nil)
       raise ArgumentError, "Cannot give negative credits" if amount.negative?
+      raise ArgumentError, "Credit amount must be a whole number" unless amount.integer?
 
       category = case reason&.to_s
                 when "signup" then :signup_bonus
@@ -99,31 +122,39 @@ module UsageCredits
       )
     end
 
-    # Internal methods for credit management
-    def add_credits(amount, metadata: {}, category: :credit_added, expires_at: nil, source: nil)
+    # =========================================
+    # Credit Management (Internal API)
+    # =========================================
+
+    # Add credits to the wallet (internal method)
+    def add_credits(amount, metadata: {}, category: :credit_added, source: nil, expires_at: nil)
       with_lock do
-        self.balance += amount
+        amount = amount.to_i
+        previous_balance = balance
+        self.balance = credits + amount
         save!
 
         transactions.create!(
           amount: amount,
           category: category,
           metadata: metadata,
-          expires_at: expires_at,
-          source: source
+          source: source,
+          expires_at: expires_at
         )
 
         notify_balance_change(:credits_added, amount)
+        check_low_balance if !was_low_balance?(previous_balance) && low_balance?
       end
     end
 
+    # Remove credits from the wallet (Internal method)
     def deduct_credits(amount, metadata: {}, category: :credit_deducted, source: nil)
       with_lock do
         amount = amount.to_i
         raise InsufficientCredits, "Insufficient credits (#{credits} < #{amount})" if insufficient_credits?(amount)
 
         previous_balance = balance
-        self.balance -= amount
+        self.balance = credits - amount
         save!
 
         transactions.create!(
@@ -138,16 +169,43 @@ module UsageCredits
       end
     end
 
+    # Set expiration date for ALL credits
     def expire_credits_at(expiry_date, metadata: {})
-      transactions.create!(
-        amount: 0,  # No credits added/removed, just setting expiration
-        category: :credit_expiration,
-        metadata: metadata,
-        expires_at: expiry_date
-      )
+      with_lock do
+        # Create expiration record
+        transactions.create!(
+          amount: 0,  # No credits added/removed, just setting expiration
+          category: :credit_expiration,
+          metadata: metadata,
+          expires_at: expiry_date
+        )
+
+        # Update balance to reflect expired credits
+        self.balance = credits
+        save!
+
+        # Check if expiration caused low balance
+        check_low_balance if low_balance?
+      end
     end
 
     private
+
+    # =========================================
+    # Helper Methods
+    # =========================================
+
+    # Find an operation and validate its parameters
+    # @param name [Symbol] Operation name
+    # @param params [Hash] Operation parameters to validate
+    # @return [Operation] The validated operation
+    # @raise [InvalidOperation] If operation not found or validation fails
+    def find_and_validate_operation(name, params)
+      operation = UsageCredits.operations[name.to_sym]
+      raise InvalidOperation, "Operation not found: #{name}" unless operation
+      operation.validate!(params)
+      operation
+    end
 
     def insufficient_credits?(amount)
       !allow_negative_balance? && amount > credits
@@ -156,6 +214,10 @@ module UsageCredits
     def allow_negative_balance?
       UsageCredits.configuration.allow_negative_balance
     end
+
+    # =========================================
+    # Balance Change Notifications
+    # =========================================
 
     def notify_balance_change(event, amount)
       UsageCredits.handle_event(
@@ -167,18 +229,19 @@ module UsageCredits
     end
 
     def check_low_balance
-      notify_balance_change(:low_balance_reached, credits)
+      return unless low_balance?
+      UsageCredits.handle_event(:low_balance_reached, wallet: self)
     end
 
     def low_balance?
       threshold = UsageCredits.configuration.low_balance_threshold
-      return false if threshold.nil?
+      return false if threshold.nil? || threshold.negative?
       credits <= threshold
     end
 
     def was_low_balance?(previous_balance)
       threshold = UsageCredits.configuration.low_balance_threshold
-      return false if threshold.nil?
+      return false if threshold.nil? || threshold.negative?
       previous_balance <= threshold
     end
   end

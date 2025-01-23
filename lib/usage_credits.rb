@@ -1,42 +1,48 @@
 # frozen_string_literal: true
 
+# UsageCredits provides a credits system for your application.
+# This is the entry point to the gem.
+
 require "rails"
 require "active_record"
 require "pay"
 require "active_support/all"
 
-# Require core extensions first
+# Load order matters! Dependencies are loaded in this specific order:
+#
+# 1. Core extensions (e.g. numeric helpers)
 require "usage_credits/core_ext/numeric"
 
-# Require concerns first (needed by models)
+# 2. Model concerns (needed by models)
 require "usage_credits/models/concerns/has_wallet"
 require "usage_credits/models/concerns/pay_subscription_extension"
 require "usage_credits/models/concerns/pay_charge_extension"
 
-# Require core files
+# 3. Core functionality
 require "usage_credits/version"
-require "usage_credits/configuration"
+require "usage_credits/configuration"  # Single source of truth for all configuration in this gem
 
-# Define base ApplicationRecord first
+# 4. Base ApplicationRecord (needed by models)
 module UsageCredits
   class ApplicationRecord < ActiveRecord::Base
     self.abstract_class = true
   end
 end
 
-# Require models
-require "usage_credits/models/operation"
-require "usage_credits/models/pack"
-require "usage_credits/models/subscription_rule"
+# 5. Models (order matters for dependencies)
 require "usage_credits/models/wallet"
 require "usage_credits/models/transaction"
+require "usage_credits/models/operation"
+require "usage_credits/models/credit_pack"
+require "usage_credits/models/credit_subscription_plan"
 
-# UsageCredits is a delightful credits system for Rails apps
+# Main module that serves as the primary interface to the gem.
+# Most methods here delegate to Configuration, which is the single source of truth for all config in the initializer
 module UsageCredits
+  # Custom error classes
   class Error < StandardError; end
   class InsufficientCredits < Error; end
   class InvalidOperation < Error; end
-  class InvalidPack < Error; end
 
   class << self
     attr_writer :configuration
@@ -45,58 +51,62 @@ module UsageCredits
       @configuration ||= Configuration.new
     end
 
+    # Configure the gem with a block (main entry point)
     def configure
       yield(configuration)
     end
 
-    # More English-like operation definition
+    # Reset configuration to defaults (mainly for testing)
+    def reset!
+      @configuration = nil
+    end
+
+    # DSL methods - all delegate to configuration
+    # These enable things like both `UsageCredits.credit_pack` and bare `credit_pack` usage
+
     def operation(name, &block)
-      operations[name] = Operation.new(name).tap { |op| op.instance_eval(&block) }
-    end
-
-    # More English-like credit pack definition
-    def credit_pack(name, &block)
-      pack = Pack::Builder.new(name)
-      pack.instance_eval(&block)
-      built_pack = pack.build
-      configuration.credit_packs[name] = built_pack
-      packs[name] = built_pack
-    end
-
-    # Find a credit pack by name
-    def find_pack(name)
-      packs[name] || configuration.credit_packs[name]
-    end
-
-    # List all available credit packs
-    def available_packs
-      (packs.values + configuration.credit_packs.values).uniq
-    end
-
-    # More English-like subscription plan definition
-    def subscription_plan(name, &block)
-      subscription_rules[name] = SubscriptionRule.new(name).tap { |rule| rule.instance_eval(&block) }
+      configuration.operation(name, &block)
     end
 
     def operations
-      @operations ||= {}
+      configuration.operations
     end
 
-    def packs
-      @packs ||= {}
+    def credit_pack(name, &block)
+      configuration.credit_pack(name, &block)
     end
 
-    def subscription_rules
-      @subscription_rules ||= {}
+    def credit_packs
+      configuration.credit_packs
+    end
+    alias_method :packs, :credit_packs
+
+    def find_credit_pack(name)
+      credit_packs[name.to_sym]
+    end
+    alias_method :find_pack, :find_credit_pack
+
+    def available_credit_packs
+      credit_packs.values.uniq
+    end
+    alias_method :available_packs, :available_credit_packs
+
+    def subscription_plan(name, &block)
+      configuration.subscription_plan(name, &block)
     end
 
-    def reset!
-      @configuration = nil
-      @operations = {}
-      @packs = {}
-      @subscription_rules = {}
+    def credit_subscription_plans
+      configuration.credit_subscription_plans
     end
+    alias_method :subscription_plans, :credit_subscription_plans
+    alias_method :plans, :credit_subscription_plans
 
+    def find_subscription_plan(name)
+      credit_subscription_plans[name.to_sym]
+    end
+    alias_method :find_plan, :find_subscription_plan
+
+    # Event handling for low balance notifications
     def notify_low_balance(owner)
       return unless configuration.low_balance_callback
       configuration.low_balance_callback.call(owner)
@@ -108,14 +118,21 @@ module UsageCredits
         notify_low_balance(params[:wallet].owner)
       end
     end
+
   end
 end
 
-# Require Rails integration
+# Rails integration
 require "usage_credits/engine" if defined?(Rails)
 require "usage_credits/railtie" if defined?(Rails)
 
 # Make DSL methods available at top level
+# This is what enables the "bare" DSL syntax in initializers. Without it, users would have to write things like
+#   UsageCredits.credit_pack :starter do
+# instead of
+#   credit_pack :starter do
+#
+# Note: This modifies the global Kernel module, which is a powerful but invasive approach.
 module Kernel
   def operation(name, &block)
     UsageCredits.operation(name, &block)

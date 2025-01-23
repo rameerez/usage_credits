@@ -5,9 +5,15 @@ module UsageCredits
   #
   # Credit packs can be purchased independently and separately from any subscription.
   #
+  # The actual credit fulfillment is handled by the PayChargeExtension.
+  #
   # @see PayChargeExtension for the actual payment processing, credit pack fulfilling and refund handling
-  class Pack
-    attr_reader :name, :credits, :bonus_credits, :price_cents, :price_currency, :metadata
+  class CreditPack
+
+    attr_reader :name,
+                :credits, :bonus_credits,
+                :price_cents, :price_currency,
+                :metadata
 
     def initialize(name)
       @name = name
@@ -17,6 +23,10 @@ module UsageCredits
       @price_currency = UsageCredits.configuration.default_currency.to_s.upcase
       @metadata = {}
     end
+
+    # =========================================
+    # DSL Methods (used in initializer blocks)
+    # =========================================
 
     # Set the base number of credits
     def gives(amount)
@@ -28,7 +38,7 @@ module UsageCredits
       @bonus_credits = amount.to_i
     end
 
-    # Set the price in cents
+    # Set the price in cents (e.g., 4900 for $49.00)
     def costs(cents)
       @price_cents = cents
     end
@@ -47,7 +57,10 @@ module UsageCredits
       @metadata.merge!(hash.transform_keys(&:to_sym))
     end
 
-    # Validate the pack configuration
+    # =========================================
+    # Validation
+    # =========================================
+
     def validate!
       raise ArgumentError, "Name can't be blank" if name.blank?
       raise ArgumentError, "Credits must be greater than 0" unless credits.to_i.positive?
@@ -55,7 +68,12 @@ module UsageCredits
       raise ArgumentError, "Price must be greater than 0" unless price_cents.to_i.positive?
       raise ArgumentError, "Currency can't be blank" if price_currency.blank?
       raise ArgumentError, "Price must be in whole cents ($49 = 4900)" if price_cents % 100 != 0
+      true
     end
+
+    # =========================================
+    # Credit & Price Calculations
+    # =========================================
 
     # Get total credits (including bonus)
     def total_credits
@@ -67,16 +85,20 @@ module UsageCredits
       price_cents / 100.0
     end
 
-    # Get formatted price
+    # Get formatted price (e.g., "49.00 USD")
     def formatted_price
       format("%.2f %s", price, price_currency)
     end
 
-    # Get credits per dollar ratio
+    # Get credits per dollar ratio (for comparison)
     def credits_per_dollar
       return 0 if price.zero?
       total_credits / price
     end
+
+    # =========================================
+    # Display Formatting
+    # =========================================
 
     def display_credits
       if bonus_credits.positive?
@@ -98,6 +120,10 @@ module UsageCredits
     def button_text
       "Get #{display_credits} for #{formatted_price}"
     end
+
+    # =========================================
+    # Payment Integration
+    # =========================================
 
     # Create a Stripe Checkout session for this pack
     def create_checkout_session(user)

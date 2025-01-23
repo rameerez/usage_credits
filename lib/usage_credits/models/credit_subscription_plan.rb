@@ -180,8 +180,10 @@ module UsageCredits
     # =========================================
 
     # CreditGiver is a helper class that enables the DSL within `subscription_plan` blocks to define credit amounts.
+    #
     # This is what allows us to write:
     #   gives 10_000.credits.per(:month)
+    #
     # Instead of:
     #   set_credits(10_000)
     #   set_period(:month)

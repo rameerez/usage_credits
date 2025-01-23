@@ -1,50 +1,74 @@
 # frozen_string_literal: true
 
 module UsageCredits
-  # Tracks credit transactions in a wallet
+  # Records all credit changes in a wallet (additions, deductions, expirations).
+  #
+  # Each transaction represents a single credit operation and includes:
+  #   - amount: How many credits (positive for additions, negative for deductions)
+  #   - category: What kind of operation (subscription fulfillment, pack purchase, etc)
+  #   - metadata: Additional details about the operation
+  #   - expires_at: When these credits expire (optional)
   class Transaction < ApplicationRecord
     self.table_name = "usage_credits_transactions"
+
+    # =========================================
+    # Associations & Validations
+    # =========================================
 
     belongs_to :wallet
     belongs_to :source, polymorphic: true, optional: true
 
     validates :amount, presence: true, numericality: { only_integer: true }
-    validates :category, presence: true
+    validates :category, presence: true, inclusion: { in: CATEGORIES }
 
-    # Define transaction categories
-    CATEGORIES = %w[
-      signup_bonus
-      referral_bonus
-      subscription_credits
-      subscription_monthly
-      subscription_trial
-      subscription_trial_expired
-      subscription_signup_bonus
-      subscription_monthly_reset
-      trial_credits
-      credit_pack
-      credit_pack_purchase
-      credit_pack_refund
-      operation_charge
-      credit_expiration
-      manual_adjustment
-      credit_added
-      credit_deducted
+    # =========================================
+    # Transaction Categories
+    # =========================================
+
+    # All possible transaction types, grouped by purpose:
+    CATEGORIES = [
+      # Bonus credits
+      "signup_bonus",          # Initial signup bonus
+      "referral_bonus",        # Referral reward
+
+      # Subscription-related
+      "subscription_credits",           # Generic subscription credits
+      "subscription_monthly",           # Monthly subscription credits
+      "subscription_trial",             # Trial period credits
+      "subscription_trial_expired",     # Trial ended
+      "subscription_signup_bonus",      # Bonus for subscribing
+      "subscription_monthly_reset",     # Monthly credit reset
+
+      # One-time purchases
+      "credit_pack",           # Generic credit pack
+      "credit_pack_purchase",  # Credit pack bought
+      "credit_pack_refund",    # Credit pack refunded
+
+      # Credit usage & management
+      "operation_charge",      # Credits spent on operation
+      "credit_expiration",     # Credits expired
+      "manual_adjustment",     # Manual admin adjustment
+      "credit_added",          # Generic addition
+      "credit_deducted"        # Generic deduction
     ].freeze
 
-    validates :category, inclusion: { in: CATEGORIES }
+    # =========================================
+    # Scopes
+    # =========================================
 
     scope :credits_added, -> { where("amount > 0") }
     scope :credits_deducted, -> { where("amount < 0") }
     scope :by_category, ->(category) { where(category: category) }
     scope :recent, -> { order(created_at: :desc) }
     scope :expired, -> { where("expires_at < ?", Time.current) }
+    scope :operation_charges, -> { where(category: :operation_charge) }
+
+    # A transaction is not expired if:
+    # 1. It has no expiration date, OR
+    # 2. Its expiration date is in the future, AND
+    # 3. There are no expiration records for it
     scope :not_expired, -> {
-      # A transaction is not expired if:
-      # 1. It has no expiration date
-      # 2. Its expiration date is in the future
-      # 3. AND there are no expiration records for it (including same-second expirations)
-      where(<<-SQL, Time.current, Time.current)
+      where(<<-SQL.squish, Time.current, Time.current)
         (expires_at IS NULL OR expires_at > ?) AND
         NOT EXISTS (
           SELECT 1 FROM usage_credits_transactions exp
@@ -55,60 +79,53 @@ module UsageCredits
         )
       SQL
     }
-    scope :operation_charges, -> { where(category: :operation_charge) }
 
-    # Format the amount for display
+    # =========================================
+    # Display Formatting
+    # =========================================
+
+    # Format the amount for display (e.g., "+100 credits" or "-10 credits")
     def formatted_amount
       prefix = amount.positive? ? "+" : ""
       "#{prefix}#{UsageCredits.configuration.credit_formatter.call(amount)}"
     end
 
-    # Check if the transaction has expired
+    # Get a human-readable description of what this transaction represents
+    def description
+      # Custom description takes precedence
+      return self[:description] if self[:description].present?
+
+      # Operation charges have dynamic descriptions
+      return operation_description if category == "operation_charge"
+
+      # Use predefined description or fallback to titleized category
+      category.titleize
+    end
+
+    # =========================================
+    # State & Relations
+    # =========================================
+
+    # Check if these credits have expired
     def expired?
       expires_at? && expires_at < Time.current
     end
 
-    # Get the owner of the wallet
+    # Get the owner of the wallet these credits belong to
     def owner
       wallet.owner
     end
 
-    # Get a human-readable description of the transaction
-    def description
-      return self[:description] if self[:description].present?
+    # =========================================
+    # Metadata Handling
+    # =========================================
 
-      case category
-      when "credit_added"
-        "Credits added"
-      when "credit_deducted"
-        "Credits deducted"
-      when "subscription_monthly"
-        "Monthly subscription credits"
-      when "subscription_trial"
-        "Trial credits"
-      when "subscription_signup_bonus"
-        "Signup bonus credits"
-      when "subscription_monthly_reset"
-        "Monthly credits reset"
-      when "credit_pack_purchase"
-        "Credit pack purchase"
-      when "credit_expiration"
-        "Credits expired"
-      when "operation_charge"
-        operation_description
-      when "manual_adjustment"
-        "Manual adjustment"
-      else
-        category.titleize
-      end
-    end
-
-    # Override metadata getter to support both string and symbol keys
+    # Get metadata with indifferent access (string/symbol keys)
     def metadata
       @indifferent_metadata ||= ActiveSupport::HashWithIndifferentAccess.new(super || {})
     end
 
-    # Override metadata setter to ensure consistent storage
+    # Set metadata, ensuring consistent storage format
     def metadata=(hash)
       @indifferent_metadata = nil  # Clear cache
       super(hash.is_a?(Hash) ? hash.to_h : {})
@@ -116,11 +133,14 @@ module UsageCredits
 
     private
 
+    # Format operation charge descriptions (e.g., "Process Video (-10 credits)")
     def operation_description
-      return "Operation charge" unless metadata["operation"]
-
-      operation = metadata["operation"].to_s.titleize
+      operation = metadata["operation"]&.to_s&.titleize
       cost = metadata["cost"]
+
+      return "Operation charge" if operation.blank?
+      return operation if cost.blank?
+
       "#{operation} (-#{cost} credits)"
     end
   end

@@ -11,25 +11,32 @@ require "active_support/all"
 # Load order matters! Dependencies are loaded in this specific order:
 #
 # 1. Core extensions (e.g. numeric helpers)
-require "usage_credits/core_ext/numeric"
+require "usage_credits/credit_calculator"   # Centralized credit rounding
+require "usage_credits/core_ext/numeric"    # Numeric extension to write `10.credits` in our DSL
 
-# 2. Model concerns (needed by models)
+# 2. Cost calculation
+require "usage_credits/cost/base"
+require "usage_credits/cost/fixed"
+require "usage_credits/cost/variable"
+require "usage_credits/cost/compound"
+
+# 3. Model concerns (needed by models)
 require "usage_credits/models/concerns/has_wallet"
 require "usage_credits/models/concerns/pay_subscription_extension"
 require "usage_credits/models/concerns/pay_charge_extension"
 
-# 3. Core functionality
+# 4. Core functionality
 require "usage_credits/version"
 require "usage_credits/configuration"  # Single source of truth for all configuration in this gem
 
-# 4. Base ApplicationRecord (needed by models)
+# 5. Base ApplicationRecord (needed by models)
 module UsageCredits
   class ApplicationRecord < ActiveRecord::Base
     self.abstract_class = true
   end
 end
 
-# 5. Models (order matters for dependencies)
+# 6. Models (order matters for dependencies)
 require "usage_credits/models/wallet"
 require "usage_credits/models/transaction"
 require "usage_credits/models/operation"

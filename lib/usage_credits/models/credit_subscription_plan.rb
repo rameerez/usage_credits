@@ -9,6 +9,7 @@ module UsageCredits
   #
   # @see PaySubscriptionExtension for the actual credit fulfillment logic
   class CreditSubscriptionPlan
+
     attr_reader :name,
                 :processor_plan_ids,
                 :fulfillment_period, :credits_per_period,
@@ -25,39 +26,6 @@ module UsageCredits
       quarter: [:quarter, :quarterly]
     }.freeze
 
-    # Helper class that enables the DSL for credit amounts.
-    # This is what allows us to write:
-    #   gives 10_000.credits.per(:month)
-    # Instead of:
-    #   set_credits(10_000)
-    #   set_period(:month)
-    class CreditGiver
-      def initialize(plan)
-        @plan = plan
-      end
-
-      # Set how often credits are given
-      # @param period [:month, :year, :quarter] The fulfillment period
-      def per(period)
-        @plan.fulfillment_period = normalize_period(period)
-        @plan
-      end
-
-      private
-
-      # Normalize period aliases to their canonical form
-      # @example
-      #   normalize_period(:monthly)  # => :month
-      #   normalize_period(:yearly)   # => :year
-      #   normalize_period(:annually) # => :year
-      def normalize_period(period)
-        VALID_PERIODS.each do |normalized, aliases|
-          return normalized if aliases.include?(period)
-        end
-        raise ArgumentError, "Unsupported period: #{period}. Supported periods: #{VALID_PERIODS.values.flatten.inspect}"
-      end
-    end
-
     def initialize(name)
       @name = name
       @processor_plan_ids = {}  # Store processor-specific plan IDs
@@ -71,22 +39,11 @@ module UsageCredits
       @metadata = {}
     end
 
-    # Get the plan ID for a specific processor
-    def plan_id_for(processor)
-      processor_plan_ids[processor.to_sym]
-    end
+    # =========================================
+    # DSL Methods (used in initializer blocks)
+    # =========================================
 
-    # Set the processor-specific plan ID
-    def processor_plan(processor, id)
-      processor_plan_ids[processor.to_sym] = id
-    end
-
-    # Shorthand DSL for setting the Stripe Price ID for this plan
-    def stripe_price(id)
-      processor_plan(:stripe, id)
-    end
-
-    # Set credits given each fulfillment period
+    # Set base credits given each period
     def gives(amount)
       @credits_per_period = amount.to_i
       CreditGiver.new(self)
@@ -121,9 +78,28 @@ module UsageCredits
       @credit_expiration_period = duration
     end
 
-    # Add custom metadata to the subscription plan
+    # Add custom metadata
     def meta(hash)
       @metadata.merge!(hash)
+    end
+
+    # =========================================
+    # Payment Processor Integration
+    # =========================================
+
+    # Set the processor-specific plan ID
+    def processor_plan(processor, id)
+      processor_plan_ids[processor.to_sym] = id
+    end
+
+    # Shorthand for Stripe price ID
+    def stripe_price(id)
+      processor_plan(:stripe, id)
+    end
+
+    # Get the plan ID for a specific processor
+    def plan_id_for(processor)
+      processor_plan_ids[processor.to_sym]
     end
 
     # Create a checkout session for this subscription plan
@@ -142,7 +118,24 @@ module UsageCredits
       end
     end
 
+    # =========================================
+    # Validation
+    # =========================================
+
+    def validate!
+      raise ArgumentError, "Name can't be blank" if name.blank?
+      raise ArgumentError, "Credits per period must be greater than 0" unless credits_per_period.to_i.positive?
+      raise ArgumentError, "Fulfillment period must be set" if fulfillment_period.nil?
+      raise ArgumentError, "Signup bonus credits must be greater than or equal to 0" if signup_bonus_credits.to_i.negative?
+      raise ArgumentError, "Trial credits must be greater than or equal to 0" if trial_credits.to_i.negative?
+      true
+    end
+
     private
+
+    # =========================================
+    # Helper Methods
+    # =========================================
 
     def normalize_period(period)
       return nil unless period
@@ -180,6 +173,41 @@ module UsageCredits
         credit_expiration_period: credit_expiration_period&.to_i,
         metadata: metadata
       }
+    end
+
+    # =========================================
+    # DSL Helper Classes
+    # =========================================
+
+    # CreditGiver is a helper class that enables the DSL within `subscription_plan` blocks to define credit amounts.
+    # This is what allows us to write:
+    #   gives 10_000.credits.per(:month)
+    # Instead of:
+    #   set_credits(10_000)
+    #   set_period(:month)
+    class CreditGiver
+      def initialize(plan)
+        @plan = plan
+      end
+
+      def per(period)
+        @plan.fulfillment_period = normalize_period(period)
+        @plan
+      end
+
+      private
+
+      # Normalize period aliases to their canonical form
+      # @example
+      #   normalize_period(:monthly)  # => :month
+      #   normalize_period(:yearly)   # => :year
+      #   normalize_period(:annually) # => :year
+      def normalize_period(period)
+        VALID_PERIODS.each do |normalized, aliases|
+          return normalized if aliases.include?(period)
+        end
+        raise ArgumentError, "Unsupported period: #{period}. Supported periods: #{VALID_PERIODS.values.flatten.inspect}"
+      end
     end
   end
 end

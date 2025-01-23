@@ -20,11 +20,14 @@ module UsageCredits
 
     attr_writer :fulfillment_period
 
+    # Canonical periods and their aliases
     VALID_PERIODS = {
-      month: [:month, :monthly],
-      year: [:year, :yearly, :annually],
-      quarter: [:quarter, :quarterly]
+      month: [:month, :monthly],      # 1.month
+      quarter: [:quarter, :quarterly], # 3.months
+      year: [:year, :yearly, :annually] # 1.year
     }.freeze
+
+    MIN_PERIOD = 1.day
 
     def initialize(name)
       @name = name
@@ -47,7 +50,7 @@ module UsageCredits
     def gives(amount)
       if amount.is_a?(UsageCredits::Cost::Fixed)
         @credits_per_period = amount.amount
-        @fulfillment_period = normalize_period(amount.period) if amount.period
+        @fulfillment_period = normalize_period(amount.period || 1.month)
         self
       else
         @credits_per_period = amount.to_i
@@ -146,10 +149,20 @@ module UsageCredits
     def normalize_period(period)
       return nil unless period
 
-      VALID_PERIODS.each do |normalized, aliases|
-        return normalized if aliases.include?(period)
+      # Handle ActiveSupport::Duration objects directly
+      if period.is_a?(ActiveSupport::Duration)
+        raise ArgumentError, "Period must be at least #{MIN_PERIOD.inspect}" if period < MIN_PERIOD
+        period
+      else
+        # Convert symbols to canonical durations
+        case period
+        when *VALID_PERIODS[:month] then 1.month
+        when *VALID_PERIODS[:quarter] then 3.months
+        when *VALID_PERIODS[:year] then 1.year
+        else
+          raise ArgumentError, "Unsupported period: #{period}. Supported periods: #{VALID_PERIODS.values.flatten.inspect}"
+        end
       end
-      raise ArgumentError, "Unsupported period: #{period}. Supported periods: #{VALID_PERIODS.values.flatten.inspect}"
     end
 
     def create_stripe_checkout_session(user, plan_id, success_url, cancel_url)
@@ -170,7 +183,7 @@ module UsageCredits
       {
         purchase_type: "credit_subscription",
         subscription_name: name,
-        fulfillment_period: fulfillment_period,
+        fulfillment_period: fulfillment_period.is_a?(ActiveSupport::Duration) ? fulfillment_period.inspect : fulfillment_period,
         credits_per_period: credits_per_period,
         signup_bonus_credits: signup_bonus_credits,
         trial_credits: trial_credits,
@@ -188,7 +201,7 @@ module UsageCredits
     # CreditGiver is a helper class that enables the DSL within `subscription_plan` blocks to define credit amounts.
     #
     # This is what allows us to write:
-    #   gives 10_000.credits.per(:month)
+    #   gives 10_000.credits.every(:month)
     #
     # Instead of:
     #   set_credits(10_000)
@@ -198,23 +211,15 @@ module UsageCredits
         @plan = plan
       end
 
-      def per(period)
+      def every(period)
         @plan.fulfillment_period = normalize_period(period)
         @plan
       end
 
       private
 
-      # Normalize period aliases to their canonical form
-      # @example
-      #   normalize_period(:monthly)  # => :month
-      #   normalize_period(:yearly)   # => :year
-      #   normalize_period(:annually) # => :year
       def normalize_period(period)
-        VALID_PERIODS.each do |normalized, aliases|
-          return normalized if aliases.include?(period)
-        end
-        raise ArgumentError, "Unsupported period: #{period}. Supported periods: #{VALID_PERIODS.values.flatten.inspect}"
+        @plan.send(:normalize_period, period)
       end
     end
   end

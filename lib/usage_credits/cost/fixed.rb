@@ -8,7 +8,7 @@ module UsageCredits
 
       def initialize(amount)
         @amount = amount
-        @period = nil
+        @period = nil  # Will default to 1.month in CreditSubscriptionPlan
       end
 
       def calculate(params = {})
@@ -22,9 +22,11 @@ module UsageCredits
         end
       end
 
-      # Support subscription plan period chaining
-      def per(period)
-        @period = period
+      # Set the recurring period for subscription plans
+      # @param period [Symbol, ActiveSupport::Duration, nil] The period (e.g., :month, 2.months, 15.days)
+      # @return [self]
+      def every(period = nil)
+        @period = period  # nil will default to 1.month in CreditSubscriptionPlan
         self
       end
     end

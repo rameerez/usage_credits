@@ -47,13 +47,13 @@ UsageCredits.configure do |config|
   # Example subscription plans (uncomment and modify as needed):
   #
   # subscription_plan :basic do
-  #   gives 1000.credits.per_month
+  #   gives 1000.credits.every(:month)
   #   signup_bonus 100.credits
   #   unused_credits :expire  # Credits reset each month
   # end
   #
   # subscription_plan :pro do
-  #   gives 10_000.credits.per_month
+  #   gives 10_000.credits.every(:month)
   #   signup_bonus 1_000.credits
   #   trial_includes 500.credits
   #   unused_credits :rollover  # Credits roll over to next month

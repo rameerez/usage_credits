@@ -307,18 +307,19 @@ end
 ## Subscription plans with credits
 
 Subscription plans have three components:
-1. Monthly credits: Base credits given each billing cycle
+1. Credits: the amount of credits that will be given each cycle (monthly, quarterly, yearly, etc.)
 2. Signup bonus: One-time credits given when subscription becomes active
 3. Trial credits: Credits given during trial period
+4. What to do with the credits from the previous period: either carry them over to the following period (`:rollover`) or `:expire` them
 
 ```ruby
 subscription_plan :pro do
-  stripe_price "price_XYZ"          # Link it to your Stripe price
-  gives 10_000.credits.per_month    # Monthly credits
-  signup_bonus 1_000.credits        # One-time bonus
-  trial_includes 500.credits        # Trial period credits
-  unused_credits :rollover          # Credits roll over to next month (:rollover or :expire)
-  expire_after 30.days              # Optional: credits expire after cancellation
+  stripe_price "price_XYZ"            # Link it to your Stripe price
+  gives 10_000.credits.every(:month)  # Monthly credits
+  signup_bonus 1_000.credits          # One-time bonus
+  trial_includes 500.credits          # Trial period credits
+  unused_credits :rollover            # Credits roll over to next month (:rollover or :expire)
+  expire_after 30.days                # Optional: credits expire after cancellation
 end
 ```
 
@@ -407,7 +408,7 @@ end
 
 # Or per subscription
 subscription_plan :basic do
-  gives 1000.credits.per_month
+  gives 1000.credits.every(:month)
   expire_after 30.days.of_cancellation
 end
 ```

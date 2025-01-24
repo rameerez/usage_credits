@@ -42,6 +42,7 @@ module UsageCredits
     def costs(cents)
       @price_cents = cents
     end
+    alias_method :cost, :costs
 
     # Set the currency (defaults to configuration)
     def currency(currency)

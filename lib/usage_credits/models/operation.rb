@@ -24,9 +24,9 @@ module UsageCredits
     # Set how many credits this operation costs
     #
     # @param amount_or_calculator [Integer, Lambda] Fixed amount or dynamic calculator
-    #   cost 10                          # Fixed cost
-    #   cost ->(params) { params[:mb] }  # Dynamic cost
-    def cost(amount_or_calculator)
+    #   costs 10                          # Fixed cost
+    #   costs ->(params) { params[:mb] }  # Dynamic cost
+    def costs(amount_or_calculator)
       @cost_calculator = case amount_or_calculator
       when Cost::Base
         amount_or_calculator
@@ -34,6 +34,7 @@ module UsageCredits
         Cost::Fixed.new(amount_or_calculator)
       end
     end
+    alias_method :cost, :costs
 
     # Add a validation rule for this operation
     # Example: can't process images bigger than 100MB

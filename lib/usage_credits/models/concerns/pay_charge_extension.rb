@@ -100,6 +100,22 @@ module UsageCredits
               **pack.base_metadata
             }
           )
+
+          # Also create a one-time fulfillment record for audit and consistency
+          # This Fulfillment record won't get picked up by the fulfillment job because `next_fulfillment_at` is nil
+          Fulfillment.create!(
+            wallet: credit_wallet,
+            source: self, # the Pay::Charge
+            fulfillment_type: "credit_pack",
+            last_fulfillment_credits: pack.total_credits,
+            fulfilled_at: Time.current,
+            next_fulfillment_at: nil, # so it doesn't get re-processed
+            metadata: {
+              purchase_charge_id: id,
+              purchased_at: created_at,
+              **pack.base_metadata
+            }
+          )
         end
 
         Rails.logger.info "Successfully fulfilled credit pack #{pack_name} for charge #{id}"

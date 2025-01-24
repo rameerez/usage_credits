@@ -102,9 +102,9 @@ class User < ApplicationRecord
 end
 ```
 
-We rely on an ActiveJob job to refill credits. You need to schedule this job to run periodically. For example, with Solid Queue:
+Lastly, schedule the `UsageCredits::FulfillmentJob` to run periodically (we rely on this ActiveJob job to refill credits for subscriptions). For example, with Solid Queue:
 
-```ruby
+```yaml
 # config/recurring.yml
 
 production:
@@ -114,7 +114,9 @@ production:
     schedule: every 5 minutes
 ```
 
-That's it! Your app now has a usage credits system. Let's see how to use it:
+(Your actual setup for the recurring job may change if you're using Sidekiq or other ActiveJob backend – make sure you set it up right for your specific backend)
+
+That's it! Your app now has a credits system. Let's see how to use it:
 
 ## How it works
 
@@ -345,7 +347,7 @@ Credit fulfillment is decoupled from billing periods, so you can drip credits at
 
 `pay` handles the user's subscription, we handle how we fulfill that subscription.
 
-We rely on ActiveJob to fulfill credits. So you should have an ActiveJob backend installed and configured (Sidekiq, `solid_queue`) for credits to be refilled.
+We rely on ActiveJob to fulfill credits. So you should have an ActiveJob backend installed and configured (Sidekiq, `solid_queue`, etc.) for credits to be refilled.
 
 To make fulfillment actually work, you'll need to schedule the fulfillment job to run periodically, as explained in the setup section.
 
@@ -466,8 +468,7 @@ To install this gem onto your local machine, run `bundle exec rake install`.
 
 ## Contributing
 
-Bug reports and pull requests are welcome on GitHub at https://github.com/rameerez/
-usage_credits. Our code of conduct is: just be nice and make your mom proud of what 
+Bug reports and pull requests are welcome on GitHub at https://github.com/rameerez/usage_credits. Our code of conduct is: just be nice and make your mom proud of what 
 you do and post online.
 
 ## License

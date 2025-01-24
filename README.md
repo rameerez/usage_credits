@@ -11,6 +11,9 @@ Refill user credits with subscriptions, allow your users to purchase booster cre
 > [!NOTE]
 > `usage_credits` integrates with the [`pay`](https://github.com/pay-rails/pay) gem both to refill credits through subscriptions, and so you can easily sell credit packs through Stripe, Lemon Squeezy, PayPal or any `pay`-supported processor.
 
+> [!IMPORTANT]
+> This gem requires an ActiveJob backend to handle credit fulfillment. Make sure you have one configured (Sidekiq, `solid_queue`, etc.) or credits won't be fulfilled
+
 ---
 
 Your new superpowers:
@@ -20,6 +23,7 @@ Your new superpowers:
 - Spend credits securely (credits won't get spent if the operation fails)
 - Allow users to purchase credit packs at any time (including mid-billing cycle)
 - Refill credits through subscriptions (monthly, yearly, etc.)
+- Refill credits at arbitrary periods (every day, every month, every quarter, etc.)
 - Give users bonus credits (for referrals, trial subscriptions, etc.)
 - Handle subscription upgrades and downgrades gracefully
 - Rollover credits to the next period
@@ -96,6 +100,18 @@ Add `has_credits` your user model (or any model that needs to have credits):
 class User < ApplicationRecord
   has_credits
 end
+```
+
+We rely on an ActiveJob job to refill credits. You need to schedule this job to run periodically. For example, with Solid Queue:
+
+```ruby
+# config/recurring.yml
+
+production:
+  refill_credits:
+    class: UsageCredits::FulfillmentJob
+    queue: default
+    schedule: every 5 minutes
 ```
 
 That's it! Your app now has a usage credits system. Let's see how to use it:
@@ -307,7 +323,7 @@ end
 ## Subscription plans with credits
 
 Subscription plans have three components:
-1. Credits: the amount of credits that will be given each cycle (monthly, quarterly, yearly, etc.)
+1. Credits: the amount of credits that will be given eac fulfillment cycle (monthly, quarterly, yearly, etc.)
 2. Signup bonus: One-time credits given when subscription becomes active
 3. Trial credits: Credits given during trial period
 4. What to do with the credits from the previous period: either carry them over to the following period (`:rollover`) or `:expire` them
@@ -318,10 +334,22 @@ subscription_plan :pro do
   gives 10_000.credits.every(:month)  # Monthly credits
   signup_bonus 1_000.credits          # One-time bonus
   trial_includes 500.credits          # Trial period credits
-  unused_credits :rollover            # Credits roll over to next month (:rollover or :expire)
+  unused_credits :rollover            # Credits roll over to the next fulfillment period (:rollover or :expire)
   expire_after 30.days                # Optional: credits expire after cancellation
 end
 ```
+
+### Credit fulfillment
+
+Credit fulfillment is decoupled from billing periods, so you can drip credits at any pace you want (e.g., 100/day instead of 3000/month)
+
+`pay` handles the user's subscription, we handle how we fulfill that subscription.
+
+We rely on ActiveJob to fulfill credits. So you should have an ActiveJob backend installed and configured (Sidekiq, `solid_queue`) for credits to be refilled.
+
+To make fulfillment actually work, you'll need to schedule the fulfillment job to run periodically, as explained in the setup section.
+
+### Changing subscriptions
 
 When handling plan changes:
 - Upgrades cause an immediate reset to the new amount (if not rollover)

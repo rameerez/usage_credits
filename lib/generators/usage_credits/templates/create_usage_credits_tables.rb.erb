@@ -25,7 +25,7 @@ class CreateUsageCreditsTables < ActiveRecord::Migration<%= migration_version %>
     create_table :usage_credits_fulfillments, id: primary_key_type do |t|
       t.references :wallet, null: false, type: foreign_key_type
       t.references :source, polymorphic: true, type: foreign_key_type
-      t.integer :last_fulfillment_credits, null: false    # Credits given in last fulfillment
+      t.integer :credits_last_fulfillment, null: false    # Credits given in last fulfillment
       t.datetime :fulfilled_at                            # When last fulfilled
       t.datetime :next_fulfillment_at                     # When to fulfill next (nil if stopped/completed)
       t.string :fulfillment_period                        # "2.months", "15.days", etc. (nil for one-time)

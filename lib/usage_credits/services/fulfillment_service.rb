@@ -44,7 +44,7 @@ module UsageCredits
     def update_fulfillment(credits)
       @fulfillment.update!(
         fulfilled_at: Time.current,
-        last_fulfillment_credits: credits,
+        credits_last_fulfillment: credits,
         next_fulfillment_at: @fulfillment.calculate_next_fulfillment
       )
     end

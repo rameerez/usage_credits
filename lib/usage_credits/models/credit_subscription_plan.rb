@@ -9,7 +9,6 @@ module UsageCredits
   #
   # @see PaySubscriptionExtension for the actual credit fulfillment logic
   class CreditSubscriptionPlan
-
     attr_reader :name,
                 :processor_plan_ids,
                 :fulfillment_period, :credits_per_period,
@@ -19,13 +18,6 @@ module UsageCredits
                 :metadata
 
     attr_writer :fulfillment_period
-
-    # Canonical periods and their aliases
-    VALID_PERIODS = {
-      month: [:month, :monthly],      # 1.month
-      quarter: [:quarter, :quarterly], # 3.months
-      year: [:year, :yearly, :annually] # 1.year
-    }.freeze
 
     MIN_PERIOD = 1.day
 
@@ -50,7 +42,7 @@ module UsageCredits
     def gives(amount)
       if amount.is_a?(UsageCredits::Cost::Fixed)
         @credits_per_period = amount.amount
-        @fulfillment_period = normalize_period(amount.period || 1.month)
+        @fulfillment_period = UsageCredits::PeriodParser.normalize_period(amount.period || 1.month)
         self
       else
         @credits_per_period = amount.to_i
@@ -146,23 +138,8 @@ module UsageCredits
     # Helper Methods
     # =========================================
 
-    def normalize_period(period)
-      return nil unless period
-
-      # Handle ActiveSupport::Duration objects directly
-      if period.is_a?(ActiveSupport::Duration)
-        raise ArgumentError, "Period must be at least #{MIN_PERIOD.inspect}" if period < MIN_PERIOD
-        period
-      else
-        # Convert symbols to canonical durations
-        case period
-        when *VALID_PERIODS[:month] then 1.month
-        when *VALID_PERIODS[:quarter] then 3.months
-        when *VALID_PERIODS[:year] then 1.year
-        else
-          raise ArgumentError, "Unsupported period: #{period}. Supported periods: #{VALID_PERIODS.values.flatten.inspect}"
-        end
-      end
+    def parsed_fulfillment_period
+      UsageCredits::PeriodParser.parse_period(@fulfillment_period)
     end
 
     def create_stripe_checkout_session(user, plan_id, success_url, cancel_url)
@@ -212,15 +189,10 @@ module UsageCredits
       end
 
       def every(period)
-        @plan.fulfillment_period = normalize_period(period)
+        @plan.fulfillment_period = UsageCredits::PeriodParser.normalize_period(period)
         @plan
       end
-
-      private
-
-      def normalize_period(period)
-        @plan.send(:normalize_period, period)
-      end
     end
+
   end
 end

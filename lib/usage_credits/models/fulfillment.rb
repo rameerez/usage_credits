@@ -41,28 +41,14 @@ module UsageCredits
       return nil unless recurring?
       return nil if next_fulfillment_at.nil?  # Already stopped
 
-      duration = parse_fulfillment_period
-      next_fulfillment_at + duration
+      next_fulfillment_at + UsageCredits::PeriodParser.parse_period(fulfillment_period)
     end
 
     private
 
     def valid_fulfillment_period_format
-      # Basic format validation: should be like "2.months", "15.days", etc.
-      unless fulfillment_period.match?(/^\d+\.(days?|weeks?|months?|years?)$/)
-        errors.add(:fulfillment_period, "must be in format like '2.months' or '15.days'")
-      end
-    end
-
-    def parse_fulfillment_period
-      return nil unless fulfillment_period.present?
-
-      if fulfillment_period =~ /^(\d+)\.(day|days|week|weeks|month|months|year|years)$/
-        amount = $1.to_i
-        unit = $2.singularize
-        amount.send(unit)
-      else
-        raise ArgumentError, "Invalid fulfillment period format: #{fulfillment_period}"
+      unless UsageCredits::PeriodParser.valid_period_format?(fulfillment_period)
+        errors.add(:fulfillment_period, "must be in format like '2.months' or '15.days' and use supported units")
       end
     end
   end

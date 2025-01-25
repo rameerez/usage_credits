@@ -10,9 +10,10 @@ require "active_support/all"
 
 # Load order matters! Dependencies are loaded in this specific order:
 #
-# 1. Core extensions (e.g. numeric helpers)
-require "usage_credits/credit_calculator"   # Centralized credit rounding
-require "usage_credits/core_ext/numeric"    # Numeric extension to write `10.credits` in our DSL
+# 1. Core helpers
+require "usage_credits/helpers/credit_calculator"   # Centralized credit rounding
+require "usage_credits/helpers/period_parser"       # Parse fulfillment periods like `:monthly` to `1.month`
+require "usage_credits/core_ext/numeric"            # Numeric extension to write `10.credits` in our DSL
 
 # 2. Cost calculation
 require "usage_credits/cost/base"

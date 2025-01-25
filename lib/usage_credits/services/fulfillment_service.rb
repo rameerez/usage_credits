@@ -43,7 +43,7 @@ module UsageCredits
 
     def update_fulfillment(credits)
       @fulfillment.update!(
-        fulfilled_at: Time.current,
+        last_fulfilled_at: Time.current,
         credits_last_fulfillment: credits,
         next_fulfillment_at: @fulfillment.calculate_next_fulfillment
       )
@@ -74,7 +74,7 @@ module UsageCredits
 
     def fulfillment_metadata
       @fulfillment.metadata.merge(
-        fulfilled_at: Time.current,
+        last_fulfilled_at: Time.current,
         fulfillment_id: @fulfillment.id
       )
     end

@@ -108,7 +108,7 @@ module UsageCredits
             source: self, # the Pay::Charge
             fulfillment_type: "credit_pack",
             last_fulfillment_credits: pack.total_credits,
-            fulfilled_at: Time.current,
+            last_fulfilled_at: Time.current,
             next_fulfillment_at: nil, # so it doesn't get re-processed
             metadata: {
               purchase_charge_id: id,

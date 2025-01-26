@@ -93,14 +93,18 @@ module UsageCredits
       processor_plan_ids[processor.to_sym] = id
     end
 
-    # Shorthand for Stripe price ID
-    def stripe_price(id)
-      processor_plan(:stripe, id)
-    end
-
     # Get the plan ID for a specific processor
     def plan_id_for(processor)
       processor_plan_ids[processor.to_sym]
+    end
+
+    # Shorthand for Stripe price ID
+    def stripe_price(id = nil)
+      if id.nil?
+        plan_id_for(:stripe) # getter
+      else
+        processor_plan(:stripe, id) # setter
+      end
     end
 
     # Create a checkout session for this subscription plan
@@ -132,11 +136,13 @@ module UsageCredits
       true
     end
 
-    private
-
     # =========================================
     # Helper Methods
     # =========================================
+
+    def fulfillment_period_display
+      fulfillment_period.is_a?(ActiveSupport::Duration) ? fulfillment_period.inspect : fulfillment_period
+    end
 
     def parsed_fulfillment_period
       UsageCredits::PeriodParser.parse_period(@fulfillment_period)
@@ -160,7 +166,7 @@ module UsageCredits
       {
         purchase_type: "credit_subscription",
         subscription_name: name,
-        fulfillment_period: fulfillment_period.is_a?(ActiveSupport::Duration) ? fulfillment_period.inspect : fulfillment_period,
+        fulfillment_period: fulfillment_period_display,
         credits_per_period: credits_per_period,
         signup_bonus_credits: signup_bonus_credits,
         trial_credits: trial_credits,

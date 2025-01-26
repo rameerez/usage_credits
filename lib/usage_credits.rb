@@ -30,10 +30,13 @@ require "usage_credits/models/concerns/pay_charge_extension"
 require "usage_credits/version"
 require "usage_credits/configuration"  # Single source of truth for all configuration in this gem
 
-# 5. Base ApplicationRecord (needed by models)
+# 5. Shim Rails classes so requires don't break
 module UsageCredits
   class ApplicationRecord < ActiveRecord::Base
     self.abstract_class = true
+  end
+
+  class ApplicationJob < ActiveJob::Base
   end
 end
 
@@ -41,8 +44,13 @@ end
 require "usage_credits/models/wallet"
 require "usage_credits/models/transaction"
 require "usage_credits/models/operation"
+require "usage_credits/models/fulfillment"
 require "usage_credits/models/credit_pack"
 require "usage_credits/models/credit_subscription_plan"
+
+# 7. Jobs
+require "usage_credits/services/fulfillment_service.rb"
+require "usage_credits/jobs/fulfillment_job.rb"
 
 # Main module that serves as the primary interface to the gem.
 # Most methods here delegate to Configuration, which is the single source of truth for all config in the initializer
@@ -113,6 +121,11 @@ module UsageCredits
       credit_subscription_plans[name.to_sym]
     end
     alias_method :find_plan, :find_subscription_plan
+
+    def find_subscription_plan_by_processor_id(processor_id)
+      configuration.find_subscription_plan_by_processor_id(processor_id)
+    end
+    alias_method :find_plan_by_id, :find_subscription_plan_by_processor_id
 
     # Event handling for low balance notifications
     def notify_low_balance(owner)

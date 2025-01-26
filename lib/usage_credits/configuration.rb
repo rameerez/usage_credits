@@ -93,6 +93,13 @@ module UsageCredits
       @credit_subscription_plans[name] = plan
     end
 
+    # Find a subscription plan by its processor-specific ID
+    def find_subscription_plan_by_processor_id(processor_id)
+      @credit_subscription_plans.values.find do |plan|
+        plan.processor_plan_ids.values.include?(processor_id)
+      end
+    end
+
     # =========================================
     # Configuration Setters
     # =========================================

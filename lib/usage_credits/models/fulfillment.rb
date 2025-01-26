@@ -11,19 +11,30 @@ module UsageCredits
     belongs_to :source, polymorphic: true, optional: true
 
     validates :wallet, presence: true
-    validates :credits_last_fulfillment, presence: true, numericality: { greater_than: 0 }
+    validates :credits_last_fulfillment, presence: true, numericality: { only_integer: true }
     validates :fulfillment_type, presence: true
     validate :valid_fulfillment_period_format, if: :fulfillment_period?
+    validates :next_fulfillment_at, comparison: { greater_than: :last_fulfilled_at },
+      if: -> { recurring? && last_fulfilled_at.present? && next_fulfillment_at.present? }
 
     # Only get fulfillments that are due AND not expired
     scope :due_for_fulfillment, -> {
       where("next_fulfillment_at <= ?", Time.current)
         .where("expires_at IS NULL OR expires_at > ?", Time.current)
+        .where("last_fulfilled_at IS NULL OR next_fulfillment_at > last_fulfilled_at")
     }
     scope :active, -> { where("expires_at IS NULL OR expires_at > ?", Time.current) }
 
     # Alias for backward compatibility - will be removed in next version
     scope :pending, -> { due_for_fulfillment }
+
+    def due_for_fulfillment?
+      return false unless next_fulfillment_at.present?
+      return false if expired?
+      return false if last_fulfilled_at.present? && next_fulfillment_at <= last_fulfilled_at
+
+      next_fulfillment_at <= Time.current
+    end
 
     def recurring?
       fulfillment_period.present?
@@ -49,6 +60,22 @@ module UsageCredits
     def valid_fulfillment_period_format
       unless UsageCredits::PeriodParser.valid_period_format?(fulfillment_period)
         errors.add(:fulfillment_period, "must be in format like '2.months' or '15.days' and use supported units")
+      end
+    end
+
+    validate :validate_fulfillment_schedule
+
+    def validate_fulfillment_schedule
+      return unless next_fulfillment_at.present?
+
+      if recurring?
+        # For recurring fulfillments, next_fulfillment_at should be in the future when created
+        if new_record? && next_fulfillment_at <= Time.current
+          errors.add(:next_fulfillment_at, "must be in the future for new recurring fulfillments")
+        end
+      else
+        # For one-time fulfillments, next_fulfillment_at should be nil
+        errors.add(:next_fulfillment_at, "should be nil for non-recurring fulfillments") unless new_record?
       end
     end
   end

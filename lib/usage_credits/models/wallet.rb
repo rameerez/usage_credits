@@ -127,28 +127,33 @@ module UsageCredits
     # =========================================
 
     # Add credits to the wallet (internal method)
-    def add_credits(amount, metadata: {}, category: :credit_added, source: nil, expires_at: nil)
+    def add_credits(amount, metadata: {}, category: :credit_added, expires_at: nil, fulfillment: nil)
       with_lock do
         amount = amount.to_i
         previous_balance = balance
         self.balance = credits + amount
         save!
 
-        transactions.create!(
+        transaction = transactions.create!(
           amount: amount,
           category: category,
+          expires_at: expires_at,
           metadata: metadata,
-          source: source,
-          expires_at: expires_at
+          fulfillment: fulfillment
         )
 
         notify_balance_change(:credits_added, amount)
         check_low_balance if !was_low_balance?(previous_balance) && low_balance?
+
+        # To finish, let's return the transaction that has been just created so we can reference it in parts of the code
+        # Useful, for example, to update the transaction's `fulfillment` reference in the subscription extension
+        # after the credits have been awarded and the Fulfillment object has been created, we need to store it
+        return transaction
       end
     end
 
     # Remove credits from the wallet (Internal method)
-    def deduct_credits(amount, metadata: {}, category: :credit_deducted, source: nil)
+    def deduct_credits(amount, metadata: {}, category: :credit_deducted)
       with_lock do
         amount = amount.to_i
         raise InsufficientCredits, "Insufficient credits (#{credits} < #{amount})" if insufficient_credits?(amount)
@@ -160,8 +165,7 @@ module UsageCredits
         transactions.create!(
           amount: -amount,
           category: category,
-          metadata: metadata,
-          source: source
+          metadata: metadata
         )
 
         notify_balance_change(:credits_deducted, amount)

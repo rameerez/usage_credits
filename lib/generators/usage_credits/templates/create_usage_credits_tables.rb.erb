@@ -17,6 +17,7 @@ class CreateUsageCreditsTables < ActiveRecord::Migration<%= migration_version %>
       t.integer :amount, null: false
       t.string :category, null: false
       t.datetime :expires_at
+      t.references :fulfillment, type: foreign_key_type
       t.send(json_column_type, :metadata, null: false, default: {})
 
       t.timestamps
@@ -26,6 +27,7 @@ class CreateUsageCreditsTables < ActiveRecord::Migration<%= migration_version %>
       t.references :wallet, null: false, type: foreign_key_type
       t.references :source, polymorphic: true, type: foreign_key_type
       t.integer :credits_last_fulfillment, null: false    # Credits given in last fulfillment
+      t.string :fulfillment_type, null: false             # What kind of fulfillment is this? (credit_pack / subscription)
       t.datetime :last_fulfilled_at                       # When last fulfilled
       t.datetime :next_fulfillment_at                     # When to fulfill next (nil if stopped/completed)
       t.string :fulfillment_period                        # "2.months", "15.days", etc. (nil for one-time)
@@ -40,7 +42,6 @@ class CreateUsageCreditsTables < ActiveRecord::Migration<%= migration_version %>
     add_index :usage_credits_transactions, :expires_at
     add_index :usage_credits_fulfillments, :next_fulfillment_at
     add_index :usage_credits_fulfillments, :fulfillment_type
-    add_reference :usage_credits_transactions, :fulfillment, null: true
   end
 
   private

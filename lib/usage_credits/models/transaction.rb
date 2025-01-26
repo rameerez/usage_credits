@@ -45,7 +45,8 @@ module UsageCredits
     # =========================================
 
     belongs_to :wallet
-    belongs_to :source, polymorphic: true, optional: true
+
+    belongs_to :fulfillment, optional: true
 
     validates :amount, presence: true, numericality: { only_integer: true }
     validates :category, presence: true, inclusion: { in: CATEGORIES }

@@ -81,16 +81,19 @@ module UsageCredits
 
       Rails.logger.info "Fulfilling initial credits for subscription #{id}"
       Rails.logger.info "  Status: #{status}"
-      Rails.logger.info "  Plan: #{processor_plan}"
+      Rails.logger.info "  Plan: #{plan}"
 
       # Transaction for atomic awarding + fulfillment creation
       ActiveRecord::Base.transaction do
+
+        total_credits_awarded = 0
+        transaction_ids = []
 
         # 1) Award initial or trial credits immediately
         if status == "trialing" && plan.trial_credits.positive?
 
           # Immediate awarding of trial credits
-          wallet.add_credits(plan.trial_credits,
+          transaction = wallet.add_credits(plan.trial_credits,
             category: "subscription_trial",
             expires_at: trial_ends_at,
             metadata: {
@@ -100,12 +103,14 @@ module UsageCredits
               fulfilled_at: Time.current
             }
           )
+          transaction_ids << transaction.id
+          total_credits_awarded += plan.trial_credits
 
         elsif status == "active"
 
           # Awarding of signup bonus + first cycle
           if plan.signup_bonus_credits.positive?
-            wallet.add_credits(plan.signup_bonus_credits,
+            transaction = wallet.add_credits(plan.signup_bonus_credits,
               category: "subscription_signup_bonus",
               metadata: {
                 subscription_id: id,
@@ -114,10 +119,12 @@ module UsageCredits
                 fulfilled_at: Time.current
               }
             )
+            transaction_ids << transaction.id
+            total_credits_awarded += plan.signup_bonus_credits
           end
 
           if plan.credits_per_period.positive?
-            wallet.add_credits(plan.credits_per_period,
+            transaction = wallet.add_credits(plan.credits_per_period,
               category: "subscription_credits",
               metadata: {
                 subscription_id: id,
@@ -126,25 +133,29 @@ module UsageCredits
                 fulfilled_at: Time.current
               }
             )
+            transaction_ids << transaction.id
+            total_credits_awarded += plan.credits_per_period
           end
         end
 
         # 2) Create a Fulfillment record for subsequent awarding
         period_start = (trial_ends_at && status == "trialing") ? trial_ends_at : created_at
-        UsageCredits::Fulfillment.create!(
+        fulfillment = UsageCredits::Fulfillment.create!(
           wallet: wallet,
           source: self,
           fulfillment_type: "subscription",
-          last_fulfillment_credits: 0, # or sum of what you just awarded
-          fulfillment_period: plan.fulfillment_period, # e.g. "1.month"
-          last_fulfillment_at: Time.now,
+          credits_last_fulfillment: total_credits_awarded,
+          fulfillment_period: plan.fulfillment_period_display,
+          last_fulfilled_at: Time.now,
           next_fulfillment_at: period_start + plan.parsed_fulfillment_period,
           metadata: {
             subscription_id: id,
             plan: processor_plan,
-            # any other relevant info
           }
         )
+
+        # Link created transactions to the fulfillment object for traceability
+        UsageCredits::Transaction.where(id: transaction_ids).update_all(fulfillment_id: fulfillment.id)
       end
     end
 

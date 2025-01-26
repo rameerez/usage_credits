@@ -107,7 +107,7 @@ module UsageCredits
             wallet: credit_wallet,
             source: self, # the Pay::Charge
             fulfillment_type: "credit_pack",
-            last_fulfillment_credits: pack.total_credits,
+            credits_last_fulfillment: pack.total_credits,
             last_fulfilled_at: Time.current,
             next_fulfillment_at: nil, # so it doesn't get re-processed
             metadata: {

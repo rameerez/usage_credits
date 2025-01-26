@@ -3,15 +3,27 @@ module UsageCredits
   class FulfillmentService
     def self.process_pending_fulfillments
       count = 0
+      failed = 0
+
       Fulfillment.due_for_fulfillment.find_each do |fulfillment|
-        new(fulfillment).process
-        count += 1
+        begin
+          new(fulfillment).process
+          count += 1
+        rescue StandardError => e
+          failed += 1
+          Rails.logger.error "Failed to process fulfillment #{fulfillment.id}: #{e.message}"
+          Rails.logger.error e.backtrace.join("\n")
+          next # Continue with next fulfillment
+        end
       end
+
+      Rails.logger.info "Processed #{count} fulfillments (#{failed} failed)"
       count
     end
 
     def initialize(fulfillment)
       @fulfillment = fulfillment
+      validate_fulfillment!
     end
 
     def process
@@ -19,45 +31,78 @@ module UsageCredits
         @fulfillment.lock! # row lock to avoid double awarding
 
         # re-check if it's still due, in case time changed or another process already updated it
-        break unless @fulfillment.due_for_fulfillment?
+        return unless @fulfillment.due_for_fulfillment?
 
         credits = calculate_credits
         give_credits(credits)
         update_fulfillment(credits)
       end
-    rescue => e
-      Rails.logger.error "Failed to process fulfillment #{@fulfillment.id}: #{e.message}"
+    rescue UsageCredits::Error => e
+      Rails.logger.error "Usage credits error processing fulfillment #{@fulfillment.id}: #{e.message}"
+      raise
+    rescue StandardError => e
+      Rails.logger.error "Unexpected error processing fulfillment #{@fulfillment.id}: #{e.message}"
       raise
     end
 
     private
 
+    def validate_fulfillment!
+      raise UsageCredits::Error, "No fulfillment provided" if @fulfillment.nil?
+      raise UsageCredits::Error, "Invalid fulfillment type" unless ["subscription", "credit_pack", "manual"].include?(@fulfillment.fulfillment_type)
+      raise UsageCredits::Error, "No wallet associated with fulfillment" if @fulfillment.wallet.nil?
+
+      # Validate required metadata based on type
+      case @fulfillment.fulfillment_type
+      when "subscription"
+        raise UsageCredits::Error, "No plan specified in metadata" unless @fulfillment.metadata["plan"].present?
+      when "credit_pack"
+        raise UsageCredits::Error, "No pack specified in metadata" unless @fulfillment.metadata["pack"].present?
+      else
+        raise UsageCredits::Error, "No credits amount specified in metadata" unless @fulfillment.metadata["credits"].present?
+      end
+    end
+
     def give_credits(credits)
       @fulfillment.wallet.add_credits(
         credits,
         category: fulfillment_category,
-        fulfillment: @fulfillment,
-        metadata: fulfillment_metadata
+        metadata: fulfillment_metadata,
+        fulfillment: @fulfillment
       )
     end
 
     def update_fulfillment(credits)
+      current_time = Time.current
+
+      # If this is the first fulfillment, or if next_fulfillment_at is in the past,
+      # we calculate from current time to avoid bunching up missed fulfillments
+      base_time = if @fulfillment.last_fulfilled_at.nil? || @fulfillment.next_fulfillment_at < current_time
+        current_time
+      else
+        @fulfillment.next_fulfillment_at
+      end
+
+      next_fulfillment = if @fulfillment.recurring?
+        base_time + UsageCredits::PeriodParser.parse_period(@fulfillment.fulfillment_period)
+      end
+
       @fulfillment.update!(
-        last_fulfilled_at: Time.current,
+        last_fulfilled_at: current_time,
         credits_last_fulfillment: credits,
-        next_fulfillment_at: @fulfillment.calculate_next_fulfillment
+        next_fulfillment_at: next_fulfillment
       )
     end
 
     def calculate_credits
       case @fulfillment.fulfillment_type
       when "subscription"
-        plan = UsageCredits.credit_subscription_plans[@fulfillment.metadata["plan"].to_sym]
-        raise ArgumentError, "No subscription plan named #{@fulfillment.metadata["plan"}" unless plan
+        plan = UsageCredits.find_subscription_plan_by_processor_id(@fulfillment.metadata["plan"])
+        raise UsageCredits::InvalidOperation, "No subscription plan found for processor ID #{@fulfillment.metadata["plan"]}" unless plan
         plan.credits_per_period
       when "credit_pack"
-        pack = UsageCredits.credit_packs[@fulfillment.metadata["pack"].to_sym]
-        raise ArgumentError, "No credit pack named #{@fulfillment.metadata["pack"]}" unless pack
+        pack = UsageCredits.find_credit_pack(@fulfillment.metadata["pack"])
+        raise UsageCredits::InvalidOperation, "No credit pack named #{@fulfillment.metadata["pack"]}" unless pack
         pack.total_credits
       else
         @fulfillment.metadata["credits"].to_i
@@ -73,10 +118,18 @@ module UsageCredits
     end
 
     def fulfillment_metadata
-      @fulfillment.metadata.merge(
+      base_metadata = {
         last_fulfilled_at: Time.current,
+        reason: "fulfillment_cycle",
+        fulfillment_period: @fulfillment.fulfillment_period,
         fulfillment_id: @fulfillment.id
-      )
+      }
+
+      if @fulfillment.source.is_a?(Pay::Subscription)
+        base_metadata[:subscription_id] = @fulfillment.source.id
+      end
+
+      @fulfillment.metadata.merge(base_metadata)
     end
   end
 end

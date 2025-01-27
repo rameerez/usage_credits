@@ -11,6 +11,9 @@ module UsageCredits
               as: :owner,
               dependent: :destroy
 
+      alias_method :credits_wallet, :credit_wallet
+      alias_method :wallet, :credit_wallet
+
       after_create :create_credit_wallet, if: :should_create_wallet?
 
       # More intuitive delegations

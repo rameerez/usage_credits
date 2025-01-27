@@ -173,26 +173,6 @@ module UsageCredits
       end
     end
 
-    # Set expiration date for ALL credits
-    def expire_credits_at(expiry_date, metadata: {})
-      with_lock do
-        # Create expiration record
-        transactions.create!(
-          amount: 0,  # No credits added/removed, just setting expiration
-          category: :credit_expiration,
-          metadata: metadata,
-          expires_at: expiry_date
-        )
-
-        # Update balance to reflect expired credits
-        self.balance = credits
-        save!
-
-        # Check if expiration caused low balance
-        check_low_balance if low_balance?
-      end
-    end
-
     private
 
     # =========================================

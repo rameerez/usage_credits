@@ -53,7 +53,6 @@ module UsageCredits
       @low_balance_threshold = nil
       @allow_negative_balance = false
       @low_balance_callback = nil
-      @credit_expiration = nil
     end
 
     # =========================================
@@ -144,15 +143,6 @@ module UsageCredits
     def on_low_balance(&block)
       raise ArgumentError, "Block is required for low balance callback" unless block_given?
       @low_balance_callback = block
-    end
-
-    # Set credit expiration period
-    def expire_credits_after(duration)
-      @credit_expiration = duration
-    end
-
-    def credit_expiration_period
-      @credit_expiration
     end
 
     # =========================================

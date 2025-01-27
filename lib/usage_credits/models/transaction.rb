@@ -18,26 +18,24 @@ module UsageCredits
     # All possible transaction types, grouped by purpose:
     CATEGORIES = [
       # Bonus credits
-      "signup_bonus",          # Initial signup bonus
-      "referral_bonus",        # Referral reward
+      "signup_bonus",                   # Initial signup bonus
+      "referral_bonus",                 # Referral reward
 
       # Subscription-related
       "subscription_credits",           # Generic subscription credits
       "subscription_trial",             # Trial period credits
-      "subscription_trial_expired",     # Trial ended
       "subscription_signup_bonus",      # Bonus for subscribing
 
       # One-time purchases
-      "credit_pack",           # Generic credit pack
-      "credit_pack_purchase",  # Credit pack bought
-      "credit_pack_refund",    # Credit pack refunded
+      "credit_pack",                    # Generic credit pack
+      "credit_pack_purchase",           # Credit pack bought
+      "credit_pack_refund",             # Credit pack refunded
 
       # Credit usage & management
-      "operation_charge",      # Credits spent on operation
-      "credit_expiration",     # Credits expired
-      "manual_adjustment",     # Manual admin adjustment
-      "credit_added",          # Generic addition
-      "credit_deducted"        # Generic deduction
+      "operation_charge",               # Credits spent on operation
+      "manual_adjustment",              # Manual admin adjustment
+      "credit_added",                   # Generic addition
+      "credit_deducted"                 # Generic deduction
     ].freeze
 
     # =========================================
@@ -64,20 +62,10 @@ module UsageCredits
 
     # A transaction is not expired if:
     # 1. It has no expiration date, OR
-    # 2. Its expiration date is in the future, AND
-    # 3. There are no expiration records for it
-    scope :not_expired, -> {
-      where(<<-SQL.squish, Time.current, Time.current)
-        (expires_at IS NULL OR expires_at > ?) AND
-        NOT EXISTS (
-          SELECT 1 FROM usage_credits_transactions exp
-          WHERE exp.wallet_id = usage_credits_transactions.wallet_id
-            AND exp.category = 'credit_expiration'
-            AND exp.expires_at <= ?
-            AND exp.created_at > usage_credits_transactions.created_at
-        )
-      SQL
-    }
+    # 2. Its expiration date is in the future
+    scope :not_expired, -> { where("expires_at IS NULL OR expires_at > ?", Time.current) }
+    scope :expired, -> { where("expires_at < ?", Time.current) }
+
 
     # =========================================
     # Display Formatting

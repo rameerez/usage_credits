@@ -428,21 +428,6 @@ UsageCredits.configure do |config|
 end
 ```
 
-### Credit expiration
-
-```ruby
-# Credits expire after inactivity
-UsageCredits.configure do |config|
-  config.expire_credits_after 1.year
-end
-
-# Or per subscription
-subscription_plan :basic do
-  gives 1000.credits.every(:month)
-  expire_after 30.days.of_cancellation
-end
-```
-
 ### Rounding strategy
 
 Configure how credit costs are rounded:

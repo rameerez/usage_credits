@@ -17,20 +17,20 @@ module UsageCredits
     validates :next_fulfillment_at, comparison: { greater_than: :last_fulfilled_at },
       if: -> { recurring? && last_fulfilled_at.present? && next_fulfillment_at.present? }
 
-    # Only get fulfillments that are due AND not expired
+    # Only get fulfillments that are due AND not stopped
     scope :due_for_fulfillment, -> {
       where("next_fulfillment_at <= ?", Time.current)
-        .where("expires_at IS NULL OR expires_at > ?", Time.current)
+        .where("stops_at IS NULL OR stops_at > ?", Time.current)
         .where("last_fulfilled_at IS NULL OR next_fulfillment_at > last_fulfilled_at")
     }
-    scope :active, -> { where("expires_at IS NULL OR expires_at > ?", Time.current) }
+    scope :active, -> { where("stops_at IS NULL OR stops_at > ?", Time.current) }
 
     # Alias for backward compatibility - will be removed in next version
     scope :pending, -> { due_for_fulfillment }
 
     def due_for_fulfillment?
       return false unless next_fulfillment_at.present?
-      return false if expired?
+      return false if stopped?
       return false if last_fulfilled_at.present? && next_fulfillment_at <= last_fulfilled_at
 
       next_fulfillment_at <= Time.current
@@ -40,17 +40,18 @@ module UsageCredits
       fulfillment_period.present?
     end
 
-    def expired?
-      expires_at.present? && expires_at <= Time.current
+    def stopped?
+      stops_at.present? && stops_at <= Time.current
     end
 
     def active?
-      !expired?
+      !stopped?
     end
 
     def calculate_next_fulfillment
       return nil unless recurring?
-      return nil if next_fulfillment_at.nil?  # Already stopped
+      return nil if stopped?
+      return nil if next_fulfillment_at.nil?
 
       next_fulfillment_at + UsageCredits::PeriodParser.parse_period(fulfillment_period)
     end
@@ -78,5 +79,6 @@ module UsageCredits
         errors.add(:next_fulfillment_at, "should be nil for non-recurring fulfillments") unless new_record?
       end
     end
+
   end
 end

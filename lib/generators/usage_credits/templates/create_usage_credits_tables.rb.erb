@@ -31,7 +31,7 @@ class CreateUsageCreditsTables < ActiveRecord::Migration<%= migration_version %>
       t.datetime :last_fulfilled_at                       # When last fulfilled
       t.datetime :next_fulfillment_at                     # When to fulfill next (nil if stopped/completed)
       t.string :fulfillment_period                        # "2.months", "15.days", etc. (nil for one-time)
-      t.datetime :expires_at                              # When credits from this fulfillment expire
+      t.datetime :stops_at                                # When to stop performing fulfillments
       t.send(json_column_type, :metadata, null: false, default: {})
 
       t.timestamps

@@ -16,10 +16,9 @@ module UsageCredits
   #
   # Fulfillment
   #   Has next_fulfillment_at set to (Time.current + 1.month), or whenever the first real billing cycle is.
-  #   Let your monthly/quarterly plan define how to parse "1.month" etc. That’s exactly how the FulfillmentService does it.
   #
   # `handle_cancellation_expiration`
-  #   If the user cancels, you can set fulfillment.expires_at = ends_at, so no further awarding is done.
+  #   If the user cancels, you can set fulfillment.stops_at = ends_at, so no further awarding is done.
   #   Optionally you also forcibly expire leftover credits.
   #
   # That’s it. Everything else—like “monthly awarding,” “rollover credits,” etc.—should be handled by the
@@ -140,6 +139,7 @@ module UsageCredits
 
         # 2) Create a Fulfillment record for subsequent awarding
         period_start = (trial_ends_at && status == "trialing") ? trial_ends_at : created_at
+
         fulfillment = UsageCredits::Fulfillment.create!(
           wallet: wallet,
           source: self,
@@ -148,6 +148,7 @@ module UsageCredits
           fulfillment_period: plan.fulfillment_period_display,
           last_fulfilled_at: Time.now,
           next_fulfillment_at: period_start + plan.parsed_fulfillment_period,
+          stops_at: ends_at, # Set when the fulfillment will stop; TODO: this will need to get renewed with future payments (updates to the Pay::Subscription model)
           metadata: {
             subscription_id: id,
             plan: processor_plan,
@@ -159,10 +160,11 @@ module UsageCredits
       end
     end
 
+    # TODO: define and re-write what happens at expiration (especially re: credit expiration)
     # If the subscription is canceled, let's mark the Fulfillment expired
     def handle_cancellation_expiration
       # Only triggers if status changed to canceled
-      # We'll set the Fulfillment's expires_at so the job won't keep awarding
+      # We'll set the Fulfillment's stops_at so the job won't keep awarding
       plan = credit_subscription_plan
       return unless plan && has_valid_wallet?
 
@@ -175,10 +177,10 @@ module UsageCredits
         expiry_time = ends_at
         expiry_time += plan.credit_expiration_period if plan.credit_expiration_period
 
-        fulfillment.update!(expires_at: expiry_time)
+        fulfillment.update!(stops_at: expiry_time)
       else
         # Or if you want to just stop awarding in the future
-        fulfillment.update!(expires_at: ends_at)
+        fulfillment.update!(stops_at: ends_at)
       end
 
       # Optionally expire existing credits immediately

@@ -8,11 +8,11 @@ Allow your users to have in-app credits they can use to perform operations.
 
 Refill user credits with subscriptions, allow your users to purchase booster credit packs, rollover unused credits to the next billing period, and more!
 
+> [!IMPORTANT]
+> This gem requires an ActiveJob backend to handle recurring credit fulfillment. Make sure you have one configured (Sidekiq, `solid_queue`, etc.) or subscription credits won't be fulfilled
+
 > [!NOTE]
 > `usage_credits` integrates with the [`pay`](https://github.com/pay-rails/pay) gem both to refill credits through subscriptions, and so you can easily sell credit packs through Stripe, Lemon Squeezy, PayPal or any `pay`-supported processor.
-
-> [!IMPORTANT]
-> This gem requires an ActiveJob backend to handle credit fulfillment. Make sure you have one configured (Sidekiq, `solid_queue`, etc.) or credits won't be fulfilled
 
 ---
 
@@ -154,7 +154,7 @@ operation :process_image do
 end
 ```
 
-> [!IMPORTANT]
+> [!NOTE]
 > Credit costs must be whole numbers. Decimals are not allowed to avoid floating-point issues and ensure predictable billing.
 > ```ruby
 > 1.credit              # ✅ Valid: whole number

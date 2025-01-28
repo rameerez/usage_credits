@@ -29,9 +29,12 @@ module UsageCredits
     extend ActiveSupport::Concern
 
     included do
-      after_commit :handle_initial_award_and_fulfillment_setup, on: :create
+      # For initial setup and fulfillment, we can't do after_create or on: :create because the subscription first may
+      # get created with status "incomplete" and only get updated to status "active" when the payment is cleared
+      after_commit :handle_initial_award_and_fulfillment_setup
       after_commit :handle_cancellation_expiration, if: :should_handle_cancellation_expiration?
       # TODO: handle plan changes
+      # TODO: handle plan renewals (update Fulfillment and credit expiration etc)
     end
 
     # Identify the usage_credits plan object
@@ -78,6 +81,9 @@ module UsageCredits
       plan = credit_subscription_plan
       wallet = customer.owner.credit_wallet
 
+      # Using the configured grace period
+      credits_expire_at = !plan.rollover_enabled ? (current_period_end + UsageCredits.configuration.fulfillment_grace_period) : nil
+
       Rails.logger.info "Fulfilling initial credits for subscription #{id}"
       Rails.logger.info "  Status: #{status}"
       Rails.logger.info "  Plan: #{plan}"
@@ -88,7 +94,7 @@ module UsageCredits
         total_credits_awarded = 0
         transaction_ids = []
 
-        # 1) Award initial or trial credits immediately
+        # 1) If this is a trial and not an active subscription: award trial credits, if any
         if status == "trialing" && plan.trial_credits.positive?
 
           # Immediate awarding of trial credits
@@ -107,7 +113,7 @@ module UsageCredits
 
         elsif status == "active"
 
-          # Awarding of signup bonus + first cycle
+          # Awarding of signup bonus, if any
           if plan.signup_bonus_credits.positive?
             transaction = wallet.add_credits(plan.signup_bonus_credits,
               category: "subscription_signup_bonus",
@@ -122,9 +128,11 @@ module UsageCredits
             total_credits_awarded += plan.signup_bonus_credits
           end
 
+          # Actual awarding of the subscription credits
           if plan.credits_per_period.positive?
             transaction = wallet.add_credits(plan.credits_per_period,
               category: "subscription_credits",
+              expires_at: credits_expire_at,  # This will be nil if credit rollover is enabled
               metadata: {
                 subscription_id: id,
                 reason: "first_cycle",

@@ -38,6 +38,15 @@ class Numeric
     self * 100 # Convert to cents for payment processors
   end
   alias_method :dollar, :dollars
+  alias_method :euro, :dollars
+  alias_method :euros, :dollars
+  alias_method :pound, :dollars
+  alias_method :pounds, :dollars
+
+  def cents
+    self
+  end
+  alias_method :cent, :cents
 end
 
 # This is what allows us to write .credit amounts as Procs, like:

@@ -30,14 +30,19 @@ UsageCredits.configure do |config|
   #
   # Example credit packs (uncomment and modify as needed):
   #
+  # credit_pack :tiny do
+  #   gives 100.credits
+  #   costs 99.cents # Price can be in cents or dollars
+  # end
+  #
   # credit_pack :starter do
-  #   includes 1000.credits
+  #   gives 1000.credits
   #   bonus 100.credits  # Optional bonus credits
   #   costs 49.dollars
   # end
   #
   # credit_pack :pro do
-  #   includes 5000.credits
+  #   gives 5000.credits
   #   bonus 1000.credits
   #   costs 199.dollars
   # end

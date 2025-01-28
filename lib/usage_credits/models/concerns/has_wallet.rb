@@ -33,6 +33,18 @@ module UsageCredits
       define_method(:credit_wallet) do
         ensure_credit_wallet
       end
+
+      # Returns all active subscriptions as CreditSubscriptionPlan objects
+      def subscriptions
+        return [] unless credit_wallet
+
+        credit_wallet.fulfillments
+          .where(fulfillment_type: "subscription")
+          .active
+          .map { |f| UsageCredits.find_subscription_plan_by_processor_id(f.metadata["plan"]) }
+          .compact
+      end
+
     end
 
     # Class methods added to the model

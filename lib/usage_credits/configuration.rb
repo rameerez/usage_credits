@@ -8,6 +8,17 @@ module UsageCredits
     VALID_CURRENCIES = [:usd, :eur, :gbp, :sgd].freeze
 
     # =========================================
+    # Core Data Stores
+    # =========================================
+
+    # Stores all the things users can do with credits
+    attr_reader :operations                   # Credit-consuming operations (e.g., "send_email: 1 credit")
+
+    # Stores all the things users can buy or subscribe to
+    attr_reader :credit_packs                 # One-time purchases (e.g., "100 credits for $49")
+    attr_reader :credit_subscription_plans    # Recurring plans (e.g., "1000 credits/month for $99")
+
+    # =========================================
     # Basic Settings
     # =========================================
 
@@ -17,6 +28,14 @@ module UsageCredits
 
     # How to format credit amounts in the UI
     attr_reader :credit_formatter
+
+    # Grace period for credit expiration after fulfillment period ends.
+    # This ensures smooth transition between fulfillment periods.
+    # For this amount of time, old, already expired credits will be erroneously counted as available in the user's balance.
+    # Keep it low enough that users don't notice they have the last period's credits still available, but
+    # long enough that there's a smooth transition and users never get zero credits in between fullfillment periods
+    # A good setting is to have it slightly longer than how often your UsageCredits::FulfillmentJob runs
+    attr_accessor :fulfillment_grace_period
 
     # =========================================
     # Low balance
@@ -29,17 +48,6 @@ module UsageCredits
     # Called when user hits low_balance_threshold
     attr_reader :low_balance_callback
 
-    # =========================================
-    # Core Data Stores
-    # =========================================
-
-    # Stores all the things users can do with credits
-    attr_reader :operations                   # Credit-consuming operations (e.g., "send_email: 1 credit")
-
-    # Stores all the things users can buy or subscribe to
-    attr_reader :credit_packs                 # One-time purchases (e.g., "100 credits for $49")
-    attr_reader :credit_subscription_plans    # Recurring plans (e.g., "1000 credits/month for $99")
-
     def initialize
       # Initialize empty stores
       @operations = {}
@@ -50,6 +58,8 @@ module UsageCredits
       @default_currency = :usd
       @rounding_strategy = :ceil  # Always round up to ensure we never undercharge
       @credit_formatter = ->(amount) { "#{amount} credits" }
+      @fulfillment_grace_period = 7.seconds # For how long will expiring credits "overlap" the following fulfillment period
+
       @low_balance_threshold = nil
       @allow_negative_balance = false
       @low_balance_callback = nil

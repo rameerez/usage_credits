@@ -53,7 +53,13 @@ module UsageCredits
       return nil if stopped?
       return nil if next_fulfillment_at.nil?
 
-      next_fulfillment_at + UsageCredits::PeriodParser.parse_period(fulfillment_period)
+      # If next_fulfillment_at is in the past (e.g. due to missed fulfillments or errors),
+      # we use current time as the base to avoid scheduling multiple rapid fulfillments.
+      # This ensures smooth recovery from missed fulfillments by scheduling the next one
+      # from the current time rather than the missed fulfillment time.
+      base_time = next_fulfillment_at > Time.current ? next_fulfillment_at : Time.current
+
+      base_time + UsageCredits::PeriodParser.parse_period(fulfillment_period)
     end
 
     private

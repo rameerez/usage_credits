@@ -68,38 +68,25 @@ module UsageCredits
         credits,
         category: fulfillment_category,
         metadata: fulfillment_metadata,
+        expires_at: calculate_expiration, # Will be nil if rollover is enabled
         fulfillment: @fulfillment
       )
     end
 
     def update_fulfillment(credits)
-      current_time = Time.current
-
-      # If this is the first fulfillment, or if next_fulfillment_at is in the past,
-      # we calculate from current time to avoid bunching up missed fulfillments
-      base_time = if @fulfillment.last_fulfilled_at.nil? || @fulfillment.next_fulfillment_at < current_time
-        current_time
-      else
-        @fulfillment.next_fulfillment_at
-      end
-
-      next_fulfillment = if @fulfillment.recurring?
-        base_time + UsageCredits::PeriodParser.parse_period(@fulfillment.fulfillment_period)
-      end
-
       @fulfillment.update!(
-        last_fulfilled_at: current_time,
+        last_fulfilled_at: Time.current,
         credits_last_fulfillment: credits,
-        next_fulfillment_at: next_fulfillment
+        next_fulfillment_at: @fulfillment.calculate_next_fulfillment
       )
     end
 
     def calculate_credits
       case @fulfillment.fulfillment_type
       when "subscription"
-        plan = UsageCredits.find_subscription_plan_by_processor_id(@fulfillment.metadata["plan"])
-        raise UsageCredits::InvalidOperation, "No subscription plan found for processor ID #{@fulfillment.metadata["plan"]}" unless plan
-        plan.credits_per_period
+        @plan = UsageCredits.find_subscription_plan_by_processor_id(@fulfillment.metadata["plan"])
+        raise UsageCredits::InvalidOperation, "No subscription plan found for processor ID #{@fulfillment.metadata["plan"]}" unless @plan
+        @plan.credits_per_period
       when "credit_pack"
         pack = UsageCredits.find_credit_pack(@fulfillment.metadata["pack"])
         raise UsageCredits::InvalidOperation, "No credit pack named #{@fulfillment.metadata["pack"]}" unless pack
@@ -107,6 +94,13 @@ module UsageCredits
       else
         @fulfillment.metadata["credits"].to_i
       end
+    end
+
+    def calculate_expiration
+      return nil unless @fulfillment.fulfillment_type == "subscription" && @plan
+      return nil if @plan.rollover_enabled
+
+      @fulfillment.calculate_next_fulfillment + UsageCredits.configuration.fulfillment_grace_period
     end
 
     def fulfillment_category

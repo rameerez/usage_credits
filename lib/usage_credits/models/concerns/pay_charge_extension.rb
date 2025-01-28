@@ -7,7 +7,7 @@ module UsageCredits
 
     included do
       after_initialize :init_metadata
-      after_commit :fulfill_credit_pack!, on: :create
+      after_commit :fulfill_credit_pack!
       after_commit :handle_refund!, on: :update, if: :refund_needed?
     end
 

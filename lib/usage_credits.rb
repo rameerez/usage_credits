@@ -43,6 +43,7 @@ end
 # 6. Models (order matters for dependencies)
 require "usage_credits/models/wallet"
 require "usage_credits/models/transaction"
+require "usage_credits/models/allocation"
 require "usage_credits/models/operation"
 require "usage_credits/models/fulfillment"
 require "usage_credits/models/credit_pack"

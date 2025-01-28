@@ -46,8 +46,20 @@ module UsageCredits
 
     belongs_to :fulfillment, optional: true
 
+    has_many :outgoing_allocations,
+              class_name: "UsageCredits::Allocation",
+              foreign_key: :transaction_id,
+              dependent: :destroy
+
+    has_many :incoming_allocations,
+              class_name: "UsageCredits::Allocation",
+              foreign_key: :source_transaction_id,
+              dependent: :destroy
+
     validates :amount, presence: true, numericality: { only_integer: true }
     validates :category, presence: true, inclusion: { in: CATEGORIES }
+
+    validate :remaining_amount_cannot_be_negative
 
     # =========================================
     # Scopes
@@ -57,7 +69,6 @@ module UsageCredits
     scope :credits_deducted, -> { where("amount < 0") }
     scope :by_category, ->(category) { where(category: category) }
     scope :recent, -> { order(created_at: :desc) }
-    scope :expired, -> { where("expires_at < ?", Time.current) }
     scope :operation_charges, -> { where(category: :operation_charge) }
 
     # A transaction is not expired if:
@@ -66,6 +77,42 @@ module UsageCredits
     scope :not_expired, -> { where("expires_at IS NULL OR expires_at > ?", Time.current) }
     scope :expired, -> { where("expires_at < ?", Time.current) }
 
+
+    # =========================================
+    # Helpers
+    # =========================================
+
+    # Get the owner of the wallet these credits belong to
+    def owner
+      wallet.owner
+    end
+
+    # Have these credits expired?
+    def expired?
+      expires_at.present? && expires_at < Time.current
+    end
+
+    # Is this transaction a positive credit or a negative (spend)?
+    def credit?
+      amount > 0
+    end
+
+    def debit?
+      amount < 0
+    end
+
+    # How many credits from this transaction have already been allocated (spent)?
+    # Only applies if this transaction is positive.
+    def allocated_amount
+      incoming_allocations.sum(:amount)
+    end
+
+    # How many credits remain unused in this positive transaction?
+    # If negative, this will effectively be 0.
+    def remaining_amount
+      return 0 unless credit?
+      amount - allocated_amount
+    end
 
     # =========================================
     # Display Formatting
@@ -87,20 +134,6 @@ module UsageCredits
 
       # Use predefined description or fallback to titleized category
       category.titleize
-    end
-
-    # =========================================
-    # State & Relations
-    # =========================================
-
-    # Check if these credits have expired
-    def expired?
-      expires_at? && expires_at < Time.current
-    end
-
-    # Get the owner of the wallet these credits belong to
-    def owner
-      wallet.owner
     end
 
     # =========================================
@@ -130,5 +163,12 @@ module UsageCredits
 
       "#{operation} (-#{cost} credits)"
     end
+
+    def remaining_amount_cannot_be_negative
+      if credit? && remaining_amount < 0
+        errors.add(:base, "Allocated amount exceeds transaction amount")
+      end
+    end
+
   end
 end

@@ -37,9 +37,36 @@ class CreateUsageCreditsTables < ActiveRecord::Migration<%= migration_version %>
       t.timestamps
     end
 
+    # Allocations are the basis for the bucket-based, FIFO with expiration inventory-like system
+    create_table :usage_credits_allocations, id: primary_key_type do |t|
+      # The "spend" transaction (negative) that is *using* credits
+      t.references :transaction, null: false, type: foreign_key_type,
+                                 foreign_key: { to_table: :usage_credits_transactions },
+                                 index: { name: "index_allocations_on_transaction_id" }
+
+      # The "source" transaction (positive) from which the credits are drawn
+      t.references :source_transaction, null: false, type: foreign_key_type,
+                                        foreign_key: { to_table: :usage_credits_transactions },
+                                        index: { name: "index_allocations_on_source_transaction_id" }
+
+      # How many credits were allocated from that particular source
+      t.integer :amount, null: false
+
+      t.timestamps
+    end
+
     # Add indexes
     add_index :usage_credits_transactions, :category
     add_index :usage_credits_transactions, :expires_at
+
+    # Composite index on (expires_at, id) for efficient ordering when calculating balances
+    add_index :usage_credits_transactions, [:expires_at, :id], name: 'index_transactions_on_expires_at_and_id'
+
+    # Index on wallet_id and amount to speed up queries filtering by wallet and positive amounts
+    add_index :usage_credits_transactions, [:wallet_id, :amount], name: 'index_transactions_on_wallet_id_and_amount'
+
+    add_index :usage_credits_allocations, [:transaction_id, :source_transaction_id], name: "index_allocations_on_tx_and_source_tx"
+
     add_index :usage_credits_fulfillments, :next_fulfillment_at
     add_index :usage_credits_fulfillments, :fulfillment_type
   end

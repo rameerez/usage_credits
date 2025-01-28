@@ -7,22 +7,22 @@ UsageCredits.configure do |config|
   # Example:
   #
   # operation :send_email do
-  #   cost 1.credit
+  #   costs 1.credit
   # end
   #
   # operation :process_image do
-  #   cost 10.credits + 1.credit_per(:mb)
+  #   costs 10.credits + 1.credit_per(:mb)
   #   validate ->(params) { params[:size] <= 100.megabytes }, "File too large"
   # end
   #
   # operation :generate_ai_response do
-  #   cost 5.credits
+  #   costs 5.credits
   #   validate ->(params) { params[:prompt].length <= 1000 }, "Prompt too long"
   #   meta category: :ai, description: "Generate AI response"
   # end
   #
   # operation :process_items do
-  #   cost 1.credit_per(:units)  # Cost per item processed
+  #   costs 1.credit_per(:units)  # Cost per item processed
   #   meta category: :batch, description: "Process items in batch"
   # end
   #
@@ -91,6 +91,6 @@ UsageCredits.configure do |config|
   # Format credits for display (default: "X credits")
   #
   # config.format_credits do |amount|
-  #   "#{number_with_delimiter(amount)} credits remaining"
+  #   "#{amount} credits"
   # end
 end

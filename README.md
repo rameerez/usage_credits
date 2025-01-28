@@ -62,7 +62,7 @@ And perform operations:
 end
 
 # Then check the remaining balance
-@user.credits
+@user.credits  
 => 99
 ```
 
@@ -142,7 +142,7 @@ For example, create a simple operation named `send_email` that costs 1 credit to
 ```ruby
 # Simple fixed cost
 operation :send_email do
-  cost 1.credit
+  costs 1.credit
 end
 ```
 
@@ -150,7 +150,7 @@ You can get quite sophisticated in pricing, and define the cost of your operatio
 ```ruby
 operation :process_image do
   # Cost based on size
-  cost 10.credits + 1.credits_per(:mb)
+  costs 10.credits + 1.credits_per(:mb)
 end
 ```
 
@@ -174,12 +174,12 @@ For variable costs, you can specify units in different ways:
 ```ruby
 # Using megabytes
 operation :process_image do
-  cost 1.credits_per(:mb)  # or :megabytes, :megabyte
+  costs 1.credits_per(:mb)  # or :megabytes, :megabyte
 end
 
 # Using units
 operation :process_items do
-  cost 1.credits_per(:units)  # or :unit
+  costs 1.credits_per(:units)  # or :unit
 end
 ```
 
@@ -207,13 +207,13 @@ It's also possible to add validations and metadata to your operations:
 ```ruby
 # With custom validation
 operation :generate_ai_response do
-  cost 5.credits
+  costs 5.credits
   validate ->(params) { params[:prompt].length <= 1000 }, "Prompt too long"
 end
 
 # With metadata for better tracking
 operation :analyze_data do
-  cost 20.credits
+  costs 20.credits
   meta category: :analytics, description: "Deep data analysis"
 end
 ```

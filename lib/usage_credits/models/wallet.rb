@@ -18,6 +18,7 @@ module UsageCredits
 
     belongs_to :owner, polymorphic: true
     has_many :transactions, class_name: "UsageCredits::Transaction", dependent: :destroy
+    has_many :fulfillments, class_name: "UsageCredits::Fulfillment", dependent: :destroy
 
     validates :balance, numericality: { greater_than_or_equal_to: 0 }, unless: :allow_negative_balance?
 

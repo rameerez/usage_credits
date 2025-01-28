@@ -68,7 +68,7 @@ module UsageCredits
       raise ArgumentError, "Bonus credits must be greater than or equal to 0" if bonus_credits.to_i.negative?
       raise ArgumentError, "Price must be greater than 0" unless price_cents.to_i.positive?
       raise ArgumentError, "Currency can't be blank" if price_currency.blank?
-      raise ArgumentError, "Price must be in whole cents ($49 = 4900)" if price_cents % 100 != 0
+      # raise ArgumentError, "Price must be in whole cents ($49 = 4900)" if price_cents % 100 != 0 # Payment processors should handle this anyways
       true
     end
 

@@ -61,7 +61,7 @@ UsageCredits.configure do |config|
   #   gives 10_000.credits.every(:month)
   #   signup_bonus 1_000.credits
   #   trial_includes 500.credits
-  #   unused_credits :rollover  # Credits roll over to next month
+  #   unused_credits :expire  # Credits expire at the end of the fulfillment period (use :rollover to roll over to next period)
   # end
   #
   #

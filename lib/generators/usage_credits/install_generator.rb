@@ -34,7 +34,7 @@ module UsageCredits
         say "  3. Define the actions that consume credits in config/initializers/usage_credits.rb"
         say "     ➡️ See README.md for usage examples and detailed configuration options."
 
-        say "  4. Make sure you have the `pay` gem install and configured for your chosen payment processor(s) if you want to handle payments and subscriptions (f.ex. for credit refills)"
+        say "  4. 💸 Make sure you have the `pay` gem installed and configured for your chosen payment processor(s) if you want to handle payments and subscriptions (f.ex. for credit refills)"
 
         say "\nEnjoy your new usage-based credits system! 💳✨\n", :green
       end

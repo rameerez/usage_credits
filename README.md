@@ -1,4 +1,4 @@
-# 💳✨ `usage_credits` - Add a usage-based credits system to your Rails app
+# 💳✨ `usage_credits` - Add usage-based credits to your Rails app 
 
 [![Gem Version](https://badge.fury.io/rb/usage_credits.svg)](https://badge.fury.io/rb/usage_credits)
 

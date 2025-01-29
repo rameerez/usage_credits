@@ -8,8 +8,8 @@ Gem::Specification.new do |spec|
   spec.authors = ["rameerez"]
   spec.email = ["rubygems@rameerez.com"]
 
-  spec.summary = "Add a usage-based credits system to your Rails app."
-  spec.description = "A Ruby gem that makes it dead simple to add a credits system to your Rails app to allow your users to have in-app credits they can use to perform operations. Perfect for SaaS, AI apps, and API products that want to implement usage-based pricing."
+  spec.summary = "Add usage-based credits to your Rails app."
+  spec.description = "Add a usage-based credit system to your Rails app, easily. Let users buy and spend credits on usage-based actions. Refill Stripe subscriptions with credits, sell one-time booster credit packs, manage prepaid credits / tokens. Your users will have wallet balances that they can spend on features, API calls, or other usage-based actions. Perfect for SaaS, AI apps, games, and API products with metered pricing / billing."
   spec.homepage = "https://github.com/rameerez/usage_credits"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.1.0"

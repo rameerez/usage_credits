@@ -2,73 +2,47 @@
 
 [![Gem Version](https://badge.fury.io/rb/usage_credits.svg)](https://badge.fury.io/rb/usage_credits)
 
-> [!CAUTION]
-> I'm still developing this. While the overall architecture should be sound and I myself may be using this gem in production for my own products, usage-based billing is critical to anyone's business. There may be edge cases I'm not covering. Getting this wrong means either losing money or angry customers. Please help me test this app (test it under your own setup + help me write a solid, comprehensive test suite) so I can remove this warning.
-
----
-
-Allow your users to have in-app credits they can use to perform operations.
+Allow your users to have in-app credits / tokens they can use to perform operations.
 
 ✨ Perfect for SaaS, AI apps, games, and API products that want to implement usage-based pricing.
 
-Refill user credits with subscriptions, allow your users to purchase booster credit packs, rollover unused credits to the next billing period, and more!
-
-> [!IMPORTANT]
-> This gem requires an ActiveJob backend to handle recurring credit fulfillment. Make sure you have one configured (Sidekiq, `solid_queue`, etc.) or subscription credits won't be fulfilled
-
-> [!NOTE]
-> `usage_credits` integrates with the [`pay`](https://github.com/pay-rails/pay) gem both to refill credits through subscriptions, and so you can easily sell credit packs through Stripe, Lemon Squeezy, PayPal or any `pay`-supported processor.
-
----
-
-Your new superpowers:
-
-- Keep track of each user's credits
-- Define how many credits any operation in your app costs
-- Spend credits securely (credits won't get spent if the operation fails)
-- Allow users to purchase credit packs at any time (including mid-billing cycle)
-- Refill credits through subscriptions (monthly, yearly, etc.)
-- Refill credits at arbitrary periods, decoupled from billing periods (refill credits every day, every month, every quarter, etc.)
-- Give users bonus credits (for referrals, trial subscriptions, etc.)
-- Handle subscription upgrades and downgrades gracefully
-- Rollover credits to the next period
-- Handle refunds (partial and total)
-- Expire credits after a certain date
-- Track every credit transaction with detailed history and audit trail for billing / reporting
+Refill user credits with subscriptions, allow your users to purchase booster credit packs at any time, rollover unused credits to the next billing period, expire credits, get a detailed history and audit trail of every transaction for billing / reporting, and more!
 
 All with a simple DSL that reads just like English.
+
+### Requirements
+
+- An ActiveJob backend (Sidekiq, `solid_queue`, etc.) for subscription credit fulfillment
+- [`pay`](https://github.com/pay-rails/pay) gem for Stripe/PayPal/Lemon Squeezy integration (sell credits, refill subscriptions)
 
 ## 👨‍💻 Example
 
 Say you have a `User` model. You add `has_credits` to it and you're ready to go:
 
 ```ruby
-@user.give_credits(100, reason: "signup")
+class User
+  has_credits
+end
 ```
 
-Now you can check the balance:
+With that, your users automatically get all functionality, and you can start performing operations:
+
+```ruby
+@user.give_credits(100)
+```
+
+You can check any user's balance:
 ```ruby
 @user.credits
 => 100
 ```
 
-And perform operations:
+And spend their credits securely:
 ```ruby
-@user.has_enough_credits_to?(:send_email)
-=> true
-
-# You can estimate the total cost before performing the operation
-@user.estimate_credits_to(:send_email)
-=> 1
-
-# Spend credits
 @user.spend_credits_on(:send_email) do
-  # actually perform the thing here – no credits will be spent if it fails
+  # Perform the actual operation here.
+  # No credits will be spent if this block fails.
 end
-
-# Then check the remaining balance
-@user.credits  
-=> 99
 ```
 
 This gem keeps track of every transaction and its cost + origin, so you can keep a clean audit trail for clear invoicing and reference / auditing purposes:
@@ -83,22 +57,24 @@ Each transaction stores comprehensive metadata about the action that was perform
 => {"operation"=>"send_email", "cost"=>1, "params"=>{}, "metadata"=>{}, "executed_at"=>"..."}
 ```
 
-The `usage_credits` gem also allows you to expire credits, fulfill credits based on monthly / yearly subscriptions, sell one-time booster credit packs, rollover/expire unused credits to the next billing period, and more!
-
-Defining credit subscriptions and credit-spending operations is as simple as:
+Defining credit-spending operations is as simple as:
 ```ruby
-subscription_plan :pro do
-  gives 1_000.credits.every :month
-  unused_credits :rollover # or :expire
-end
-
 operation :send_email do
   costs 1.credit
 end
 ```
 
-Sound good? Let's get started!
+And defining credit-fulfilling subscriptions is really simple too:
+```ruby
+subscription_plan :pro do
+  gives 1_000.credits.every :month
+  unused_credits :rollover # or :expire
+end
+```
 
+You can also expire credits, fulfill credits based on Stripe subscriptions, sell one-time booster credit packs, rollover/expire unused credits to the next fulfillment period, and more!
+
+Sounds good? Let's get started!
 
 ## Quick start
 
@@ -135,6 +111,9 @@ production:
 
 (Your actual setup for the recurring job may change if you're using Sidekiq or other ActiveJob backend – make sure you set it up right for your specific backend)
 
+> [!IMPORTANT]
+> This gem requires an ActiveJob backend to handle recurring credit fulfillment. Make sure you have one configured (Sidekiq, `solid_queue`, etc.) or subscription credits won't be fulfilled.
+
 That's it! Your app now has a credits system. Let's see how to use it.
 
 ## How it works
@@ -158,7 +137,6 @@ Define all your operations and their cost in your `config/initializers/usage_cre
 For example, create a simple operation named `send_email` that costs 1 credit to perform:
 
 ```ruby
-# Simple fixed cost
 operation :send_email do
   costs 1.credit
 end
@@ -167,7 +145,6 @@ end
 You can get quite sophisticated in pricing, and define the cost of your operations based on parameters:
 ```ruby
 operation :process_image do
-  # Cost based on size
   costs 10.credits + 1.credit_per(:mb)
 end
 ```
@@ -213,9 +190,9 @@ When using the operation, you can specify the size directly in the unit:
 You can configure how fractional costs are rounded:
 ```ruby
 UsageCredits.configure do |config|
-  # :ceil (default) - Always round up (2.1 => 3)
-  # :floor - Always round down (2.9 => 2)
-  # :round - Standard rounding (2.4 => 2, 2.6 => 3)
+  # :ceil (default)   - Always round up (2.1 => 3)
+  # :floor            - Always round down (2.9 => 2)
+  # :round            - Standard rounding (2.4 => 2, 2.6 => 3)
   config.rounding_strategy = :ceil
 end
 ```
@@ -248,7 +225,7 @@ There's a handy `estimate_credits_to` method to can estimate the total cost of a
 There's also a `has_enough_credits_to?` method to nicely check the user has enough credits to perform a certain operation:
 ```ruby
 if @user.has_enough_credits_to?(:process_image, size: 5.megabytes)
-  # do whatever
+  # actually spend the credits
 else
   redirect_to credits_path, alert: "Not enough credits!"
 end
@@ -279,49 +256,9 @@ process_image(params)  # If this fails, credits are already spent!
 > If validation fails (e.g., file too large), both methods will raise `InvalidOperation`.
 > Perform your operation inside the `spend_credits_on` block OR make the credit spend conditional to the actual operation, so users are not charged if the operation fails.
 
-## Sell credit packs
-
-> [!IMPORTANT]
-> For all payment-related operations (sell credit packs, handle subscription-based fulfillment, etc. this gem relies on the [`pay`](https://github.com/pay-rails/pay) gem – make sure you have it installed and correctly configured before continuing)
-
-In the `config/initializers/usage_credits.rb` file, define credit packs users can buy:
-
-```ruby
-credit_pack :starter do
-  gives 1000.credits
-  costs 49.dollars
-end
-```
-
-Then, you can prompt them to purchase it with our `pay`-based helpers:
-```ruby
-# Create a Stripe Checkout session for purchase
-credit_pack = UsageCredits.credit_packs[:starter]
-session = credit_pack.create_checkout_session(current_user)
-redirect_to session.url
-```
-
-The gem automatically handles:
-- Credit fulfillment after successful payment
-- Proportional credit removal on refunds (e.g., if 50% is refunded, 50% of credits are removed)
-- Prevention of double-processing through metadata flags
-- Support for multiple currencies (USD, EUR, etc.)
-- Detailed transaction tracking with metadata like:
-  ```ruby
-  {
-    credit_pack: "starter",         # Credit pack identifier
-    charge_id: "ch_xxx",            # Payment processor charge ID
-    processor: "stripe",            # Payment processor used
-    price_cents: 4900,              # Amount paid in cents
-    currency: "usd",                # Currency used for payment
-    credits: 1000,                  # Base credits given
-    purchased_at: "2024-01-20"      # Purchase timestamp
-  }
-  ```
-
 ## Low balance alerts
 
-Notify users when they are running low on credits (useful to upsell them a credit pack):
+You can hook on to our low balance event to notify users when they are running low on credits (useful to upsell them a credit pack):
 
 ```ruby
 UsageCredits.configure do |config|
@@ -340,17 +277,54 @@ UsageCredits.configure do |config|
 end
 ```
 
-## Subscription plans with credits
+## Sell credit packs
 
-Subscription plans have three components:
-1. Credits: the amount of credits that will be given eac fulfillment cycle (monthly, quarterly, yearly, etc.)
-2. Signup bonus: One-time credits given when subscription becomes active
-3. Trial credits: Credits given during trial period
-4. What to do with the credits from the previous period: either carry them over to the following period (`:rollover`) or `:expire` them
+> [!IMPORTANT]
+> For all payment-related operations (sell credit packs, handle subscription-based fulfillment, etc.) this gem relies on the [`pay`](https://github.com/pay-rails/pay) gem – make sure you have it installed and correctly configured with your payment processor (Stripe, Lemon Squeezy, PayPal, etc.) before continuing. Follow the `pay` README for more information and installation instructions.
+
+In the `config/initializers/usage_credits.rb` file, define credit packs users can buy:
 
 ```ruby
+credit_pack :starter do
+  gives 1000.credits
+  costs 49.dollars
+end
+```
+
+Then, you can prompt them to purchase it with our `pay`-based helpers:
+```ruby
+# Create a Stripe Checkout session for purchase
+credit_pack = UsageCredits.find_credit_pack(:starter)
+session = credit_pack.create_checkout_session(current_user)
+redirect_to session.url
+```
+
+The gem automatically handles:
+- Credit pack fulfillment after successful payment
+- Proportional credit removal on refunds (e.g., if 50% is refunded, 50% of credits are removed)
+- Prevention of double-processing of purchase
+- Support for multiple currencies (USD, EUR, etc.)
+- Detailed transaction tracking with metadata like:
+  ```ruby
+  {
+    credit_pack: "starter",         # Credit pack identifier
+    charge_id: "ch_xxx",            # Payment processor charge ID
+    processor: "stripe",            # Payment processor used
+    price_cents: 4900,              # Amount paid in cents
+    currency: "usd",                # Currency used for payment
+    credits: 1000,                  # Base credits given
+    purchased_at: "2024-01-20"      # Purchase timestamp
+  }
+  ```
+
+## Subscription plans that grant credits
+
+Users can subscribe to a plan (monthly, yearly, etc.) that gives them credits.
+
+Defining a subscription plan is as simple as this:
+```ruby
 subscription_plan :pro do
-  stripe_price "price_XYZ"            # Link it to your Stripe price
+  stripe_price "price_XYZ"            # Link it to your Stripe price ID
   gives 10_000.credits.every(:month)  # Monthly credits
   signup_bonus 1_000.credits          # One-time bonus
   trial_includes 500.credits          # Trial period credits
@@ -359,17 +333,63 @@ subscription_plan :pro do
 end
 ```
 
-### Credit fulfillment
+The first thing to understand is that **credit fulfillment** is decoupled from **billing periods**:
 
-Credit fulfillment is decoupled from billing periods, so you can drip credits at any pace you want (e.g., 100/day instead of 3000/month)
+### Credit fulfillment cycles
 
-`pay` handles the user's subscription, we handle how we fulfill that subscription.
+Credit fulfillment is completely decoupled from billing periods.
+
+This means you can drip credits at any pace you want (e.g., 100/day instead of 3000/month) – and that's completely independent of when your users get actually charged (typically on a monthly or yearly basis, as you defined on Stripe)
+
+`pay` handles the user's subscription payments (billing periods), we handle how we fulfill that subscription (fulfilling cycles)
 
 We rely on ActiveJob to fulfill credits. So you should have an ActiveJob backend installed and configured (Sidekiq, `solid_queue`, etc.) for credits to be refilled.
 
 To make fulfillment actually work, you'll need to schedule the fulfillment job to run periodically, as explained in the setup section.
 
-### Changing subscriptions
+### First, create a Stripe subscription
+
+For now, `usage_credits` relies on you first creating a subscription on your Stripe dashboard and then linking it to the gem by setting the specific Stripe plan ID in the subscription config using the `stripe_price` option, like this:
+```ruby
+subscription_plan :pro do
+  stripe_price "price_XYZ"
+  # ...
+end
+```
+
+For now, only Stripe subscriptions are supported (contribute to the gem to help us add more payment processors!)
+
+### Specify a fulfillment period
+
+Next, specify how many credits a user subscribed to this plan gets, and when they get them.
+
+Since fulfillment cycles are decoupled from billing cycles, you can either match fulfillment cycles to billing cycles (that is, charge your users every month AND fulfill them every month too, to keep things simple) OR you can specify something else like refill credits every `:day`, every `:quarter`, every `15.days`, every `:year` etc.
+
+```ruby
+subscription_plan :pro do
+  gives 10_000.credits.every(15.days)
+  # or, another example:
+  # gives 10_000.credits.every(:quarter)
+  # ...
+end
+```
+
+### Expire or rollover unused credits
+
+At the end of the fulfillment cycle, you can either:
+ - Expire all unused credits (so the user starts with X fixed amount of credits every period, and all of them expire at the end of the period, whether they've used them or not)
+ - Carry unused credits over to the next period
+
+Just set `unused_credits` to either `:expire` or `:rollover`
+
+```ruby
+subscription_plan :pro do
+  unused_credits :expire # or :rollover
+  # ...
+end
+```
+
+### Upgrading or downgrading subscriptions
 
 When handling plan changes:
 - Upgrades cause an immediate reset to the new amount (if not rollover)
@@ -377,11 +397,9 @@ When handling plan changes:
 - Trial credits are automatically expired (converted to a negative transaction) if the trial expires without payment
 - Unused credits can either roll over (`:rollover`) or expire (`:expire`) at the end of each billing cycle
 
-When a user subscribes to a plan (via the `pay` gem), they'll automatically have their credits refilled.
-
 ## Transaction history & audit trail
 
-Every credit transaction is automatically tracked with detailed metadata:
+Every transaction (whether adding or deducting credits) is logged in the ledger, and automatically tracked with metadata:
 
 ```ruby
 # Get recent activity
@@ -411,12 +429,87 @@ Each operation charge includes detailed audit metadata:
 ```
 
 This makes it easy to:
-- Track historical costs
 - Audit operation usage
 - Generate detailed invoices
 - Monitor usage patterns
 
-## Advanced usage
+### Custom credit formatting
+
+A minor thing, but if you want to use the `@transaction.formatted_amount` helper, you can specify the format:
+
+```ruby
+UsageCredits.configure do |config|
+  # Format as "1,000 credits remaining"
+  config.format_credits do |amount|
+    "#{amount} credits remaining"
+  end
+end
+```
+
+Which will get you:
+```ruby
+@transaction.formatted_amount
+# => "42 credits remaining"
+```
+
+### Rounding strategy
+
+You can configure how credit costs are rounded:
+
+```ruby
+UsageCredits.configure do |config|
+  # :ceil (default) - Always round up (2.1 => 3)
+  # :floor - Always round down (2.9 => 2)
+  # :round - Standard rounding (2.4 => 2, 2.6 => 3)
+  config.rounding_strategy = :ceil
+end
+```
+
+By default, we round up (`:ceil`) all credit costs to avoid undercharging. So if an operation costs 1 credit per megabyte, and the user submits a file that's 5.2 megabytes, we'll deduct 6 credits from the user's wallet.
+
+## Technical notes on architecture and how this gem is built
+
+Building a usage credits system is deceptively complex.
+
+The first naive approach is to think this whole thing can be implemented as just a `balance` attribute in the database, a number that you update whenever the user buys or spends credits.
+
+That results in a plethora of bugs as soon as time starts rolling and customers start upgrading, downgrading, and cancelling subscriptions. Customers won't get what they paid for, and you'll always have problems. You always feel like repairing a leaking budget. So you may be tempted to offload all the credit-fulfilling logic to Stripe webhooks and such.
+
+That only gets you so far.
+
+If you want expiring credits, credit packs, prorating, etc. you essentially need to build a double-entry ledger system. You need to keep track of every credit-giving and credit-spending operation. The ledger should be immutable by design (append-only), transactions should happen on row-level locks to prevent double-spending, operations should be atomic, etc.
+
+That's exactly what I ended up building:
+- `Wallet` is the root of all functionality. All users have a wallet that centralizes everything and keeps track of the available balance – and all credit operations (add/deduct credits) are performed on the wallet.
+- `Transaction` - operations get logged as transactions. The Transaction model is the basis for the ledger system.
+- `Fulfillment` represents a credit-giving action (wether recurring or not). Subscriptions are tied to a Fulfillment record that orchestrates when the actual credit fulfillment should happen, and how often. A Fulfillment object will create one or many positive Transactions.
+- `Allocation` is the basis for our bucket-based FIFO credit spending system. It's what solves the [dragging cost problem](https://x.com/rameerez/status/1884246492837302759) and allows for expiring credits.
+- `CreditPack` and `CreditSubscriptionPlan` are POROs that model credit-giving objects (one-time purchases for credit packs; recurring subscriptions for subscription plans). They allow for easy configuration through the DSL and store all information on memory.
+- `Operation` represents a credit-spending operation.
+
+### Row-level locks
+
+Heads up: we acquire a row-level lock when spending credits, to avoid concurrency inconsistencies. This means the row will be locked for as long as the credit-spending operation lasts. If the block is short (which 99% of the time it is – like updating a record, sending an email, etc.), you’re golden. If someone tries to do 2 minutes of CPU-bound AI generation under that lock, concurrency for that user’s wallet is blocked. Possibly that’s what we want in any case, but it’s something you should know for large tasks.
+
+### Summary of features
+
+**Core ledger:**
+- Immutable ledger design (transactions are append-only)
+- Row-level locks to prevent double-spending even with concurrent usage
+- Secure credit spending (credits will not be deducted if the operation fails)
+- Audit trail / transaction logs (each transaction has metadata on how the credits were spent, and what "credit bucket" they drew from)
+
+**Billing system:**
+- Handles total and partial refunds
+- Deals with new subscriptions and cancellations
+- Handle subscription upgrades and downgrades gracefully
+- One-time credit packs can be bought at any time, independent of subscriptions
+
+**Credit fulfillment system:**
+- Credits can be fulfilled at arbitrary periods, decoupled from billing cycles
+- Credits can be expired
+- Credits can be rolled over to the next period
+- FIFO bucketed ledger approach for credit spending
 
 ### Numeric extensions
 
@@ -429,35 +522,33 @@ The gem adds several convenient methods to Ruby's `Numeric` class to make the DS
 
 # Pricing
 49.dollars    # => 4900 cents (for Stripe)
+29.euros      # => 2900 cents (for Stripe)
+99.cents      # =>   99 cents (for Stripe)
 
 # Sizes and rates
-1.credits_per(:mb)  # => 1 credit per megabyte
-100.megabytes      # => 100 MB (uses Rails' numeric extensions)
+1.credit_per(:mb)     # => 1 credit per megabyte
+2.credits_per(:unit)  # => 2 credits per unit
+100.megabytes         # => 100 MB (uses Rails' numeric extensions)
 ```
 
-### Custom credit formatting
+### Kernel extensions
 
-```ruby
-UsageCredits.configure do |config|
-  # Format as "1,000 credits remaining"
-  config.format_credits do |amount|
-    "#{number_with_delimiter(amount)} credits remaining"
-  end
-end
-```
+This gem _pollutes_ a bit the `Kernel` namespace by defining 3 top-level methods: `operation`, `credit_pack`, and `credit_subscription`. We do this to have a DSL that reads like plain English. I think the benefits of having these methods outweight the downsides, and there's a low chance of name collision, but in any case it's important you know they're there.
 
-### Rounding strategy
 
-Configure how credit costs are rounded:
+## Edge cases
 
-```ruby
-UsageCredits.configure do |config|
-  # :ceil (default) - Always round up (2.1 => 3)
-  # :floor - Always round down (2.9 => 2)
-  # :round - Standard rounding (2.4 => 2, 2.6 => 3)
-  config.rounding_strategy = :ceil
-end
-```
+Billing systems are extremely complex and full of edge cases. This is a new gem, and may be missing some edge cases.
+
+Real billing systems usually find edge cases when handling things like:
+- Prorated changes
+- Different pricing tiers
+- Usage rollups and aggregation
+- Refunds and credits
+- Failed payments
+- Usage caps
+
+Please help us by contributing to add tests to cover all critical paths!
 
 ## Testing
 

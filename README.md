@@ -485,8 +485,10 @@ Heads up: we acquire a row-level lock when spending credits, to avoid concurrenc
 - Row-level locks to prevent double-spending even with concurrent usage
 - Secure credit spending (credits will not be deducted if the operation fails)
 - Audit trail / transaction logs (each transaction has metadata on how the credits were spent, and what "credit bucket" they drew from)
+- Avoids floating-point issues by enforcing integer-only operations
 
 **Billing system:**
+- Integrates with `pay` loosely enough not to rely on a single payment processor (we use Pay::Charge and Pay::Subscription model callbacks, not payment-processor-specific webhooks)
 - Handles total and partial refunds
 - Deals with new subscriptions and cancellations
 - Handle subscription upgrades and downgrades gracefully
@@ -496,6 +498,7 @@ Heads up: we acquire a row-level lock when spending credits, to avoid concurrenc
 - Credits can be fulfilled at arbitrary periods, decoupled from billing cycles
 - Credits can be expired
 - Credits can be rolled over to the next period
+- Prevents double-fulfillment of credits
 - FIFO bucketed ledger approach for credit spending
 
 ### Numeric extensions

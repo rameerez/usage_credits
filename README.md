@@ -23,7 +23,7 @@ Your new superpowers:
 - Spend credits securely (credits won't get spent if the operation fails)
 - Allow users to purchase credit packs at any time (including mid-billing cycle)
 - Refill credits through subscriptions (monthly, yearly, etc.)
-- Refill credits at arbitrary periods (every day, every month, every quarter, etc.)
+- Refill credits at arbitrary periods, decoupled from billing periods (refill credits every day, every month, every quarter, etc.)
 - Give users bonus credits (for referrals, trial subscriptions, etc.)
 - Handle subscription upgrades and downgrades gracefully
 - Rollover credits to the next period
@@ -78,7 +78,21 @@ Each transaction stores comprehensive metadata about the action that was perform
 => {"operation"=>"send_email", "cost"=>1, "params"=>{}, "metadata"=>{}, "executed_at"=>"..."}
 ```
 
-The `usage_credits` gem also allows you to expire credits, fulfill credits based on monthly / yearly subscriptions, sell credit packs, rollover unused credits to the next billing period, and more! Keep reading to get a clear picture of what you can do.
+The `usage_credits` gem also allows you to expire credits, fulfill credits based on monthly / yearly subscriptions, sell one-time booster credit packs, rollover/expire unused credits to the next billing period, and more!
+
+Defining credit subscriptions and credit-spending operations is as simple as:
+```ruby
+subscription_plan :pro do
+  gives 1_000.credits.every :month
+  unused_credits :rollover # or :expire
+end
+
+operation :process_file do
+  costs 10.credits + 2.credits_per(:mb)
+end
+```
+
+Sound good? Let's get started!
 
 
 ## Quick start
@@ -116,7 +130,7 @@ production:
 
 (Your actual setup for the recurring job may change if you're using Sidekiq or other ActiveJob backend – make sure you set it up right for your specific backend)
 
-That's it! Your app now has a credits system. Let's see how to use it:
+That's it! Your app now has a credits system. Let's see how to use it.
 
 ## How it works
 
@@ -125,7 +139,6 @@ That's it! Your app now has a credits system. Let's see how to use it:
 1. Users can get credits by:
   - Purchasing credit packs (e.g., "1000 credits for $49")
   - Having a subscription (e.g., "Pro plan includes 10,000 credits/month")
-  - Getting bonuses (e.g., "100 free credits for referring a user")
 
 2. Users spend credits on operations you define:
   - "Sending an email costs 1 credit"
@@ -150,7 +163,7 @@ You can get quite sophisticated in pricing, and define the cost of your operatio
 ```ruby
 operation :process_image do
   # Cost based on size
-  costs 10.credits + 1.credits_per(:mb)
+  costs 10.credits + 1.credit_per(:mb)
 end
 ```
 

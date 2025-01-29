@@ -3,7 +3,7 @@
 [![Gem Version](https://badge.fury.io/rb/usage_credits.svg)](https://badge.fury.io/rb/usage_credits)
 
 > [!CAUTION]
-> I'm still developing this. While the overall architecture should be sound and I myself may be using this gem in production for my own products, usage-based billing is critical to anyone's business. There may be edge cases I'm not covering. Getting this wrong means either losing money or angry customers. Please help me test this app (test it under your own setup + let's write a solid test suite) so I can remove this warning.
+> I'm still developing this. While the overall architecture should be sound and I myself may be using this gem in production for my own products, usage-based billing is critical to anyone's business. There may be edge cases I'm not covering. Getting this wrong means either losing money or angry customers. Please help me test this app (test it under your own setup + help me write a solid, comprehensive test suite) so I can remove this warning.
 
 ---
 

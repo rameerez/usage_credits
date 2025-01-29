@@ -188,14 +188,17 @@ When using the operation, you can specify the size directly in the unit:
 ```
 
 You can configure how fractional costs are rounded:
+
 ```ruby
 UsageCredits.configure do |config|
-  # :ceil (default)   - Always round up (2.1 => 3)
-  # :floor            - Always round down (2.9 => 2)
-  # :round            - Standard rounding (2.4 => 2, 2.6 => 3)
+  # :ceil (default) - Always round up (2.1 => 3)
+  # :floor - Always round down (2.9 => 2)
+  # :round - Standard rounding (2.4 => 2, 2.6 => 3)
   config.rounding_strategy = :ceil
 end
 ```
+
+By default, we round up (`:ceil`) all credit costs to avoid undercharging. So if an operation costs 1 credit per megabyte, and the user submits a file that's 5.2 megabytes, we'll deduct 6 credits from the user's wallet.
 
 It's also possible to add validations and metadata to your operations:
 
@@ -222,7 +225,7 @@ There's a handy `estimate_credits_to` method to can estimate the total cost of a
 => 15 # (10 base + 5 MB * 1 credit/MB)
 ```
 
-There's also a `has_enough_credits_to?` method to nicely check the user has enough credits to perform a certain operation:
+There's also a `has_enough_credits_to?` method to nicely check the user has enough credits before performing a certain operation:
 ```ruby
 if @user.has_enough_credits_to?(:process_image, size: 5.megabytes)
   # actually spend the credits
@@ -236,7 +239,7 @@ Finally, you can actually spend credits with `spend_credits_on`:
 @user.spend_credits_on(:process_image, size: 5.megabytes)
 ```
 
-To ensure credits are not subtracted from users during failed operations, you can pass a block to `spend_credits_on`. No credits are spent if the block doesn't succeed (no errors, no exceptions, no raises, etc.) This way, you ensure credits are only spent if the operation succeeds:
+To ensure credits are not subtracted from users during failed operations, you can pass a block to `spend_credits_on`. No credits are spent if the block doesn't succeed (it shouldn't raise any exceptions or throw any errors) This way, you ensure credits are only spent if the operation succeeds:
 
 ```ruby
 @user.spend_credits_on(:process_image, size: 5.megabytes) do
@@ -343,13 +346,11 @@ This means you can drip credits at any pace you want (e.g., 100/day instead of 3
 
 `pay` handles the user's subscription payments (billing periods), we handle how we fulfill that subscription (fulfilling cycles)
 
-We rely on ActiveJob to fulfill credits. So you should have an ActiveJob backend installed and configured (Sidekiq, `solid_queue`, etc.) for credits to be refilled.
-
-To make fulfillment actually work, you'll need to schedule the fulfillment job to run periodically, as explained in the setup section.
+We rely on ActiveJob to fulfill credits. So you should have an ActiveJob backend installed and configured (Sidekiq, `solid_queue`, etc.) for credits to be refilled. To make fulfillment actually work, you'll need to schedule the fulfillment job to run periodically, as explained in the setup section.
 
 ### First, create a Stripe subscription
 
-For now, `usage_credits` relies on you first creating a subscription on your Stripe dashboard and then linking it to the gem by setting the specific Stripe plan ID in the subscription config using the `stripe_price` option, like this:
+`usage_credits` relies on you first creating a subscription on your Stripe dashboard and then linking it to the gem by setting the specific Stripe plan ID in the subscription config using the `stripe_price` option, like this:
 ```ruby
 subscription_plan :pro do
   stripe_price "price_XYZ"
@@ -357,7 +358,7 @@ subscription_plan :pro do
 end
 ```
 
-For now, only Stripe subscriptions are supported (contribute to the gem to help us add more payment processors!)
+For now, only Stripe subscriptions are supported (contribute to the codebase to help us add more payment processors!)
 
 ### Specify a fulfillment period
 
@@ -439,9 +440,8 @@ A minor thing, but if you want to use the `@transaction.formatted_amount` helper
 
 ```ruby
 UsageCredits.configure do |config|
-  # Format as "1,000 credits remaining"
   config.format_credits do |amount|
-    "#{amount} credits remaining"
+    "#{amount} tokens"
   end
 end
 ```
@@ -449,23 +449,10 @@ end
 Which will get you:
 ```ruby
 @transaction.formatted_amount
-# => "42 credits remaining"
+# => "42 tokens"
 ```
 
-### Rounding strategy
-
-You can configure how credit costs are rounded:
-
-```ruby
-UsageCredits.configure do |config|
-  # :ceil (default) - Always round up (2.1 => 3)
-  # :floor - Always round down (2.9 => 2)
-  # :round - Standard rounding (2.4 => 2, 2.6 => 3)
-  config.rounding_strategy = :ceil
-end
-```
-
-By default, we round up (`:ceil`) all credit costs to avoid undercharging. So if an operation costs 1 credit per megabyte, and the user submits a file that's 5.2 megabytes, we'll deduct 6 credits from the user's wallet.
+It's useful if you want to name your credits something else (tokens, virtual currency, tasks, in-app gems, whatever) and you want the name to be consistent.
 
 ## Technical notes on architecture and how this gem is built
 

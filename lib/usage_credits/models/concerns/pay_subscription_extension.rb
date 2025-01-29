@@ -82,7 +82,7 @@ module UsageCredits
       wallet = customer.owner.credit_wallet
 
       # Using the configured grace period
-      credits_expire_at = !plan.rollover_enabled ? (current_period_end + UsageCredits.configuration.fulfillment_grace_period) : nil
+      credits_expire_at = !plan.rollover_enabled ? (created_at + plan.parsed_fulfillment_period + UsageCredits.configuration.fulfillment_grace_period) : nil
 
       Rails.logger.info "Fulfilling initial credits for subscription #{id}"
       Rails.logger.info "  Status: #{status}"
@@ -146,7 +146,16 @@ module UsageCredits
         end
 
         # 2) Create a Fulfillment record for subsequent awarding
-        period_start = (trial_ends_at && status == "trialing") ? trial_ends_at : created_at
+        # Use current_period_start as the base time, falling back to created_at
+        period_start = if trial_ends_at && status == "trialing"
+                      trial_ends_at
+                    else
+                      current_period_start || created_at
+                    end
+
+        # Ensure next_fulfillment_at is in the future
+        next_fulfillment_at = period_start + plan.parsed_fulfillment_period
+        next_fulfillment_at = Time.current + plan.parsed_fulfillment_period if next_fulfillment_at <= Time.current
 
         fulfillment = UsageCredits::Fulfillment.create!(
           wallet: wallet,
@@ -155,7 +164,7 @@ module UsageCredits
           credits_last_fulfillment: total_credits_awarded,
           fulfillment_period: plan.fulfillment_period_display,
           last_fulfilled_at: Time.now,
-          next_fulfillment_at: period_start + plan.parsed_fulfillment_period,
+          next_fulfillment_at: next_fulfillment_at,
           stops_at: ends_at, # Set when the fulfillment will stop; TODO: this will need to get renewed with future payments (updates to the Pay::Subscription model)
           metadata: {
             subscription_id: id,

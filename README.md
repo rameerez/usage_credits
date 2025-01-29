@@ -87,8 +87,8 @@ subscription_plan :pro do
   unused_credits :rollover # or :expire
 end
 
-operation :process_file do
-  costs 10.credits + 2.credits_per(:mb)
+operation :send_email do
+  costs 1.credit
 end
 ```
 

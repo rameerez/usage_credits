@@ -11,6 +11,7 @@ module UsageCredits
     belongs_to :source, polymorphic: true, optional: true
 
     validates :wallet, presence: true
+    validates :source_id, uniqueness: { scope: :source_type }, if: :source_id?
     validates :credits_last_fulfillment, presence: true, numericality: { only_integer: true }
     validates :fulfillment_type, presence: true
     validate :valid_fulfillment_period_format, if: :fulfillment_period?

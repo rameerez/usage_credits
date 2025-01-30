@@ -49,6 +49,10 @@ module UsageCredits
       credit_subscription_plan.present?
     end
 
+    def fullfillment_should_stop_at
+      (ends_at || current_period_end)
+    end
+
     private
 
     # Returns true if the subscription has a valid credit wallet to operate on
@@ -59,6 +63,13 @@ module UsageCredits
     end
 
     def credits_already_fulfilled?
+      # TODO: There's a race condition where Pay actually updates the subscription two times on initial creation,
+      # leading to us triggering handle_initial_award_and_fulfillment_setup twice too.
+      # Since no Fulfillment record has been created yet, both callbacks will try to create the same Fulfillment object
+      # at about the same time, thus making this check useless (there's nothing written to the DB yet)
+      # For now, we handle it by adding a validation to the Fulfillment model so that there's no two Fulfillment objects
+      # with the same source_id -- so whichever of the two callbacks gets processed first wins, the other just fails.
+      # That's how we prevent double credit awarding for now, but this race condition should be handled more elegantly.
       UsageCredits::Fulfillment.exists?(source: self)
     end
 
@@ -172,7 +183,7 @@ module UsageCredits
           fulfillment_period: plan.fulfillment_period_display,
           last_fulfilled_at: Time.now,
           next_fulfillment_at: next_fulfillment_at,
-          stops_at: ends_at, # Set when the fulfillment will stop; TODO: this will need to get renewed with future payments (updates to the Pay::Subscription model)
+          stops_at: fullfillment_should_stop_at, # Pre-emptively set when the fulfillment will stop, in case we miss a future event (like sub cancellation)
           metadata: {
             subscription_id: id,
             plan: processor_plan,
@@ -181,6 +192,8 @@ module UsageCredits
 
         # Link created transactions to the fulfillment object for traceability
         UsageCredits::Transaction.where(id: transaction_ids).update_all(fulfillment_id: fulfillment.id)
+
+        Rails.logger.info "Initial fulfillment for subscription #{id} finished. Created fulfillment #{fulfillment.id}"
       rescue => e
         Rails.logger.error "Failed to fulfill initial credits for subscription #{id}: #{e.message}"
         raise ActiveRecord::Rollback
@@ -198,7 +211,7 @@ module UsageCredits
 
       ActiveRecord::Base.transaction do
         # Subscription renewed, we can set the new Fulfillment stops_at to the extended date
-        fulfillment.update!(stops_at: current_period_end || ends_at)
+        fulfillment.update!(stops_at: fullfillment_should_stop_at)
         Rails.logger.info "Fulfillment #{fulfillment.id} stops_at updated to #{fulfillment.stops_at}"
       rescue => e
         Rails.logger.error "Failed to extend fulfillment period for subscription #{id}: #{e.message}"
@@ -217,7 +230,7 @@ module UsageCredits
 
       ActiveRecord::Base.transaction do
         # Subscription cancelled, so stop awarding credits in the future
-        fulfillment.update!(stops_at: current_period_end || ends_at)
+        fulfillment.update!(stops_at: fullfillment_should_stop_at)
         Rails.logger.info "Fulfillment #{fulfillment.id} stops_at set to #{fulfillment.stops_at} due to cancellation"
       rescue => e
         Rails.logger.error "Failed to stop credit fulfillment for subscription #{id}: #{e.message}"

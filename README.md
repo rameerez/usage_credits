@@ -6,7 +6,7 @@ Allow your users to have in-app credits / tokens they can use to perform operati
 
 ✨ Perfect for SaaS, AI apps, games, and API products that want to implement usage-based pricing.
 
-Refill user credits with subscriptions, allow your users to purchase booster credit packs at any time, rollover unused credits to the next billing period, expire credits, get a detailed history and audit trail of every transaction for billing / reporting, and more!
+Refill user credits with subscriptions, allow your users to top up by purchasing booster credit packs at any time, rollover unused credits to the next billing period, expire credits, get a detailed history and audit trail of every transaction for billing / reporting, and more!
 
 All with a simple DSL that reads just like English.
 
@@ -17,7 +17,7 @@ All with a simple DSL that reads just like English.
 
 ## 👨‍💻 Example
 
-Say you have a `User` model. You add `has_credits` to it and you're ready to go:
+`usage_credits` allows you to add credits to your Rails app in just one line of code. Say you have a `User` model. You add `has_credits` to it and you're ready to go:
 
 ```ruby
 class User
@@ -45,18 +45,6 @@ And spend their credits securely:
 end
 ```
 
-This gem keeps track of every transaction and its cost + origin, so you can keep a clean audit trail for clear invoicing and reference / auditing purposes:
-```ruby
-@user.credit_history.pluck(:category, :amount)
-=> [["signup_bonus", 100], ["operation_charge", -1]]
-```
-
-Each transaction stores comprehensive metadata about the action that was performed:
-```ruby
-@user.credit_history.last.metadata
-=> {"operation"=>"send_email", "cost"=>1, "params"=>{}, "metadata"=>{}, "executed_at"=>"..."}
-```
-
 Defining credit-spending operations is as simple as:
 ```ruby
 operation :send_email do
@@ -70,6 +58,18 @@ subscription_plan :pro do
   gives 1_000.credits.every :month
   unused_credits :rollover # or :expire
 end
+```
+
+This gem keeps track of every transaction and its cost + origin, so you can keep a clean audit trail for clear invoicing and reference / auditing purposes:
+```ruby
+@user.credit_history.pluck(:category, :amount)
+=> [["signup_bonus", 100], ["operation_charge", -1]]
+```
+
+Each transaction stores comprehensive metadata about the action that was performed:
+```ruby
+@user.credit_history.last.metadata
+=> {"operation"=>"send_email", "cost"=>1, "params"=>{}, "metadata"=>{}, "executed_at"=>"..."}
 ```
 
 You can also expire credits, fulfill credits based on Stripe subscriptions, sell one-time booster credit packs, rollover/expire unused credits to the next fulfillment period, and more!
@@ -390,14 +390,6 @@ subscription_plan :pro do
 end
 ```
 
-### Upgrading or downgrading subscriptions
-
-When handling plan changes:
-- Upgrades cause an immediate reset to the new amount (if not rollover)
-- Downgrades maintain existing credits until the next billing cycle
-- Trial credits are automatically expired (converted to a negative transaction) if the trial expires without payment
-- Unused credits can either roll over (`:rollover`) or expire (`:expire`) at the end of each billing cycle
-
 ## Transaction history & audit trail
 
 Every transaction (whether adding or deducting credits) is logged in the ledger, and automatically tracked with metadata:
@@ -491,7 +483,6 @@ Heads up: we acquire a row-level lock when spending credits, to avoid concurrenc
 - Integrates with `pay` loosely enough not to rely on a single payment processor (we use Pay::Charge and Pay::Subscription model callbacks, not payment-processor-specific webhooks)
 - Handles total and partial refunds
 - Deals with new subscriptions and cancellations
-- Handle subscription upgrades and downgrades gracefully
 - One-time credit packs can be bought at any time, independent of subscriptions
 
 **Credit fulfillment system:**
@@ -534,6 +525,9 @@ Real billing systems usually find edge cases when handling things like:
 - Prorated changes
 - Different pricing tiers
 - Usage rollups and aggregation
+- Upgrading and downgrading subscriptions
+- Pausing and resuming subscriptions (especially at edge times)
+- Re-activating subscriptions
 - Refunds and credits
 - Failed payments
 - Usage caps

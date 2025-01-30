@@ -17,9 +17,9 @@ module UsageCredits
   # Fulfillment
   #   Has next_fulfillment_at set to (Time.current + 1.month), or whenever the first real billing cycle is.
   #
-  # `handle_cancellation_expiration`
-  #   If the user cancels, you can set fulfillment.stops_at = ends_at, so no further awarding is done.
-  #   Optionally you also forcibly expire leftover credits.
+  # `update_fulfillment_on_cancellation`
+  #   If the user cancels, we set fulfillment.stops_at = ends_at, so no further awarding is done.
+  #   Optionally we can also forcibly expire leftover credits.
   #
   # That’s it. Everything else—like “monthly awarding,” “rollover credits,” etc.—should be handled by the
   # `FulfillmentService#process` method, which checks the plan’s config to decide how many credits to add next time around.
@@ -32,9 +32,12 @@ module UsageCredits
       # For initial setup and fulfillment, we can't do after_create or on: :create because the subscription first may
       # get created with status "incomplete" and only get updated to status "active" when the payment is cleared
       after_commit :handle_initial_award_and_fulfillment_setup
-      after_commit :handle_cancellation_expiration, if: :should_handle_cancellation_expiration?
-      # TODO: handle plan changes
-      # TODO: handle plan renewals (update Fulfillment and credit expiration etc)
+
+      after_commit :update_fulfillment_on_renewal,        if: :subscription_renewed?
+      after_commit :update_fulfillment_on_cancellation,   if: :subscription_canceled?
+
+      # TODO: handle plan changes (upgrades / downgrades)
+      # TODO: handle paused subscriptions (may still have an "active" status?)
     end
 
     # Identify the usage_credits plan object
@@ -59,15 +62,19 @@ module UsageCredits
       UsageCredits::Fulfillment.exists?(source: self)
     end
 
-    # Decide if we need to handle cancellation
-    def should_handle_cancellation_expiration?
-      return false unless saved_change_to_status?
-      return false unless status == "canceled"
-      return false unless provides_credits?
-      true
+    def subscription_renewed?
+      (saved_change_to_ends_at? || saved_change_to_current_period_end?) && status == "active"
     end
 
-    # Immediate awarding of first cycle
+    def subscription_canceled?
+      saved_change_to_status? && status == "canceled"
+    end
+
+    # =========================================
+    # Actual fulfillment logic
+    # =========================================
+
+    # Immediate awarding of first cycle + set up Fulfillment object for subsequent periods
     def handle_initial_award_and_fulfillment_setup
       return unless provides_credits?
       return unless has_valid_wallet?
@@ -174,34 +181,53 @@ module UsageCredits
 
         # Link created transactions to the fulfillment object for traceability
         UsageCredits::Transaction.where(id: transaction_ids).update_all(fulfillment_id: fulfillment.id)
+      rescue => e
+        Rails.logger.error "Failed to fulfill initial credits for subscription #{id}: #{e.message}"
+        raise ActiveRecord::Rollback
       end
     end
 
-    # TODO: define and re-write what happens at expiration (especially re: credit expiration)
-    # If the subscription is canceled, let's mark the Fulfillment expired
-    def handle_cancellation_expiration
-      # Only triggers if status changed to canceled
-      # We'll set the Fulfillment's stops_at so the job won't keep awarding
+    # Handle subscription renewal (we received a new payment for another billing period)
+    # Each time the subscription renews and ends_at moves forward,
+    # we keep awarding credits because Fulfillment#stops_at also moves forward
+    def update_fulfillment_on_renewal
+      return unless provides_credits? && has_valid_wallet?
+
+      fulfillment = UsageCredits::Fulfillment.find_by(source: self)
+      return unless fulfillment
+
+      ActiveRecord::Base.transaction do
+        # Subscription renewed, we can set the new Fulfillment stops_at to the extended date
+        fulfillment.update!(stops_at: current_period_end || ends_at)
+        Rails.logger.info "Fulfillment #{fulfillment.id} stops_at updated to #{fulfillment.stops_at}"
+      rescue => e
+        Rails.logger.error "Failed to extend fulfillment period for subscription #{id}: #{e.message}"
+        raise ActiveRecord::Rollback
+      end
+    end
+
+
+    # If the subscription is canceled, let's set the Fulfillment's stops_at so the job won't keep awarding
+    def update_fulfillment_on_cancellation
       plan = credit_subscription_plan
       return unless plan && has_valid_wallet?
 
       fulfillment = UsageCredits::Fulfillment.find_by(source: self)
-      return unless fulfillment # maybe they never had one?
+      return unless fulfillment
 
-      # We assume ends_at is set
-      # If plan says expire credits on cancel or after a grace period:
-      if plan.expire_credits_on_cancel
-        expiry_time = ends_at
-        expiry_time += plan.credit_expiration_period if plan.credit_expiration_period
-
-        fulfillment.update!(stops_at: expiry_time)
-      else
-        # Or if you want to just stop awarding in the future
-        fulfillment.update!(stops_at: ends_at)
+      ActiveRecord::Base.transaction do
+        # Subscription cancelled, so stop awarding credits in the future
+        fulfillment.update!(stops_at: current_period_end || ends_at)
+        Rails.logger.info "Fulfillment #{fulfillment.id} stops_at set to #{fulfillment.stops_at} due to cancellation"
+      rescue => e
+        Rails.logger.error "Failed to stop credit fulfillment for subscription #{id}: #{e.message}"
+        raise ActiveRecord::Rollback
       end
 
-      # Optionally expire existing credits immediately
-      # e.g. wallet.expire_credits_at(Time.current, metadata: { ... })
+      # TODO: we can also expire already awarded credits here (without making the ledger mutable – we'll need to
+      # check if the plan expires credits or not, and if rollover we may need to add a negative transaction to offset
+      # the remaining balance)
+
     end
 
   end

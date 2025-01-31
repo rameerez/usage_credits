@@ -72,7 +72,7 @@ UsageCredits.configure do |config|
   # config.low_balance_threshold = 100.credits
   #
   #
-  # Handle low credit balance alerts
+  # Handle low credit balance alerts – Useful to sell booster credit packs, for example
   #
   # config.on_low_balance do |user|
     # Send notification to user when their balance drops below the threshold
@@ -80,11 +80,13 @@ UsageCredits.configure do |config|
   # end
   #
   #
+  #
   # For how long expiring credits from the previous fulfillment cycle will "overlap" the following fulfillment period.
   # During this time, old credits from the previous period will erroneously count as available balance.
   # But if we set this to 0 or nil, user balance will show up as zero some time until the next fulfillment cycle hits.
   # A good default is to match the frequency of your UsageCredits::FulfillmentJob
   # fulfillment_grace_period = 5.minutes
+  #
   #
   #
   # Rounding strategy for credit calculations (default: :ceil)

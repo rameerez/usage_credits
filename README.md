@@ -519,7 +519,7 @@ This gem _pollutes_ a bit the `Kernel` namespace by defining 3 top-level methods
 
 ## Edge cases
 
-Billing systems are extremely complex and full of edge cases. This is a new gem, and may be missing some edge cases.
+Billing systems are extremely complex and full of edge cases. This is a new gem, and it may be missing some edge cases.
 
 Real billing systems usually find edge cases when handling things like:
 - Prorated changes

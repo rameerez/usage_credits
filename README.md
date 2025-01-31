@@ -534,6 +534,11 @@ Real billing systems usually find edge cases when handling things like:
 
 Please help us by contributing to add tests to cover all critical paths!
 
+## TODO
+
+- [ ] Write a comprehensive `minitest` test suite that covers all critical paths (both happy paths and weird edge cases)
+- [ ] Handle subscription upgrades and downgrades (upgrade immediately; downgrade at end of billing period? Cover all scenarios allowed by the Stripe Customer Portal?)
+
 ## Testing
 
 Run the test suite with `bundle exec rake test`

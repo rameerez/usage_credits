@@ -17,7 +17,7 @@ All with a simple DSL that reads just like English.
 
 ## 👨‍💻 Example
 
-`usage_credits` allows you to add credits to your Rails app in just one line of code. Say you have a `User` model. You add `has_credits` to it and you're ready to go:
+`usage_credits` allows you to add credits to your Rails app in just one line of code. If you have a `User` model, just add `has_credits` to it and you're ready to go:
 
 ```ruby
 class User

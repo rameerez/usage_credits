@@ -6,11 +6,11 @@ Allow your users to have in-app credits / tokens they can use to perform operati
 
 ✨ Perfect for SaaS, AI apps, games, and API products that want to implement usage-based pricing.
 
-Refill user credits with subscriptions, allow your users to top up by purchasing booster credit packs at any time, rollover unused credits to the next billing period, expire credits, get a detailed history and audit trail of every transaction for billing / reporting, and more!
+Refill user credits with Stripe subscriptions, allow your users to top up by purchasing booster credit packs at any time, rollover unused credits to the next billing period, expire credits, get a detailed history and audit trail of every transaction for billing / reporting, and more!
 
 All with a simple DSL that reads just like English.
 
-### Requirements
+**Requirements**
 
 - An ActiveJob backend (Sidekiq, `solid_queue`, etc.) for subscription credit fulfillment
 - [`pay`](https://github.com/pay-rails/pay) gem for Stripe/PayPal/Lemon Squeezy integration (sell credits, refill subscriptions)
@@ -25,7 +25,7 @@ class User
 end
 ```
 
-With that, your users automatically get all functionality, and you can start performing operations:
+With that, your users automatically get all credits functionality, and you can start performing operations:
 
 ```ruby
 @user.give_credits(100)

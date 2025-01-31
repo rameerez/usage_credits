@@ -55,18 +55,23 @@ module UsageCredits
     end
 
     def credits_already_fulfilled?
+      # First check if there's a fulfillment record for this charge
+      return true if UsageCredits::Fulfillment.exists?(source: self)
+
+      # Fallback: check transactions directly
       credit_wallet&.transactions&.where(category: "credit_pack_purchase")
         .exists?(['metadata @> ?', { purchase_charge_id: id, credits_fulfilled: true }.to_json])
     end
 
     def fulfill_credit_pack!
-      # Guard clauses for required data and state
       return unless is_credit_pack_purchase?
       return unless pack_identifier
       return unless has_valid_wallet?
       return unless succeeded?
       return if refunded?
       return if credits_already_fulfilled?
+
+      Rails.logger.info "Starting to process charge #{id} to fulfill credits"
 
       pack_name = pack_identifier.to_sym
       pack = UsageCredits.find_pack(pack_name)

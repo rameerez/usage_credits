@@ -41,13 +41,13 @@ module UsageCredits
     end
 
     # Parse a period string into an ActiveSupport::Duration
-    # @param period_str [String, ActiveSupport::Duration] A string like "1.month" or an existing duration
+    # @param period_str [String, ActiveSupport::Duration] A string like "1.month" or "1 month" or an existing duration
     # @return [ActiveSupport::Duration] The parsed duration
     # @raise [ArgumentError] If the period string is invalid
     def parse_period(period_str)
       return period_str if period_str.is_a?(ActiveSupport::Duration)
 
-      if period_str.to_s =~ /\A(\d+)\.(\w+)\z/
+      if period_str.to_s =~ /\A(\d+)[.\s](\w+)\z/
         amount = $1.to_i
         unit = $2.singularize.to_sym
 
@@ -61,7 +61,7 @@ module UsageCredits
         raise ArgumentError, "Period must be at least #{MIN_PERIOD.inspect}" if duration < MIN_PERIOD
         duration
       else
-        raise ArgumentError, "Invalid period format: #{period_str}. Expected format: '1.month', '3.months', etc."
+        raise ArgumentError, "Invalid period format: #{period_str}. Expected format: '1.month', '2 months', etc."
       end
     end
 

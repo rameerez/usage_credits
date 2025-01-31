@@ -177,8 +177,8 @@ module UsageCredits
     # positive transactions still have leftover.
     #
     # TODO: This code enumerates all unexpired positive transactions each time.
-    # That’s fine if usage scale is moderate. If performance is a concern, we need to index them and do the partial
-    # allocations more efficiently.
+    # That’s fine if usage scale is moderate. We're already indexing this.
+    # If performance becomes a concern, we need to create a separate model to store the partial allocations efficiently.
     def deduct_credits(amount, metadata: {}, category: :credit_deducted)
     with_lock do
       amount = amount.to_i

@@ -77,6 +77,10 @@ module UsageCredits
       (saved_change_to_ends_at? || saved_change_to_current_period_end?) && status == "active"
     end
 
+    # This doesn't get called the exact moment the user cancels its subscription, but at the end of the period,
+    # when the payment processor sends the event that the subscription has actually been cancelled.
+    # For the moment the user clicks on "Cancel subscription", the sub keeps its state as "active" (for now),
+    # the sub just gets its `ends_at` set from nil to the actual cancellation date.
     def subscription_canceled?
       saved_change_to_status? && status == "canceled"
     end
@@ -220,7 +224,7 @@ module UsageCredits
     end
 
 
-    # If the subscription is canceled, let's set the Fulfillment's stops_at so the job won't keep awarding
+    # If the subscription is canceled, let's set the Fulfillment's stops_at so that the job won't keep awarding
     def update_fulfillment_on_cancellation
       plan = credit_subscription_plan
       return unless plan && has_valid_wallet?

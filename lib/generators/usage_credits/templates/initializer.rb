@@ -80,6 +80,13 @@ UsageCredits.configure do |config|
   # end
   #
   #
+  # For how long expiring credits from the previous fulfillment cycle will "overlap" the following fulfillment period.
+  # During this time, old credits from the previous period will erroneously count as available balance.
+  # But if we set this to 0 or nil, user balance will show up as zero some time until the next fulfillment cycle hits.
+  # A good default is to match the frequency of your UsageCredits::FulfillmentJob
+  # fulfillment_grace_period = 5.minutes
+  #
+  #
   # Rounding strategy for credit calculations (default: :ceil)
   # :ceil - Always round up (2.1 => 3)
   # :floor - Always round down (2.9 => 2)

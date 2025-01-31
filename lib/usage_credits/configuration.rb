@@ -5,18 +5,18 @@ module UsageCredits
   # This is what turns what's defined in the initializer DSL into actual objects we can use and operate with.
   class Configuration
     VALID_ROUNDING_STRATEGIES = [:ceil, :floor, :round].freeze
-    VALID_CURRENCIES = [:usd, :eur, :gbp, :sgd].freeze
+    VALID_CURRENCIES = [:usd, :eur, :gbp, :sgd, :chf].freeze
 
     # =========================================
     # Core Data Stores
     # =========================================
 
     # Stores all the things users can do with credits
-    attr_reader :operations                   # Credit-consuming operations (e.g., "send_email: 1 credit")
+    attr_reader :operations
 
     # Stores all the things users can buy or subscribe to
-    attr_reader :credit_packs                 # One-time purchases (e.g., "100 credits for $49")
-    attr_reader :credit_subscription_plans    # Recurring plans (e.g., "1000 credits/month for $99")
+    attr_reader :credit_packs
+    attr_reader :credit_subscription_plans
 
     # =========================================
     # Basic Settings
@@ -26,15 +26,8 @@ module UsageCredits
 
     attr_reader :rounding_strategy
 
-    # How to format credit amounts in the UI
     attr_reader :credit_formatter
 
-    # Grace period for credit expiration after fulfillment period ends.
-    # This ensures smooth transition between fulfillment periods.
-    # For this amount of time, old, already expired credits will be erroneously counted as available in the user's balance.
-    # Keep it low enough that users don't notice they have the last period's credits still available, but
-    # long enough that there's a smooth transition and users never get zero credits in between fullfillment periods
-    # A good setting is to have it slightly longer than how often your UsageCredits::FulfillmentJob runs
     attr_accessor :fulfillment_grace_period
 
     # =========================================
@@ -45,24 +38,31 @@ module UsageCredits
 
     attr_reader :low_balance_threshold
 
-    # Called when user hits low_balance_threshold
     attr_reader :low_balance_callback
 
     def initialize
-      # Initialize empty stores
-      @operations = {}
-      @credit_packs = {}
-      @credit_subscription_plans = {}
+      # Initialize empty data stores
+      @operations = {}                  # Credit-consuming operations (e.g., "send_email: 1 credit")
+      @credit_packs = {}                # One-time purchases (e.g., "100 credits for $49")
+      @credit_subscription_plans = {}   # Recurring plans (e.g., "1000 credits/month for $99")
 
       # Set sensible defaults
       @default_currency = :usd
       @rounding_strategy = :ceil  # Always round up to ensure we never undercharge
-      @credit_formatter = ->(amount) { "#{amount} credits" }
-      @fulfillment_grace_period = 7.seconds # For how long will expiring credits "overlap" the following fulfillment period
+      @credit_formatter = ->(amount) { "#{amount} credits" }  # How to format credit amounts in the UI
 
-      @low_balance_threshold = nil
+      # Grace period for credit expiration after fulfillment period ends.
+      # For how long will expiring credits "overlap" the following fulfillment period.
+      # This ensures smooth transition between fulfillment periods.
+      # For this amount of time, old, already expired credits will be erroneously counted as available in the user's balance.
+      # Keep it short enough that users don't notice they have the last period's credits still available, but
+      # long enough that there's a smooth transition and users never get zero credits in between fullfillment periods
+      # A good setting is to match the frequency of your UsageCredits::FulfillmentJob runs
+      @fulfillment_grace_period = 5.minutes # If you run your fulfillment job every 5 minutes, this should be enough
+
       @allow_negative_balance = false
-      @low_balance_callback = nil
+      @low_balance_threshold = nil
+      @low_balance_callback = nil # Called when user hits low_balance_threshold
     end
 
     # =========================================
@@ -138,6 +138,19 @@ module UsageCredits
         strategy = :ceil  # Default to ceiling if invalid
       end
       @rounding_strategy = strategy
+    end
+
+    def fulfillment_grace_period=(value)
+      if value.nil? || value&.to_i == 0
+        @fulfillment_grace_period = 1.second
+        return
+      end
+
+      unless value.is_a?(ActiveSupport::Duration)
+        raise ArgumentError, "Fulfillment grace period must be an ActiveSupport::Duration (e.g. 1.day, 7.minutes)"
+      end
+
+      @fulfillment_grace_period = value
     end
 
     # =========================================

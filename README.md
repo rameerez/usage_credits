@@ -456,7 +456,7 @@ That results in a plethora of bugs as soon as time starts rolling and customers 
 
 That only gets you so far.
 
-If you want expiring credits, credit packs, prorating, etc. you essentially need to build a double-entry ledger system. You need to keep track of every credit-giving and credit-spending operation. The ledger should be immutable by design (append-only), transactions should happen on row-level locks to prevent double-spending, operations should be atomic, etc.
+One problem is the discrepancy between billing periods and fulfillment cycles (you may want to charge your users up front for a whole year if they have a yearly subscription, but you may not want to refill all their credits up front, but month by month) Then if you want expiring credits (so that unused credits don't roll over to the next period), credit packs, etc. you essentially end up needing to build a double-entry ledger system. You need to keep track of every credit-giving and credit-spending operation. The ledger should be immutable by design (append-only), transactions should happen on row-level locks to prevent double-spending, operations should be atomic, etc.
 
 That's exactly what I ended up building:
 - `Wallet` is the root of all functionality. All users have a wallet that centralizes everything and keeps track of the available balance – and all credit operations (add/deduct credits) are performed on the wallet.

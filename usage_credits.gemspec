@@ -9,7 +9,7 @@ Gem::Specification.new do |spec|
   spec.email = ["rubygems@rameerez.com"]
 
   spec.summary = "Add usage-based credits to your Rails app."
-  spec.description = "Add a usage-based credit system to your Rails app, easily. Let users buy and spend credits on usage-based actions. Refill Stripe subscriptions with credits, sell one-time booster credit packs, manage prepaid credits / tokens. Your users will have wallet balances that they can spend on features, API calls, or other usage-based actions. Perfect for SaaS, AI apps, games, and API products with metered pricing / billing."
+  spec.description = "Add a usage-based credit system to your Rails app, easily. Let users buy and spend credits on usage-based actions. Refill Stripe subscriptions with credits, sell one-time booster credit packs, implement PAYG (pay-as-you-go) billing, award free credits as bonuses, manage prepaid credits / tokens. Your users will have wallet balances that they can spend on features, API calls, or other usage-based actions. Perfect for SaaS, AI apps, games, and API products with metered pricing / billing."
   spec.homepage = "https://github.com/rameerez/usage_credits"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.1.0"
@@ -33,7 +33,7 @@ Gem::Specification.new do |spec|
   spec.executables = spec.files.grep(%r{\Aexe/}) { |f| File.basename(f) }
   spec.require_paths = ["lib"]
 
-  spec.add_dependency "pay", "~> 8.3"
   spec.add_dependency "rails", ">= 6.1"
+  spec.add_dependency "pay", "~> 8.3"
 
 end

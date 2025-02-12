@@ -18,5 +18,7 @@ test/dummy/config/master.key
 test/dummy/storage
 .DS_Store
 
+/dist/
+
 TODO
 pay.md

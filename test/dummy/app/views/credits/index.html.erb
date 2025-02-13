@@ -19,6 +19,10 @@
       <br />
       Currently subscribed to: <kbd><%= current_user.credit_subscriptions.map{ |x| x.name }.join(", ").presence || "no subscription" %></kbd>
     </p>
+
+    <p>
+      <%= link_to "Reset demo state", reset_demo_path %>
+    </p>
   </aside>
 
 
@@ -50,7 +54,7 @@
       <%= link_to "Arbitrary bonus (+42 credits)", credit_award_bonus_path(bonus_amount: 42, bonus_reason: "no_particular_reason"), method: :get, data: { turbo: false } %>
     </li>
     <li>
-      <%= link_to "Expiring bonus (+10 credits, expire in 1 minute)", credit_award_bonus_path(bonus_amount: 10, bonus_reason: "expiring_bonus_credits", bonus_expires_at: 1.minute.from_now), method: :get, data: { turbo: false } %>
+      <%= link_to "Expiring bonus (+10 credits, expires in 1 minute)", credit_award_bonus_path(bonus_amount: 10, bonus_reason: "expiring_bonus_credits", bonus_expires_at: "1.minute.from_now"), method: :get, data: { turbo: false } %>
     </li>
   </ul>
 
@@ -101,16 +105,17 @@
 
   <p>The user has paid <kbd>$<%= (current_user.charges.sum(:amount).to_f / 100).round(2) || 0 %></kbd> total</p>
 
-  <% [
-    "Pay::Charge", "Pay::Subscription"
-  ].each do |class_name| %>
+  <% {
+    "Pay::Charge" => current_user&.payment_processor&.charges,
+    "Pay::Subscription" => current_user&.payment_processor&.subscriptions
+  }.each do |class_name, records| %>
   
     <details>
-      <summary><%= class_name %> (<%= class_name.constantize.count %>)</summary>
+      <summary><%= class_name %> (<%= records&.count || 0 %>)</summary>
 
-      <%= "none" if not class_name.constantize.any? %>
+      <%= "none" if !records&.any? %>
 
-      <% class_name.constantize.all.each do |x| %>
+      <% records&.each do |x| %>
         <%= (ap x).html_safe %>
       <% end %>
     </details>
@@ -123,16 +128,18 @@
 <section>
   <h2>Model records</h2>
 
-  <% [
-    "UsageCredits::Fulfillment", "UsageCredits::Transaction", "UsageCredits::Allocation"
-  ].each do |class_name| %>
+  <% {
+    "UsageCredits::Fulfillment" => current_user&.credit_wallet&.fulfillments,
+    "UsageCredits::Transaction" => current_user&.credit_wallet&.transactions,
+    "UsageCredits::Allocation" => current_user&.credit_wallet&.allocations
+  }.each do |class_name, records| %>
   
     <details>
-      <summary><%= class_name %> (<%= class_name.constantize.count %>)</summary>
+      <summary><%= class_name %> (<%= records&.count || 0 %>)</summary>
 
-      <%= "none" if not class_name.constantize.any? %>
+      <%= "none" if !records&.any? %>
 
-      <% class_name.constantize.all.each do |x| %>
+      <% records&.each do |x| %>
         <%= (ap x).html_safe %>
       <% end %>
     </details>
@@ -146,7 +153,7 @@
 
   <details>
     <summary>Audit trail</summary>
-    <%= (ap current_user.credit_history.pluck(:category, :amount)).html_safe %>
+    <%= (ap current_user.credit_history.pluck(:category, :amount, :metadata)).html_safe %>
   </details>
 </section>
 

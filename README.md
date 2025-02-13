@@ -293,6 +293,8 @@ To do that, you can just do:
 
 And the user will get the credits with the proper category in the transaction ledger (so bonus credits get differentiated from purchases / subscriptions for audit trail purposes)
 
+Providing a reason for giving credits is entirely optional (it just helps you if you need to use or analyze the audit trail) – if you don't specify any reason, `:manual_adjustment` is the default reason.
+
 You can also give credits with arbitrary expiration dates:
 ```ruby
 @user.give_credits(100, expires_at: 1.month.from_now)

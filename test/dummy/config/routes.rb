@@ -11,4 +11,11 @@ Rails.application.routes.draw do
 
   # Defines the root path route ("/")
   # root "posts#index"
+
+  root "credits#index"
+
+  get "/credits" => "credits#index"
+  post "/credits/perform/:operation" => "credits#perform_operation", as: :credits_perform_operation
+  get "/credits/purchase/:pack" => "credits#checkout", as: :credit_packs_checkout
+  get "/credits/subscribe" => "credits#checkout_subscription", as: :credit_subscription_checkout
 end

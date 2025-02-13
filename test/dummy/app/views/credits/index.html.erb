@@ -1,0 +1,206 @@
+<header>
+  <h1><code>usage_credits</code></h1>
+  <p>A demo of the 💳✨ <a href="http://github.com/rameerez/usage_credits">usage_credits</a> gem</p>
+</header>
+
+<main>
+  <h2>Get and spend credits</h2>
+
+  <p><code><%= notice || alert || "&nbsp;".html_safe %></code></p>
+
+  <aside>
+    <p>
+      <b>💼 User's wallet</b>
+      <br />
+      <br />
+      Credits: <kbd><%= current_user.credits %></kbd>
+      <br />
+      <i style="display: none;">Wallet balance: <%= current_user.credit_wallet.balance %></i>
+      <br />
+      Currently subscribed to: <kbd><%= current_user.credit_subscriptions.map{ |x| x.name }.join(", ").presence || "no subscription" %></kbd>
+    </p>
+  </aside>
+
+
+  <b>Buy credit packs:</b>
+  <ul>
+  <% UsageCredits.credit_packs.each do |pack_name, pack| %>
+    <li>
+      <%= link_to pack.button_text, credit_packs_checkout_path(pack: pack_name), method: :get, data: { turbo: false } %>
+    </li>
+  <% end %>
+  </ul>
+
+  <b>Subscribe:</b>
+  <ul>
+    <li>
+      <%= link_to "Subscribe to Pro", credit_subscription_checkout_path, method: :get, data: { turbo: false } %>
+    </li>
+  </ul>
+
+  <b>Spend credits:</b>
+  <ul>
+  <% UsageCredits.operations.each do |op_name, op| %>
+    <li>
+      <%= button_to "Spend credits on #{op_name} (#{current_user.estimate_credits_to(op_name)})", credits_perform_operation_path(operation: op_name), method: :post, data: { turbo: false } %>
+    </li>
+  <% end %>
+  </ul>
+
+</main>
+
+<section>
+
+  <h2>Ledger status</h2>
+
+  <% if current_user.credit_history.present? %>
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Amount</th>
+          <th>Category</th>
+          <th>Expiration</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% current_user.credit_history.each do |tx| %>
+          <tr>
+            <td><code><%= tx.created_at.strftime("%b %d, %l:%M %p") %></code></td>
+            <td><mark><%= tx.formatted_amount %></mark></td>
+            <td><b><%= tx.category %> <%= tx.metadata.dig("reason") %></b></td>
+            <td><%= tx.expires_at ? (tx.expires_at > Time.current ? "expires in #{time_ago_in_words(tx.expires_at)}" : "🗑️ expired") : "–" %></td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  <% else %>
+    <i>No ledger transactions yet</i>
+  <% end %>
+</section>
+
+
+<section>
+  <h2>Payment records (<code>pay</code> gem)</h2>
+
+  <p>The user has paid <kbd>$<%= (current_user.charges.sum(:amount).to_f / 100).round(2) || 0 %></kbd> total</p>
+
+  <% [
+    "Pay::Charge", "Pay::Subscription"
+  ].each do |class_name| %>
+  
+    <details>
+      <summary><%= class_name %> (<%= class_name.constantize.count %>)</summary>
+
+      <%= "none" if not class_name.constantize.any? %>
+
+      <% class_name.constantize.all.each do |x| %>
+        <%= (ap x).html_safe %>
+      <% end %>
+    </details>
+
+  <% end %>
+
+</section>
+
+
+<section>
+  <h2>Model records</h2>
+
+  <% [
+    "UsageCredits::Fulfillment", "UsageCredits::Transaction", "UsageCredits::Allocation"
+  ].each do |class_name| %>
+  
+    <details>
+      <summary><%= class_name %> (<%= class_name.constantize.count %>)</summary>
+
+      <%= "none" if not class_name.constantize.any? %>
+
+      <% class_name.constantize.all.each do |x| %>
+        <%= (ap x).html_safe %>
+      <% end %>
+    </details>
+
+  <% end %>
+</section>
+
+
+<section>
+  <h2>Loaded config</h2>
+
+  <details>
+    <summary><b>Credit-consuming operations</b></summary>
+    <ul>
+      <% UsageCredits.operations.each do |operation_name, operation| %>
+        <li>
+          <%= operation_name %>
+          <blockquote>
+            cost_calculator: <%= operation.cost_calculator %>
+            <br />
+            validation_rules: <%= operation.validation_rules %>
+          </blockquote>
+        </li>
+      <% end %>
+    </ul>
+  </details>
+
+  <details>
+    <summary><b>Credit packs</b></summary>
+    <ul>
+      <% UsageCredits.credit_packs.each do |pack_name, pack| %>
+        <li>
+          <%= pack_name %>
+          <blockquote>
+            credits: <%= pack.credits %>
+            <br />
+            bonus_credits: <%= pack.bonus_credits %>
+            <br />
+            total_credits: <%= pack.total_credits %>
+            <br />
+            credits_per_dollar: <%= pack.credits_per_dollar.round(2) %>
+            <br />
+            price_cents: <%= pack.price_cents %>
+            <br />
+            price_currency: <%= pack.price_currency %>
+            <br />
+            formatted_price: <%= pack.formatted_price %>
+            <br />
+            display_name: <%= pack.display_name %>
+          </blockquote>
+        </li>
+      <% end %>
+    </ul>
+  </details>
+
+  <details>
+    <summary><b>Credit subscription plans</b></summary>
+    <ul>
+      <% UsageCredits.credit_subscription_plans.each do |plan_name, plan| %>
+        <li>
+          <%= plan_name %>
+          <blockquote>
+            credits_per_period: <%= plan.credits_per_period %>
+            <br />
+            fulfillment_period: <%= plan.fulfillment_period %>
+            <br />
+            rollover_enabled: <%= plan.rollover_enabled %>
+            <br />
+            processor_plan_ids: <%= plan.processor_plan_ids %>
+          </blockquote>
+        </li>
+      <% end %>
+    </ul>
+  </details>
+
+    <details>
+    <summary><b>Rest of the config</b></summary>
+    <pre>
+      <%= JSON.pretty_generate(UsageCredits.configuration.as_json.except("operations", "credit_packs", "credit_subscription_plans")).html_safe %>
+    </pre>
+  </details>
+
+</section>
+
+<footer>
+  The <a href="https://github.com/rameerez/usage_credits"><code>usage_credits</code></a> Ruby gem was created by <a href="https://x.com/rameerez">@rameerez</a> and licensed under the MIT license.
+</footer>

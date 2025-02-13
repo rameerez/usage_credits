@@ -22,3 +22,6 @@ test/dummy/storage
 
 TODO
 pay.md
+
+**/.kamal/
+deploy.yml

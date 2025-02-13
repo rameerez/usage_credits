@@ -19,6 +19,9 @@ module UsageCredits
     belongs_to :owner, polymorphic: true
     has_many :transactions, class_name: "UsageCredits::Transaction", dependent: :destroy
     has_many :fulfillments, class_name: "UsageCredits::Fulfillment", dependent: :destroy
+    has_many :outbound_allocations, through: :transactions, source: :outgoing_allocations
+    has_many :inbound_allocations, through: :transactions, source: :incoming_allocations
+    has_many :allocations, ->(wallet) { unscope(:where).where("usage_credits_allocations.transaction_id IN (?) OR usage_credits_allocations.source_transaction_id IN (?)", wallet.transaction_ids, wallet.transaction_ids) }, class_name: "UsageCredits::Allocation", dependent: :destroy
 
     validates :balance, numericality: { greater_than_or_equal_to: 0 }, unless: :allow_negative_balance?
 

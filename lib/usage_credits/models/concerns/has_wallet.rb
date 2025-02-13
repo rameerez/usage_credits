@@ -35,7 +35,7 @@ module UsageCredits
       end
 
       # Returns all active subscriptions as CreditSubscriptionPlan objects
-      def subscriptions
+      def credit_subscriptions
         return [] unless credit_wallet
 
         credit_wallet.fulfillments

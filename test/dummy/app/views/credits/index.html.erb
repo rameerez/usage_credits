@@ -152,6 +152,14 @@
   <h2>Loaded config</h2>
 
   <details>
+    <summary><b>Literal, raw config file</b></summary>
+
+    <pre>
+      <%= File.read(Rails.root.join("config/initializers/usage_credits.rb")).html_safe %>
+    </pre>
+  </details>
+
+  <details>
     <summary><b>Credit-consuming operations</b></summary>
     <ul>
       <% UsageCredits.operations.each do |operation_name, operation| %>

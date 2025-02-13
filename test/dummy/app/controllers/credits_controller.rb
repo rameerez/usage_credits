@@ -54,7 +54,31 @@ class CreditsController < ApplicationController
   def award_bonus
     amount = credits_params[:bonus_amount]
     reason = credits_params[:bonus_reason]
-    expires_at = credits_params[:bonus_expires_at].present? ? Time.parse(credits_params[:bonus_expires_at]) : nil
+
+    expires_at = if credits_params[:bonus_expires_at].present?
+      case credits_params[:bonus_expires_at]
+      when /\A(\d+)\.seconds.from_now\z/
+        $1.to_i.seconds.from_now
+      when /\A(\d+)\.minute.from_now\z/
+        $1.to_i.minute.from_now
+      when /\A(\d+)\.minutes.from_now\z/
+        $1.to_i.minutes.from_now
+      when /\A(\d+)\.hour.from_now\z/
+        $1.to_i.hour.from_now
+      when /\A(\d+)\.hours.from_now\z/
+        $1.to_i.hours.from_now
+      when /\A(\d+)\.day.from_now\z/
+        $1.to_i.day.from_now
+      when /\A(\d+)\.days.from_now\z/
+        $1.to_i.days.from_now
+      when /\A(\d+)\.week.from_now\z/
+        $1.to_i.week.from_now
+      when /\A(\d+)\.weeks.from_now\z/
+        $1.to_i.weeks.from_now
+      else
+        nil # Invalid format
+      end
+    end
 
     current_user.give_credits(amount, reason: reason, expires_at: expires_at)
 

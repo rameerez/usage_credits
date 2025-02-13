@@ -123,6 +123,7 @@ That's it! Your app now has a credits system. Let's see how to use it.
 1. Users can get credits by:
   - Purchasing credit packs (e.g., "1000 credits for $49")
   - Having a subscription (e.g., "Pro plan includes 10,000 credits/month")
+  - Arbitrary bonuses at any point (completing signup, referring a friend, etc.)
 
 2. Users spend credits on operations you define:
   - "Sending an email costs 1 credit"
@@ -279,6 +280,19 @@ UsageCredits.configure do |config|
   end
 end
 ```
+
+## Award bonus credits
+
+You might want to award bonus credits to your users for arbitrary actions at any point, like referring a friend, completing signup, or any other reason.
+
+To do that, you can just do:
+
+```ruby
+@user.give_credits(100, reason: "referral")
+```
+
+And the user will get the credits with the proper category in the transaction ledger (so bonus credits get differentiated from purchases / subscriptions for audit trail purposes)
+
 
 ## Sell credit packs
 

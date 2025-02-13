@@ -18,4 +18,5 @@ Rails.application.routes.draw do
   post "/credits/perform/:operation" => "credits#perform_operation", as: :credits_perform_operation
   get "/credits/purchase/:pack" => "credits#checkout", as: :credit_packs_checkout
   get "/credits/subscribe" => "credits#checkout_subscription", as: :credit_subscription_checkout
+  get "/credits/bonus/:bonus_amount/:bonus_reason" => "credits#award_bonus", as: :credit_award_bonus
 end

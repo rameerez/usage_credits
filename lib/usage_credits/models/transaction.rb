@@ -19,7 +19,8 @@ module UsageCredits
     CATEGORIES = [
       # Bonus credits
       "signup_bonus",                   # Initial signup bonus
-      "referral_bonus",                 # Referral reward
+      "referral_bonus",                 # Referral reward bonus
+      "bonus",                          # Generic bonus
 
       # Subscription-related
       "subscription_credits",           # Generic subscription credits

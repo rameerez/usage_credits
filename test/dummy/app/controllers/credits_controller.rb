@@ -56,6 +56,15 @@ class CreditsController < ApplicationController
     redirect_to @checkout_session.url, allow_other_host: true, status: :see_other
   end
 
+  def award_bonus
+    amount = credits_params[:bonus_amount]
+    reason = credits_params[:bonus_reason]
+
+    current_user.give_credits(amount, reason: reason)
+
+    redirect_to credits_path, notice: "Successfully awarded a bonus of #{amount} credits with reason: #{reason}"
+  end
+
   private
 
   def set_pack
@@ -67,6 +76,6 @@ class CreditsController < ApplicationController
   end
 
   def credits_params
-    params.permit(:pack, :operation)
+    params.permit(:pack, :operation, :bonus_amount, :bonus_reason)
   end
 end

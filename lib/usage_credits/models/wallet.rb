@@ -120,17 +120,18 @@ module UsageCredits
     # @param amount [Integer] Number of credits to give
     # @param reason [String] Why credits were given (for auditing)
     def give_credits(amount, reason: nil)
-      raise ArgumentError, "Cannot give negative credits" if amount.negative?
-      raise ArgumentError, "Credit amount must be a whole number" unless amount.integer?
+      raise ArgumentError, "Amount is required" if amount.nil?
+      raise ArgumentError, "Cannot give negative credits" if amount.to_i.negative?
+      raise ArgumentError, "Credit amount must be a whole number" unless amount.to_i.integer?
 
       category = case reason&.to_s
                 when "signup" then :signup_bonus
                 when "referral" then :referral_bonus
-                else :manual_adjustment
+                else :bonus
                 end
 
       add_credits(
-        amount,
+        amount.to_i,
         metadata: { reason: reason },
         category: category
       )

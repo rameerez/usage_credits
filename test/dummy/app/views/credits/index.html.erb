@@ -38,6 +38,19 @@
     </li>
   </ul>
 
+  <b>Get arbitrary bonuses:</b>
+  <ul>
+    <li>
+      <%= link_to "Complete signup bonus (+10 credits)", credit_award_bonus_path(bonus_amount: 10, bonus_reason: "signup"), method: :get, data: { turbo: false } %>
+    </li>
+    <li>
+      <%= link_to "Refer a friend bonus (+20 credits)", credit_award_bonus_path(bonus_amount: 20, bonus_reason: "referral"), method: :get, data: { turbo: false } %>
+    </li>
+    <li>
+      <%= link_to "Arbitrary bonus (+42 credits)", credit_award_bonus_path(bonus_amount: 42, bonus_reason: "no_particular_reason"), method: :get, data: { turbo: false } %>
+    </li>
+  </ul>
+
   <b>Spend credits:</b>
   <ul>
   <% UsageCredits.operations.each do |op_name, op| %>
@@ -122,6 +135,16 @@
     </details>
 
   <% end %>
+</section>
+
+
+<section>
+  <h2>Audit trail</h2>
+
+  <details>
+    <summary>Audit trail</summary>
+    <%= (ap current_user.credit_history.pluck(:category, :amount)).html_safe %>
+  </details>
 </section>
 
 

@@ -54,10 +54,11 @@ class CreditsController < ApplicationController
   def award_bonus
     amount = credits_params[:bonus_amount]
     reason = credits_params[:bonus_reason]
+    expires_at = credits_params[:bonus_expires_at].present? ? Time.parse(credits_params[:bonus_expires_at]) : nil
 
-    current_user.give_credits(amount, reason: reason)
+    current_user.give_credits(amount, reason: reason, expires_at: expires_at)
 
-    redirect_to credits_path, notice: "Successfully awarded a bonus of #{amount} credits with reason: #{reason}"
+    redirect_to credits_path, notice: "Successfully awarded a bonus of #{amount} credits with reason: #{reason}#{expires_at ? " (expires on #{expires_at.strftime("%B %d, %Y at %I:%M %p")})" : ""}"
   end
 
   private
@@ -71,6 +72,6 @@ class CreditsController < ApplicationController
   end
 
   def credits_params
-    params.permit(:pack, :operation, :bonus_amount, :bonus_reason)
+    params.permit(:pack, :operation, :bonus_amount, :bonus_reason, :bonus_expires_at)
   end
 end

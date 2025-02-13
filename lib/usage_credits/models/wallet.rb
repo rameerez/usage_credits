@@ -116,13 +116,16 @@ module UsageCredits
       raise e
     end
 
-    # Give credits to the wallet
+    # Give credits to the wallet with optional reason and expiration date
     # @param amount [Integer] Number of credits to give
-    # @param reason [String] Why credits were given (for auditing)
-    def give_credits(amount, reason: nil)
+    # @param reason [String, nil] Optional reason for giving credits (for auditing / trail purposes)
+    # @param expires_at [DateTime, nil] Optional expiration date for the credits
+    def give_credits(amount, reason: nil, expires_at: nil)
       raise ArgumentError, "Amount is required" if amount.nil?
       raise ArgumentError, "Cannot give negative credits" if amount.to_i.negative?
       raise ArgumentError, "Credit amount must be a whole number" unless amount.to_i.integer?
+      raise ArgumentError, "Expiration date must be a valid datetime" if expires_at && !expires_at.respond_to?(:to_datetime)
+      raise ArgumentError, "Expiration date must be in the future" if expires_at && expires_at <= Time.current
 
       category = case reason&.to_s
                 when "signup" then :signup_bonus
@@ -134,7 +137,8 @@ module UsageCredits
       add_credits(
         amount.to_i,
         metadata: { reason: reason },
-        category: category
+        category: category,
+        expires_at: expires_at
       )
     end
 

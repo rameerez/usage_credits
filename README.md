@@ -293,6 +293,13 @@ To do that, you can just do:
 
 And the user will get the credits with the proper category in the transaction ledger (so bonus credits get differentiated from purchases / subscriptions for audit trail purposes)
 
+You can also give credits with arbitrary expiration dates:
+```ruby
+@user.give_credits(100, expires_at: 1.month.from_now)
+```
+
+So you can expire any batch of credits at any date in the future.
+
 
 ## Sell credit packs
 

@@ -49,6 +49,9 @@
     <li>
       <%= link_to "Arbitrary bonus (+42 credits)", credit_award_bonus_path(bonus_amount: 42, bonus_reason: "no_particular_reason"), method: :get, data: { turbo: false } %>
     </li>
+    <li>
+      <%= link_to "Expiring bonus (+10 credits, expire in 1 minute)", credit_award_bonus_path(bonus_amount: 10, bonus_reason: "expiring_bonus_credits", bonus_expires_at: 1.minute.from_now), method: :get, data: { turbo: false } %>
+    </li>
   </ul>
 
   <b>Spend credits:</b>

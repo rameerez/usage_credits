@@ -127,7 +127,8 @@ module UsageCredits
       category = case reason&.to_s
                 when "signup" then :signup_bonus
                 when "referral" then :referral_bonus
-                else :bonus
+                when /bonus/i then :bonus
+                else :manual_adjustment
                 end
 
       add_credits(

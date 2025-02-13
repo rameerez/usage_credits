@@ -8,7 +8,8 @@ UsageCredits.configure do |config|
   end
 
   operation :test_operation do
-    costs 10.credits
+    costs 10.credits + 1.credits_per(:mb)
+    validate ->(params) { params[:size].to_i <= 100.megabytes }, "File too large (max: 100 MB)"
   end
 
   operation :expensive_operation do
@@ -21,11 +22,6 @@ UsageCredits.configure do |config|
 
   operation :fail do
     costs 42.credits
-  end
-
-  operation :process_image do
-    costs 10.credits + 1.credits_per(:mb)
-    validate ->(params) { params[:size].to_i <= 100.megabytes }, "File too large (max: 100 MB)"
   end
 
 
@@ -47,12 +43,14 @@ UsageCredits.configure do |config|
     currency :usd
   end
 
-  credit_pack :euro_pack do
-    gives 1234.credits
-    costs 4900
-    currency :eur
-  end
 
+  # Define subscriptions
+  subscription_plan :test_plan do
+    processor_plan(:fake_processor, "abcdef123456")
+    gives 10.credits.every(:month)
+    signup_bonus 5.credits
+    unused_credits :expire
+  end
 
   # Alert when balance drops below 100 credits
   # Set to nil to disable low balance alerts

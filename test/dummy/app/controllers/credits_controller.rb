@@ -41,19 +41,14 @@ class CreditsController < ApplicationController
   end
 
   def checkout_subscription
-    # TODO: refactor for mock / fake payment processor
-    # Create Stripe Checkout session for subscription
-    @checkout_session = current_user.payment_processor.checkout(
-      mode: 'subscription',
-      line_items: [{
-        price: UsageCredits.find_subscription_plan(:test_plan).stripe_price,
-        quantity: 1
-      }],
-      success_url: root_url,
-      cancel_url: root_url
-    )
+    @credits_subscription_plan = UsageCredits.find_subscription_plan(:test_plan)
 
-    redirect_to @checkout_session.url, allow_other_host: true, status: :see_other
+    # Mock fake subscription
+    current_user.payment_processor.subscribe(plan: @credits_subscription_plan.plan_id_for(:fake_processor), metadata: @credits_subscription_plan.base_metadata)
+
+    redirect_to credits_path, notice: "Successfully subscribed!"
+    rescue Pay::Error => e
+      redirect_to credits_path, alert: e.message
   end
 
   def award_bonus

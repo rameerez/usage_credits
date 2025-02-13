@@ -17,10 +17,18 @@ module UsageCredits
     end
 
     def succeeded?
-      return true if data["status"] == "succeeded" || data[:status] == "succeeded"
-      # For Stripe charges, a successful charge has amount_captured equal to the charge amount
-      return true if type == "Pay::Stripe::Charge" && data["amount_captured"] == amount
-      false
+      case type
+      when "Pay::Stripe::Charge"
+        status = data["status"] || data[:status]
+        return true if status == "succeeded"
+        return true if data["amount_captured"].to_i == amount.to_i
+      end
+
+      # Are Pay::Charge objects guaranteed to be created only after a successful payment?
+      # Is the existence of a Pay::Charge object in the database a guarantee that the payment went through?
+      # I'm implementing this `succeeded?` method just out of precaution
+      # TODO: Implement for more payment processors? Or just drop this method if it's unnecessary
+      true
     end
 
     def refunded?
@@ -58,9 +66,34 @@ module UsageCredits
       # First check if there's a fulfillment record for this charge
       return true if UsageCredits::Fulfillment.exists?(source: self)
 
-      # Fallback: check transactions directly
-      credit_wallet&.transactions&.where(category: "credit_pack_purchase")
-        .exists?(['metadata @> ?', { purchase_charge_id: id, credits_fulfilled: true }.to_json])
+      # Fallback: check transactions directly:
+
+      # Look up all transactions in the credit wallet for a purchase.
+      transactions = credit_wallet&.transactions&.where(category: "credit_pack_purchase")
+      return false unless transactions.present?
+
+      begin
+        adapter = ActiveRecord::Base.connection.adapter_name.downcase
+        if adapter.include?("postgres")
+          # PostgreSQL supports the @> JSON containment operator.
+          transactions.exists?(['metadata @> ?', { purchase_charge_id: id, credits_fulfilled: true }.to_json])
+        else
+          # For other adapters (e.g. SQLite, MySQL), try using JSON_EXTRACT.
+          transactions.exists?(["json_extract(metadata, '$.purchase_charge_id') = ? AND json_extract(metadata, '$.credits_fulfilled') = ?", id, true])
+        end
+      rescue ActiveRecord::StatementInvalid
+        # If the SQL query fails (for example, if JSON_EXTRACT isn’t supported),
+        # fall back to loading transactions in Ruby and filtering them.
+        transactions.any? do |tx|
+          data =
+            if tx.metadata.is_a?(Hash)
+              tx.metadata
+            else
+              JSON.parse(tx.metadata) rescue {}
+            end
+          data["purchase_charge_id"].to_i == id.to_i && data["credits_fulfilled"].to_s == "true"
+        end
+      end
     end
 
     def fulfill_credit_pack!
@@ -132,8 +165,28 @@ module UsageCredits
 
     def credits_already_refunded?
       # Check if refund was already processed with credits deducted by looking for a refund transaction
-      credit_wallet&.transactions&.where(category: "credit_pack_refund")
-        .exists?(['metadata @> ?', { refunded_purchase_charge_id: id, credits_refunded: true }.to_json])
+      # Look up transactions for a refund.
+      transactions = credit_wallet&.transactions&.where(category: "credit_pack_refund")
+      return false unless transactions.present?
+
+      begin
+        adapter = ActiveRecord::Base.connection.adapter_name.downcase
+        if adapter.include?("postgres")
+          transactions.exists?(['metadata @> ?', { refunded_purchase_charge_id: id, credits_refunded: true }.to_json])
+        else
+          transactions.exists?(["json_extract(metadata, '$.refunded_purchase_charge_id') = ? AND json_extract(metadata, '$.credits_refunded') = ?", id, true])
+        end
+      rescue ActiveRecord::StatementInvalid
+        transactions.any? do |tx|
+          data =
+            if tx.metadata.is_a?(Hash)
+              tx.metadata
+            else
+              JSON.parse(tx.metadata) rescue {}
+            end
+          data["refunded_purchase_charge_id"].to_i == id.to_i && data["credits_refunded"].to_s == "true"
+        end
+      end
     end
 
     def handle_refund!

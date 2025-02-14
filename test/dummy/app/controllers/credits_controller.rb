@@ -12,7 +12,7 @@ class CreditsController < ApplicationController
     begin
       # Spend credits
       current_user.spend_credits_on(@operation_name) do
-        if @operation_name == "fail"
+        if @operation_name == "this_operation_will_always_fail"
           raise StandardError, "Operation failed as requested (no credits deducted)"
         end
         performed = true

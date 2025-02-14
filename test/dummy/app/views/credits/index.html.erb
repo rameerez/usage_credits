@@ -4,7 +4,7 @@
 </header>
 
 <main>
-  <h2>Get and spend credits</h2>
+  <h2>The basics: get and spend credits</h2>
 
   <p><code><%= notice || alert || "&nbsp;".html_safe %></code></p>
 
@@ -25,6 +25,12 @@
     </p>
   </aside>
 
+  <b>Subscribe to a plan:</b>
+  <ul>
+    <li>
+      <%= link_to "Subscribe to PRO (10 credits/mo)", credit_subscription_checkout_path, method: :get, data: { turbo: false } %>
+    </li>
+  </ul>
 
   <b>Buy credit packs:</b>
   <ul>
@@ -33,13 +39,6 @@
       <%= link_to pack.button_text, credit_packs_checkout_path(pack: pack_name), method: :get, data: { turbo: false } %>
     </li>
   <% end %>
-  </ul>
-
-  <b>Subscribe:</b>
-  <ul>
-    <li>
-      <%= link_to "Subscribe to test_plan (10 credits/mo + 5 one-time bonus credits)", credit_subscription_checkout_path, method: :get, data: { turbo: false } %>
-    </li>
   </ul>
 
   <b>Get arbitrary bonuses:</b>
@@ -51,9 +50,6 @@
       <%= link_to "Refer a friend bonus (+20 credits)", credit_award_bonus_path(bonus_amount: 20, bonus_reason: "referral"), method: :get, data: { turbo: false } %>
     </li>
     <li>
-      <%= link_to "Arbitrary bonus (+42 credits)", credit_award_bonus_path(bonus_amount: 42, bonus_reason: "no_particular_reason"), method: :get, data: { turbo: false } %>
-    </li>
-    <li>
       <%= link_to "Expiring bonus (+10 credits, expires in 1 minute)", credit_award_bonus_path(bonus_amount: 10, bonus_reason: "expiring_bonus_credits", bonus_expires_at: "1.minute.from_now"), method: :get, data: { turbo: false } %>
     </li>
   </ul>
@@ -62,7 +58,7 @@
   <ul>
   <% UsageCredits.operations.each do |op_name, op| %>
     <li>
-      <%= button_to "Spend credits on #{op_name} (#{current_user.estimate_credits_to(op_name)})", credits_perform_operation_path(operation: op_name), method: :post, data: { turbo: false } %>
+      <%= button_to "Spend credits on #{op_name} (-#{current_user.estimate_credits_to(op_name)} #{current_user.estimate_credits_to(op_name) == 1 ? 'credit' : 'credits'})", credits_perform_operation_path(operation: op_name), method: :post, data: { turbo: false } %>
     </li>
   <% end %>
   </ul>

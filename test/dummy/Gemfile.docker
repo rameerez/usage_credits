@@ -1,5 +1,24 @@
 source "https://rubygems.org"
 
+gem "usage_credits"
+gem "pay", "~> 8.3"
+
+# When making changes to the regular Gemfile, we need to copy here everything below `gemspec path: "../.."`
+# This is because parent directories to this Rails app are not available to Docker when compiling the app
+# so the usage_credits gem code is unavailable for deployment because there's no gemspec
+# so we need to fetch the latest version on RubyGem to deploy the demo app
+# and we keep the regular Gemfile for developing and testing with the bleeding edge version of our gem
+
+# Then we need to run this:
+#    BUNDLE_GEMFILE=Gemfile.docker bundle instal
+# to compile the Gemfile.lock file for Docker
+
+# ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
+# ↓↓↓↓↓↓↓ COPY REGULAR GEMFILE BELOW ↓↓↓↓↓↓↓
+# ↓↓↓↓↓↓↓ after the: `gemspec path:` ↓↓↓↓↓↓↓
+# ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
+
+
 # Bundle edge Rails instead: gem "rails", github: "rails/rails", branch: "main"
 gem "rails", "~> 8.0.1"
 # The modern asset pipeline for Rails [https://github.com/rails/propshaft]
@@ -8,6 +27,14 @@ gem "propshaft"
 gem "sqlite3", ">= 2.1"
 # Use the Puma web server [https://github.com/puma/puma]
 gem "puma", ">= 5.0"
+# Use JavaScript with ESM import maps [https://github.com/rails/importmap-rails]
+gem "importmap-rails"
+# Hotwire's SPA-like page accelerator [https://turbo.hotwired.dev]
+gem "turbo-rails"
+# Hotwire's modest JavaScript framework [https://stimulus.hotwired.dev]
+gem "stimulus-rails"
+# Build JSON APIs with ease [https://github.com/rails/jbuilder]
+gem "jbuilder"
 
 # Use Active Model has_secure_password [https://guides.rubyonrails.org/active_model_basics.html#securepassword]
 # gem "bcrypt", "~> 3.1.7"
@@ -18,6 +45,10 @@ gem "tzinfo-data", platforms: %i[ windows jruby ]
 # Use the database-backed adapters for Rails.cache and Active Job
 gem "solid_cache"
 gem "solid_queue"
+gem "solid_cable"
+
+# Reduces boot times through caching; required in config/boot.rb
+gem "bootsnap", require: false
 
 # Deploy this application anywhere as a Docker container [https://kamal-deploy.org]
 gem "kamal", require: false
@@ -43,7 +74,3 @@ end
 
 # For pretty printing objects in the demo app -- adds the `ap` method we use in the views
 gem "awesome_print"
-
-gem "pay", "~> 8.3"
-
-gem "usage_credits"

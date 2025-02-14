@@ -1,10 +1,12 @@
 # 💳✨ `usage_credits` - Add usage-based credits to your Rails app 
 
-[![Gem Version](https://badge.fury.io/rb/usage_credits.svg)](https://badge.fury.io/rb/usage_credits)
+[![Gem Version](https://badge.fury.io/rb/usage_credits.svg?v=0.1)](https://badge.fury.io/rb/usage_credits?v=0.1)
 
 Allow your users to have in-app credits / tokens they can use to perform operations.
 
 ✨ Perfect for SaaS, AI apps, games, and API products that want to implement usage-based pricing.
+
+[ 🟢 [Live interactive demo website](https://usagecredits.com/) ] [ 🎥 [Quick video overview](https://x.com/rameerez/status/1890419563189195260) ]
 
 Refill user credits with Stripe subscriptions, allow your users to top up by purchasing booster credit packs at any time, rollover unused credits to the next billing period, expire credits, implement PAYG (pay-as-you-go) billing, award free credits as bonuses (for referrals, giving feedback, etc.), get a detailed history and audit trail of every transaction for billing / reporting, and more!
 

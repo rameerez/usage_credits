@@ -471,6 +471,10 @@ Which will get you:
 
 It's useful if you want to name your credits something else (tokens, virtual currency, tasks, in-app gems, whatever) and you want the name to be consistent.
 
+## Demo Rails app
+
+There's a demo Rails app showcasing the features in the `usage_credits` gem under `test/dummy`. It's currently deployed to `usagecredits.com`. If you want to run it yourself locally, you can just clone this repo, `cd` into the `test/dummy` folder, and then `bundle` and `rails s` to launch it. You can examine the code of the demo app to better understand the gem.
+
 ## Technical notes on architecture and how this gem is built
 
 Building a usage credits system is deceptively complex.

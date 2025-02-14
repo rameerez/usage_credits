@@ -34,9 +34,11 @@ RUN apt-get update -qq && \
   rm -rf /var/lib/apt/lists /var/cache/apt/archives
 
 # Install application gems
-COPY Gemfile Gemfile.lock ./
-RUN sed -i 's@gemspec path: "../.."@gem "usage_credits", "~> 0.1.0"@' Gemfile && \
-  bundle install && \
+# Copy the Docker-specific Gemfile/lockfile, renaming them
+COPY Gemfile.docker Gemfile
+COPY Gemfile.docker.lock Gemfile.lock
+
+RUN bundle install && \
   rm -rf ~/.bundle/ "${BUNDLE_PATH}"/ruby/*/cache "${BUNDLE_PATH}"/ruby/*/bundler/gems/*/.git && \
   bundle exec bootsnap precompile --gemfile
 

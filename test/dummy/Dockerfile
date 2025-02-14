@@ -45,6 +45,10 @@ RUN bundle install && \
 # Copy application code
 COPY . .
 
+# Re‑copy the Docker-specific Gemfile/lockfile to override the originals
+COPY Gemfile.docker Gemfile
+COPY Gemfile.docker.lock Gemfile.lock
+
 # Precompile bootsnap code for faster boot times
 RUN bundle exec bootsnap precompile app/ lib/
 

@@ -27,7 +27,7 @@ class CreditsController < ApplicationController
       flash[:alert] = "Operation failed: #{e.message}"
     end
 
-    redirect_back fallback_location: credits_path
+    redirect_back fallback_location: root_path
   end
 
   def checkout
@@ -35,9 +35,9 @@ class CreditsController < ApplicationController
     current_user.payment_processor.charge(@pack.price_cents, metadata: @pack.base_metadata )
 
     # Redirect to success page
-    redirect_to credits_path, notice: "Successfully purchased #{@pack.credits} credits!"
+    redirect_to root_path, notice: "Successfully purchased #{@pack.credits} credits!"
   rescue Pay::Error => e
-    redirect_to credits_path, alert: e.message
+    redirect_to root_path, alert: e.message
   end
 
   def checkout_subscription
@@ -46,9 +46,9 @@ class CreditsController < ApplicationController
     # Mock fake subscription
     current_user.payment_processor.subscribe(plan: @credits_subscription_plan.plan_id_for(:fake_processor), metadata: @credits_subscription_plan.base_metadata)
 
-    redirect_to credits_path, notice: "Successfully subscribed!"
+    redirect_to root_path, notice: "Successfully subscribed!"
     rescue Pay::Error => e
-      redirect_to credits_path, alert: e.message
+      redirect_to root_path, alert: e.message
   end
 
   def award_bonus
@@ -82,7 +82,7 @@ class CreditsController < ApplicationController
 
     current_user.give_credits(amount, reason: reason, expires_at: expires_at)
 
-    redirect_to credits_path, notice: "Successfully awarded a bonus of #{amount} credits with reason: #{reason}#{expires_at ? " (expires on #{expires_at.strftime("%B %d, %Y at %I:%M %p")})" : ""}"
+    redirect_to root_path, notice: "Successfully awarded a bonus of #{amount} credits with reason: #{reason}#{expires_at ? " (expires on #{expires_at.strftime("%B %d, %Y at %I:%M %p")})" : ""}"
   end
 
   private

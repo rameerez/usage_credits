@@ -1,6 +1,6 @@
 source "https://rubygems.org"
 
-gem "usage_credits"
+gem "usage_credits", "~> 0.1.1"
 gem "pay", "~> 8.3"
 
 # When making changes to the regular Gemfile, we need to copy here everything below `gemspec path: "../.."`
@@ -9,8 +9,13 @@ gem "pay", "~> 8.3"
 # so we need to fetch the latest version on RubyGem to deploy the demo app
 # and we keep the regular Gemfile for developing and testing with the bleeding edge version of our gem
 
-# Then we need to run this:
+# !!!!!!!!!!!!!
+# !!IMPORTANT!!
+# !!!!!!!!!!!!!
+# After editing this Gemfile, we need to run this:
+#
 #    BUNDLE_GEMFILE=Gemfile.docker bundle instal
+#
 # to compile the Gemfile.lock file for Docker
 
 # ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓

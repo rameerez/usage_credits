@@ -294,7 +294,7 @@ GEM
       unicode-emoji (~> 4.0, >= 4.0.4)
     unicode-emoji (4.0.4)
     uri (1.0.2)
-    usage_credits (0.1.0)
+    usage_credits (0.1.1)
       pay (~> 8.3)
       rails (>= 6.1)
     useragent (0.16.11)
@@ -334,7 +334,7 @@ DEPENDENCIES
   thruster
   turbo-rails
   tzinfo-data
-  usage_credits
+  usage_credits (~> 0.1.1)
   web-console
 
 BUNDLED WITH

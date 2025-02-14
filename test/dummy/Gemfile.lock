@@ -296,6 +296,7 @@ DEPENDENCIES
   brakeman
   debug
   kamal
+  pay (~> 8.3)
   propshaft
   puma (>= 5.0)
   rails (~> 8.0.1)

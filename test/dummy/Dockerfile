@@ -2,8 +2,8 @@
 # check=error=true
 
 # This Dockerfile is designed for production, not development. Use with Kamal or build'n'run by hand:
-# docker build -t usagecredits .
-# docker run -d -p 80:80 -e RAILS_MASTER_KEY=<value from config/master.key> --name usagecredits usagecredits
+# docker build -t deleteaftertest .
+# docker run -d -p 80:80 -e RAILS_MASTER_KEY=<value from config/master.key> --name deleteaftertest deleteaftertest
 
 # For a containerized dev environment, see Dev Containers: https://guides.rubyonrails.org/getting_started_with_devcontainer.html
 
@@ -35,10 +35,7 @@ RUN apt-get update -qq && \
 
 # Install application gems
 COPY Gemfile Gemfile.lock ./
-
-# Replace local gemspec with direct gem dependencies and remove path reference from Gemfile.lock
-RUN sed -i 's|gemspec path: "../.."|gem "usage_credits"\ngem "pay", "~> 8.3"|' Gemfile && \
-  rm Gemfile.lock && \
+RUN sed -i 's@gemspec path: "../.."@gem "usage_credits", "~> 0.1.0"@' Gemfile && \
   bundle install && \
   rm -rf ~/.bundle/ "${BUNDLE_PATH}"/ruby/*/cache "${BUNDLE_PATH}"/ruby/*/bundler/gems/*/.git && \
   bundle exec bootsnap precompile --gemfile
@@ -51,6 +48,9 @@ RUN bundle exec bootsnap precompile app/ lib/
 
 # Precompiling assets for production without requiring secret RAILS_MASTER_KEY
 RUN SECRET_KEY_BASE_DUMMY=1 ./bin/rails assets:precompile
+
+
+
 
 # Final stage for app image
 FROM base

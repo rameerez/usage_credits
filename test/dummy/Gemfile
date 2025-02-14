@@ -46,3 +46,5 @@ end
 
 # For pretty printing objects in the demo app -- adds the `ap` method we use in the views
 gem "awesome_print"
+
+gem "pay", "~> 8.3"

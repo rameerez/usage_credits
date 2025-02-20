@@ -157,7 +157,6 @@ module UsageCredits
         }],
         success_url: success_url,
         cancel_url: cancel_url,
-        payment_intent_data: { metadata: base_metadata },
         subscription_data: { metadata: base_metadata }
       )
     end

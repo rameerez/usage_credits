@@ -255,7 +255,7 @@ module UsageCredits
       # Fire your existing notifications
       notify_balance_change(:credits_deducted, amount)
 
-      check_low_balance if low_balance?
+      check_low_balance
       spend_tx
     end
   end

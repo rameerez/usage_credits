@@ -31,3 +31,4 @@ test/dummy/log/*
 .claude/
 
 /Gemfile.lock
+/gemfiles/*.gemfile.lock

@@ -155,8 +155,6 @@ module UsageCredits
         amount = amount.to_i
         raise ArgumentError, "Cannot add non-positive credits" if amount <= 0
 
-        previous_balance = credits
-
         transaction = transactions.create!(
           amount: amount,
           category: category,

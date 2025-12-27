@@ -126,7 +126,7 @@ module UsageCredits
     def give_credits(amount, reason: nil, expires_at: nil)
       raise ArgumentError, "Amount is required" if amount.nil?
       raise ArgumentError, "Cannot give negative credits" if amount.to_i.negative?
-      raise ArgumentError, "Credit amount must be a whole number" unless amount.to_i.integer?
+      raise ArgumentError, "Credit amount must be a whole number" unless amount == amount.to_i
       raise ArgumentError, "Expiration date must be a valid datetime" if expires_at && !expires_at.respond_to?(:to_datetime)
       raise ArgumentError, "Expiration date must be in the future" if expires_at && expires_at <= Time.current
 
@@ -170,7 +170,6 @@ module UsageCredits
         save!
 
         notify_balance_change(:credits_added, amount)
-        check_low_balance if !was_low_balance?(previous_balance) && low_balance?
 
         # To finish, let's return the transaction that has been just created so we can reference it in parts of the code
         # Useful, for example, to update the transaction's `fulfillment` reference in the subscription extension
@@ -193,8 +192,11 @@ module UsageCredits
       amount = amount.to_i
       raise InsufficientCredits, "Cannot deduct a non-positive amount" if amount <= 0
 
+      # Capture previous balance for low_balance check
+      previous_balance = credits
+
       # Figure out how many credits are available right now
-      available = credits
+      available = previous_balance
       if amount > available && !allow_negative_balance?
         raise InsufficientCredits, "Insufficient credits (#{available} < #{amount})"
       end
@@ -254,6 +256,10 @@ module UsageCredits
 
       # Fire your existing notifications
       notify_balance_change(:credits_deducted, amount)
+
+      # Check if we crossed the low balance threshold
+      check_low_balance if !was_low_balance?(previous_balance) && low_balance?
+
       spend_tx
       end
     end

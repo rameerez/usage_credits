@@ -2,9 +2,32 @@
 
 require "test_helper"
 
+# ============================================================================
+# PAY SUBSCRIPTION EXTENSION TEST SUITE
+# ============================================================================
+#
+# This test suite tests the PaySubscriptionExtension concern that integrates
+# the Pay gem with our UsageCredits system. The extension uses after_commit
+# callbacks to:
+#   1) Award initial credits (trial or first-cycle) when subscriptions are created
+#   2) Create Fulfillment records for recurring credit awards
+#   3) Update fulfillment on renewal and cancellation
+#
+# ## IMPORTANT: Fixture Wallet Usage
+#
+# When using fixture users, always use `user.credit_wallet` to get the existing
+# fixture wallet instead of creating a new wallet. Creating a new wallet would
+# result in TWO wallets for the same owner, causing tests to fail.
+#
+# For tests that need a truly fresh user/wallet, use:
+#   user = User.create!(email: "unique@example.com", name: "Test User")
+#   wallet = user.credit_wallet  # Auto-created by HasWallet concern
+#
+# ============================================================================
+
 class PaySubscriptionExtensionTest < ActiveSupport::TestCase
   setup do
-    # Configure a test subscription plan
+    # Configure test subscription plans
     UsageCredits.configure do |config|
       config.subscription_plan :test_pro do
         processor_plan(:fake_processor, "pro_plan_monthly")
@@ -20,6 +43,10 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
         unused_credits :rollover
       end
     end
+  end
+
+  teardown do
+    UsageCredits.reset!
   end
 
   # ========================================
@@ -40,7 +67,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
 
   test "provides_credits? returns false when no matching plan" do
     subscription = pay_subscriptions(:active_subscription)
-    subscription.update!(processor_plan: "unknown_plan_id")
+    subscription.processor_plan = "unknown_plan_id"
 
     assert_not subscription.provides_credits?
   end
@@ -49,25 +76,23 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
   # INITIAL SUBSCRIPTION SETUP (ACTIVE)
   # ========================================
 
-  # NOTE: Pay integration callbacks may not be fully wired up in the test environment
-  # These tests are disabled until the Pay gem hooks are properly configured
-
-=begin
   test "active subscription creation awards initial credits" do
-    user = users(:new_user)
-    wallet = UsageCredits::Wallet.create!(owner: user)
+    # Create a fresh user to avoid fixture wallet conflicts
+    user = User.create!(email: "sub_active@example.com", name: "Sub Active User")
+    wallet = user.credit_wallet  # Auto-created wallet
 
     customer = Pay::Customer.create!(
       owner: user,
       processor: :fake_processor,
-      processor_id: "cus_test123"
+      processor_id: "cus_sub_active_test"
     )
 
-    assert_difference -> { wallet.reload.credits }, 600 do # 500 + 100 signup bonus
+    # 500 credits + 100 signup bonus = 600 total
+    assert_difference -> { wallet.reload.credits }, 600 do
       Pay::Subscription.create!(
         customer: customer,
         name: "default",
-        processor_id: "sub_test123",
+        processor_id: "sub_active_test",
         processor_plan: "pro_plan_monthly",
         status: "active",
         quantity: 1
@@ -76,41 +101,48 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
   end
 
   test "active subscription creates fulfillment record" do
-    user = users(:new_user)
-    UsageCredits::Wallet.create!(owner: user)
+    # Create a fresh user to avoid fixture wallet conflicts
+    user = User.create!(email: "sub_fulfill@example.com", name: "Sub Fulfill User")
+    user.credit_wallet  # Ensure wallet exists
 
     customer = Pay::Customer.create!(
       owner: user,
       processor: :fake_processor,
-      processor_id: "cus_test124"
+      processor_id: "cus_sub_fulfill_test"
     )
 
     assert_difference -> { UsageCredits::Fulfillment.count }, 1 do
-      Pay::Subscription.create!(
+      subscription = Pay::Subscription.create!(
         customer: customer,
         name: "default",
-        processor_id: "sub_test124",
+        processor_id: "sub_fulfill_test",
         processor_plan: "pro_plan_monthly",
         status: "active",
         quantity: 1
       )
+
+      fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+      assert_not_nil fulfillment
+      assert_equal "subscription", fulfillment.fulfillment_type
+      assert_not_nil fulfillment.next_fulfillment_at
     end
   end
 
   test "active subscription awards signup bonus separately" do
-    user = users(:new_user)
-    wallet = UsageCredits::Wallet.create!(owner: user)
+    # Create a fresh user to avoid fixture wallet conflicts
+    user = User.create!(email: "sub_bonus@example.com", name: "Sub Bonus User")
+    wallet = user.credit_wallet  # Auto-created wallet
 
     customer = Pay::Customer.create!(
       owner: user,
       processor: :fake_processor,
-      processor_id: "cus_test125"
+      processor_id: "cus_sub_bonus_test"
     )
 
-    _subscription = Pay::Subscription.create!(
+    Pay::Subscription.create!(
       customer: customer,
       name: "default",
-      processor_id: "sub_test125",
+      processor_id: "sub_bonus_test",
       processor_plan: "pro_plan_monthly",
       status: "active",
       quantity: 1
@@ -123,19 +155,20 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
   end
 
   test "active subscription awards first period credits" do
-    user = users(:new_user)
-    wallet = UsageCredits::Wallet.create!(owner: user)
+    # Create a fresh user to avoid fixture wallet conflicts
+    user = User.create!(email: "sub_credits@example.com", name: "Sub Credits User")
+    wallet = user.credit_wallet  # Auto-created wallet
 
     customer = Pay::Customer.create!(
       owner: user,
       processor: :fake_processor,
-      processor_id: "cus_test126"
+      processor_id: "cus_sub_credits_test"
     )
 
-    _subscription = Pay::Subscription.create!(
+    Pay::Subscription.create!(
       customer: customer,
       name: "default",
-      processor_id: "sub_test126",
+      processor_id: "sub_credits_test",
       processor_plan: "pro_plan_monthly",
       status: "active",
       quantity: 1
@@ -148,19 +181,20 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
   end
 
   test "active subscription sets credit expiration for non-rollover plans" do
-    user = users(:new_user)
-    wallet = UsageCredits::Wallet.create!(owner: user)
+    # Create a fresh user to avoid fixture wallet conflicts
+    user = User.create!(email: "sub_expire@example.com", name: "Sub Expire User")
+    wallet = user.credit_wallet  # Auto-created wallet
 
     customer = Pay::Customer.create!(
       owner: user,
       processor: :fake_processor,
-      processor_id: "cus_test127"
+      processor_id: "cus_sub_expire_test"
     )
 
-    subscription = Pay::Subscription.create!(
+    Pay::Subscription.create!(
       customer: customer,
       name: "default",
-      processor_id: "sub_test127",
+      processor_id: "sub_expire_test",
       processor_plan: "pro_plan_monthly",
       status: "active",
       quantity: 1
@@ -172,19 +206,20 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
   end
 
   test "rollover subscription creates non-expiring credits" do
-    user = users(:new_user)
-    wallet = UsageCredits::Wallet.create!(owner: user)
+    # Create a fresh user to avoid fixture wallet conflicts
+    user = User.create!(email: "sub_rollover@example.com", name: "Sub Rollover User")
+    wallet = user.credit_wallet  # Auto-created wallet
 
     customer = Pay::Customer.create!(
       owner: user,
       processor: :fake_processor,
-      processor_id: "cus_rollover123"
+      processor_id: "cus_sub_rollover_test"
     )
 
-    subscription = Pay::Subscription.create!(
+    Pay::Subscription.create!(
       customer: customer,
       name: "default",
-      processor_id: "sub_rollover123",
+      processor_id: "sub_rollover_test",
       processor_plan: "rollover_plan_monthly",
       status: "active",
       quantity: 1
@@ -200,22 +235,24 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
   # ========================================
 
   test "trialing subscription awards trial credits" do
-    user = users(:new_user)
-    wallet = UsageCredits::Wallet.create!(owner: user)
+    # Create a fresh user to avoid fixture wallet conflicts
+    user = User.create!(email: "sub_trial@example.com", name: "Sub Trial User")
+    wallet = user.credit_wallet  # Auto-created wallet
 
     customer = Pay::Customer.create!(
       owner: user,
       processor: :fake_processor,
-      processor_id: "cus_trial_test123"
+      processor_id: "cus_sub_trial_test"
     )
 
     trial_ends_at = 7.days.from_now
 
-    assert_difference -> { wallet.reload.credits }, 50 do # trial credits only
+    # Trial only awards trial credits (50), not signup bonus or regular credits
+    assert_difference -> { wallet.reload.credits }, 50 do
       Pay::Subscription.create!(
         customer: customer,
         name: "default",
-        processor_id: "sub_trial_test123",
+        processor_id: "sub_trial_test",
         processor_plan: "pro_plan_monthly",
         status: "trialing",
         trial_ends_at: trial_ends_at,
@@ -225,21 +262,22 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
   end
 
   test "trialing subscription sets trial credit expiration to trial_ends_at" do
-    user = users(:new_user)
-    wallet = UsageCredits::Wallet.create!(owner: user)
+    # Create a fresh user to avoid fixture wallet conflicts
+    user = User.create!(email: "sub_trial_exp@example.com", name: "Sub Trial Exp User")
+    wallet = user.credit_wallet  # Auto-created wallet
 
     customer = Pay::Customer.create!(
       owner: user,
       processor: :fake_processor,
-      processor_id: "cus_trial_test124"
+      processor_id: "cus_sub_trial_exp_test"
     )
 
     trial_ends_at = 7.days.from_now
 
-    subscription = Pay::Subscription.create!(
+    Pay::Subscription.create!(
       customer: customer,
       name: "default",
-      processor_id: "sub_trial_test124",
+      processor_id: "sub_trial_exp_test",
       processor_plan: "pro_plan_monthly",
       status: "trialing",
       trial_ends_at: trial_ends_at,
@@ -253,19 +291,20 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
   end
 
   test "trialing subscription does not award signup bonus or regular credits" do
-    user = users(:new_user)
-    wallet = UsageCredits::Wallet.create!(owner: user)
+    # Create a fresh user to avoid fixture wallet conflicts
+    user = User.create!(email: "sub_trial_only@example.com", name: "Sub Trial Only User")
+    wallet = user.credit_wallet  # Auto-created wallet
 
     customer = Pay::Customer.create!(
       owner: user,
       processor: :fake_processor,
-      processor_id: "cus_trial_test125"
+      processor_id: "cus_sub_trial_only_test"
     )
 
-    subscription = Pay::Subscription.create!(
+    Pay::Subscription.create!(
       customer: customer,
       name: "default",
-      processor_id: "sub_trial_test125",
+      processor_id: "sub_trial_only_test",
       processor_plan: "pro_plan_monthly",
       status: "trialing",
       trial_ends_at: 7.days.from_now,
@@ -284,21 +323,46 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
   # SUBSCRIPTION STATUS TRANSITIONS
   # ========================================
 
-  test "incomplete to active transition awards credits" do
-    user = users(:new_user)
-    wallet = UsageCredits::Wallet.create!(owner: user)
+  test "incomplete subscription does not award credits" do
+    # Create a fresh user to avoid fixture wallet conflicts
+    user = User.create!(email: "sub_incomplete@example.com", name: "Sub Incomplete User")
+    wallet = user.credit_wallet  # Auto-created wallet
 
     customer = Pay::Customer.create!(
       owner: user,
       processor: :fake_processor,
-      processor_id: "cus_incomplete123"
+      processor_id: "cus_sub_incomplete_test"
+    )
+
+    # Create incomplete subscription (no credits awarded yet)
+    assert_no_difference -> { wallet.reload.credits } do
+      Pay::Subscription.create!(
+        customer: customer,
+        name: "default",
+        processor_id: "sub_incomplete_test",
+        processor_plan: "pro_plan_monthly",
+        status: "incomplete",
+        quantity: 1
+      )
+    end
+  end
+
+  test "incomplete to active transition awards credits" do
+    # Create a fresh user to avoid fixture wallet conflicts
+    user = User.create!(email: "sub_transition@example.com", name: "Sub Transition User")
+    wallet = user.credit_wallet  # Auto-created wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_sub_transition_test"
     )
 
     # Create incomplete subscription (no credits awarded yet)
     subscription = Pay::Subscription.create!(
       customer: customer,
       name: "default",
-      processor_id: "sub_incomplete123",
+      processor_id: "sub_transition_test",
       processor_plan: "pro_plan_monthly",
       status: "incomplete",
       quantity: 1
@@ -307,8 +371,8 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     # No credits yet
     assert_equal 0, wallet.reload.credits
 
-    # Transition to active
-    assert_difference -> { wallet.reload.credits }, 600 do # 500 + 100 signup bonus
+    # Transition to active - should now award credits
+    assert_difference -> { wallet.reload.credits }, 600 do  # 500 + 100 signup bonus
       subscription.update!(status: "active")
     end
   end
@@ -322,7 +386,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     fulfillment = usage_credits_fulfillments(:active_subscription_fulfillment)
 
     original_stops_at = fulfillment.stops_at
-    new_period_end = 60.days.from_now
+    new_period_end = 90.days.from_now
 
     # Simulate renewal by updating current_period_end
     subscription.update!(current_period_end: new_period_end)
@@ -377,33 +441,31 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
   # ========================================
 
   test "duplicate subscription callback does not double-award credits" do
-    user = users(:new_user)
-    wallet = UsageCredits::Wallet.create!(owner: user)
+    # Create a fresh user to avoid fixture wallet conflicts
+    user = User.create!(email: "sub_idempotent@example.com", name: "Sub Idempotent User")
+    wallet = user.credit_wallet  # Auto-created wallet
 
     customer = Pay::Customer.create!(
       owner: user,
       processor: :fake_processor,
-      processor_id: "cus_double_test123"
+      processor_id: "cus_sub_idempotent_test"
     )
 
     # Create subscription
     subscription = Pay::Subscription.create!(
       customer: customer,
       name: "default",
-      processor_id: "sub_double_test123",
+      processor_id: "sub_idempotent_test",
       processor_plan: "pro_plan_monthly",
       status: "active",
       quantity: 1
     )
 
-    initial_credits = wallet.reload.credits
-
-    # Try to trigger callbacks again (simulating duplicate webhook)
+    # Manually trigger the callback again (simulating duplicate webhook)
     # The credits_already_fulfilled? check should prevent double-award
-    subscription.run_callbacks(:commit)
-
-    # Credits should not increase
-    assert_equal initial_credits, wallet.reload.credits
+    assert_no_difference -> { wallet.reload.credits } do
+      subscription.send(:handle_initial_award_and_fulfillment_setup)
+    end
   end
 
   test "fulfillment record prevents duplicate credit awards" do
@@ -424,13 +486,14 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
   # ========================================
 
   test "subscription without matching plan does not award credits" do
-    user = users(:new_user)
-    wallet = UsageCredits::Wallet.create!(owner: user)
+    # Create a fresh user to avoid fixture wallet conflicts
+    user = User.create!(email: "sub_no_plan@example.com", name: "Sub No Plan User")
+    wallet = user.credit_wallet  # Auto-created wallet
 
     customer = Pay::Customer.create!(
       owner: user,
       processor: :fake_processor,
-      processor_id: "cus_no_plan123"
+      processor_id: "cus_sub_no_plan_test"
     )
 
     # Create subscription with unknown plan
@@ -438,7 +501,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
       Pay::Subscription.create!(
         customer: customer,
         name: "default",
-        processor_id: "sub_no_plan123",
+        processor_id: "sub_no_plan_test",
         processor_plan: "unknown_plan_id",
         status: "active",
         quantity: 1
@@ -446,13 +509,16 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     end
   end
 
-  test "subscription without owner wallet does not error" do
-    user = User.create!(email: "no_wallet@example.com", name: "No Wallet")
+  test "subscription without owner wallet is handled gracefully" do
+    # Create user and immediately destroy wallet to test "no wallet" scenario
+    user = User.create!(email: "sub_no_wallet@example.com", name: "No Wallet Sub")
+    user.credit_wallet.destroy!  # Destroy the auto-created wallet
+    user.reload  # Clear association cache
 
     customer = Pay::Customer.create!(
       owner: user,
       processor: :fake_processor,
-      processor_id: "cus_no_wallet123"
+      processor_id: "cus_sub_no_wallet_test"
     )
 
     # Should not raise error even though user has no wallet
@@ -460,17 +526,12 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
       Pay::Subscription.create!(
         customer: customer,
         name: "default",
-        processor_id: "sub_no_wallet123",
+        processor_id: "sub_no_wallet_test",
         processor_plan: "pro_plan_monthly",
         status: "active",
         quantity: 1
       )
     end
-  end
-
-  test "subscription with no customer does not error" do
-    # Edge case: if somehow a subscription is created without a customer
-    # (This shouldn't happen in practice due to Pay's validations)
   end
 
   test "fulfillment has correct metadata" do
@@ -482,26 +543,26 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
   end
 
   test "fulfillment period matches plan configuration" do
-    subscription = pay_subscriptions(:active_subscription)
     fulfillment = usage_credits_fulfillments(:active_subscription_fulfillment)
 
     assert_equal "1.month", fulfillment.fulfillment_period
   end
 
-  test "next_fulfillment_at is set in future" do
-    user = users(:new_user)
-    wallet = UsageCredits::Wallet.create!(owner: user)
+  test "next_fulfillment_at is set in future for new subscription" do
+    # Create a fresh user to avoid fixture wallet conflicts
+    user = User.create!(email: "sub_future@example.com", name: "Sub Future User")
+    user.credit_wallet  # Ensure wallet exists
 
     customer = Pay::Customer.create!(
       owner: user,
       processor: :fake_processor,
-      processor_id: "cus_future_test123"
+      processor_id: "cus_sub_future_test"
     )
 
     subscription = Pay::Subscription.create!(
       customer: customer,
       name: "default",
-      processor_id: "sub_future_test123",
+      processor_id: "sub_future_test",
       processor_plan: "pro_plan_monthly",
       status: "active",
       quantity: 1
@@ -509,24 +570,26 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
 
     fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
 
+    assert_not_nil fulfillment
     assert_not_nil fulfillment.next_fulfillment_at
     assert fulfillment.next_fulfillment_at > Time.current
   end
 
-  test "subscription metadata includes plan information" do
-    user = users(:new_user)
-    wallet = UsageCredits::Wallet.create!(owner: user)
+  test "subscription transaction metadata includes plan information" do
+    # Create a fresh user to avoid fixture wallet conflicts
+    user = User.create!(email: "sub_metadata@example.com", name: "Sub Metadata User")
+    wallet = user.credit_wallet  # Auto-created wallet
 
     customer = Pay::Customer.create!(
       owner: user,
       processor: :fake_processor,
-      processor_id: "cus_metadata_test123"
+      processor_id: "cus_sub_metadata_test"
     )
 
-    subscription = Pay::Subscription.create!(
+    Pay::Subscription.create!(
       customer: customer,
       name: "default",
-      processor_id: "sub_metadata_test123",
+      processor_id: "sub_metadata_test",
       processor_plan: "pro_plan_monthly",
       status: "active",
       quantity: 1
@@ -537,6 +600,24 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     assert_not_nil sub_tx.metadata["subscription_id"]
     assert_not_nil sub_tx.metadata["plan"]
   end
-=end
 
+  # ========================================
+  # INTEGRATION WITH FIXTURES
+  # ========================================
+
+  test "active_subscription fixture has fulfillment" do
+    subscription = pay_subscriptions(:active_subscription)
+    fulfillment = usage_credits_fulfillments(:active_subscription_fulfillment)
+
+    assert_equal subscription.id, fulfillment.source_id
+    assert_equal "Pay::Subscription", fulfillment.source_type
+  end
+
+  test "trialing_subscription fixture has trial fulfillment" do
+    subscription = pay_subscriptions(:trialing_subscription)
+    fulfillment = usage_credits_fulfillments(:trial_fulfillment)
+
+    assert_equal subscription.id, fulfillment.source_id
+    assert fulfillment.metadata["trial"]
+  end
 end

@@ -2,6 +2,10 @@
 
 module UsageCredits
   # Extends Pay::Charge with credit pack functionality
+  #
+  # This extension integrates with the Pay gem (https://github.com/pay-rails/pay)
+  # to automatically fulfill credit packs when charges succeed and handle refunds
+  # when charges are refunded.
   module PayChargeExtension
     extend ActiveSupport::Concern
 
@@ -20,14 +24,18 @@ module UsageCredits
       case type
       when "Pay::Stripe::Charge"
         status = data["status"] || data[:status]
+        # Explicitly check for failure states
+        return false if status == "failed"
+        return false if status == "pending"
+        return false if status == "canceled"
         return true if status == "succeeded"
-        return true if data["amount_captured"].to_i == amount.to_i
+        # Fallback: check if amount was actually captured
+        return data["amount_captured"].to_i == amount.to_i && amount.to_i.positive?
       end
 
-      # Are Pay::Charge objects guaranteed to be created only after a successful payment?
-      # Is the existence of a Pay::Charge object in the database a guarantee that the payment went through?
-      # I'm implementing this `succeeded?` method just out of precaution
-      # TODO: Implement for more payment processors? Or just drop this method if it's unnecessary
+      # For non-Stripe charges, we assume Pay only creates charges after successful payment
+      # This is a reasonable assumption based on Pay gem's behavior
+      # TODO: Implement for more payment processors if needed
       true
     end
 
@@ -39,10 +47,14 @@ module UsageCredits
     private
 
     # Returns true if the charge has a valid credit wallet to operate on
+    # NOTE: We use original_credit_wallet to avoid auto-creating a wallet via ensure_credit_wallet
     def has_valid_wallet?
       return false unless customer&.owner&.respond_to?(:credit_wallet)
-      return false unless customer.owner.credit_wallet.present?
-      true
+      # Check for existing wallet without triggering auto-creation
+      if customer.owner.respond_to?(:original_credit_wallet)
+        return customer.owner.original_credit_wallet.present?
+      end
+      customer.owner.credit_wallet.present?
     end
 
     def credit_wallet
@@ -124,37 +136,34 @@ module UsageCredits
       end
 
       begin
-        # Wrap credit addition in a transaction for atomicity
-        ActiveRecord::Base.transaction do
-          # Add credits to the user's wallet
-          credit_wallet.add_credits(
-            pack.total_credits,
-            category: "credit_pack_purchase",
-            metadata: {
-              purchase_charge_id: id,
-              purchased_at: created_at,
-              credits_fulfilled: true,
-              fulfilled_at: Time.current,
-              **pack.base_metadata
-            }
-          )
+        # Add credits to the user's wallet
+        credit_wallet.add_credits(
+          pack.total_credits,
+          category: "credit_pack_purchase",
+          metadata: {
+            purchase_charge_id: id,
+            purchased_at: created_at,
+            credits_fulfilled: true,
+            fulfilled_at: Time.current,
+            **pack.base_metadata
+          }
+        )
 
-          # Also create a one-time fulfillment record for audit and consistency
-          # This Fulfillment record won't get picked up by the fulfillment job because `next_fulfillment_at` is nil
-          Fulfillment.create!(
-            wallet: credit_wallet,
-            source: self, # the Pay::Charge
-            fulfillment_type: "credit_pack",
-            credits_last_fulfillment: pack.total_credits,
-            last_fulfilled_at: Time.current,
-            next_fulfillment_at: nil, # so it doesn't get re-processed
-            metadata: {
-              purchase_charge_id: id,
-              purchased_at: created_at,
-              **pack.base_metadata
-            }
-          )
-        end
+        # Also create a one-time fulfillment record for audit and consistency
+        # This Fulfillment record won't get picked up by the fulfillment job because `next_fulfillment_at` is nil
+        Fulfillment.create!(
+          wallet: credit_wallet,
+          source: self, # the Pay::Charge
+          fulfillment_type: "credit_pack",
+          credits_last_fulfillment: pack.total_credits,
+          last_fulfilled_at: Time.current,
+          next_fulfillment_at: nil, # so it doesn't get re-processed
+          metadata: {
+            purchase_charge_id: id,
+            purchased_at: created_at,
+            **pack.base_metadata
+          }
+        )
 
         Rails.logger.info "Successfully fulfilled credit pack #{pack_name} for charge #{id}"
       rescue StandardError => e
@@ -163,30 +172,28 @@ module UsageCredits
       end
     end
 
-    def credits_already_refunded?
-      # Check if refund was already processed with credits deducted by looking for a refund transaction
-      # Look up transactions for a refund.
+    # Returns the total credits already refunded for this charge
+    def credits_previously_refunded
       transactions = credit_wallet&.transactions&.where(category: "credit_pack_refund")
-      return false unless transactions.present?
+      return 0 unless transactions.present?
 
-      begin
-        adapter = ActiveRecord::Base.connection.adapter_name.downcase
-        if adapter.include?("postgres")
-          transactions.exists?(['metadata @> ?', { refunded_purchase_charge_id: id, credits_refunded: true }.to_json])
-        else
-          transactions.exists?(["json_extract(metadata, '$.refunded_purchase_charge_id') = ? AND json_extract(metadata, '$.credits_refunded') = ?", id, true])
-        end
-      rescue ActiveRecord::StatementInvalid
-        transactions.any? do |tx|
-          data =
-            if tx.metadata.is_a?(Hash)
-              tx.metadata
-            else
-              JSON.parse(tx.metadata) rescue {}
-            end
-          data["refunded_purchase_charge_id"].to_i == id.to_i && data["credits_refunded"].to_s == "true"
-        end
-      end
+      # Sum all refund transactions for this charge (amounts are negative, so we negate)
+      transactions.select do |tx|
+        data = tx.metadata.is_a?(Hash) ? tx.metadata : (JSON.parse(tx.metadata) rescue {})
+        data["refunded_purchase_charge_id"].to_i == id.to_i && data["credits_refunded"].to_s == "true"
+      end.sum { |tx| -tx.amount }
+    end
+
+    def credits_already_refunded?
+      # Check if any refund was already processed for this charge
+      credits_previously_refunded > 0
+    end
+
+    def fully_refunded?
+      # Check if a full refund (100%) has already been processed
+      pack = UsageCredits.find_pack(pack_identifier&.to_sym)
+      return false unless pack
+      credits_previously_refunded >= pack.total_credits
     end
 
     def handle_refund!
@@ -195,7 +202,6 @@ module UsageCredits
       return unless pack_identifier
       return unless has_valid_wallet?
       return unless amount.is_a?(Numeric) && amount.positive?
-      return if credits_already_refunded?
 
       pack_name = pack_identifier.to_sym
       pack = UsageCredits.find_pack(pack_name)
@@ -211,29 +217,39 @@ module UsageCredits
         return
       end
 
-      # Calculate refund ratio and credits to remove
-      # Always use ceil for credit calculations to avoid giving more credits than paid for
+      # Calculate total credits that SHOULD be refunded based on current refund amount
       refund_ratio = amount_refunded.to_f / amount.to_f
-      credits_to_remove = (pack.total_credits * refund_ratio).ceil
+      total_credits_to_refund = (pack.total_credits * refund_ratio).ceil
+
+      # Calculate credits already refunded (for incremental/partial refunds)
+      already_refunded = credits_previously_refunded
+
+      # Only deduct the INCREMENTAL amount (difference between what should be refunded and what's already refunded)
+      credits_to_remove = total_credits_to_refund - already_refunded
+
+      # Skip if nothing new to refund
+      if credits_to_remove <= 0
+        Rails.logger.info "Refund for charge #{id} already processed (#{already_refunded} credits already refunded)"
+        return
+      end
 
       begin
-        Rails.logger.info "Processing refund for charge #{id}: #{credits_to_remove} credits (#{(refund_ratio * 100).round(2)}% of #{pack.total_credits})"
+        Rails.logger.info "Processing refund for charge #{id}: #{credits_to_remove} credits (incremental from #{already_refunded} to #{total_credits_to_refund})"
 
-        # Wrap credit deduction in a transaction for atomicity
-        ActiveRecord::Base.transaction do
-          credit_wallet.deduct_credits(
-            credits_to_remove,
-            category: "credit_pack_refund",
-            metadata: {
-              refunded_purchase_charge_id: id,
-              credits_refunded: true,
-              refunded_at: Time.current,
-              refund_percentage: refund_ratio,
-              refund_amount_cents: amount_refunded,
-              **pack.base_metadata
-            }
-          )
-        end
+        credit_wallet.deduct_credits(
+          credits_to_remove,
+          category: "credit_pack_refund",
+          metadata: {
+            refunded_purchase_charge_id: id,
+            credits_refunded: true,
+            refunded_at: Time.current,
+            refund_percentage: refund_ratio,
+            refund_amount_cents: amount_refunded,
+            incremental_credits: credits_to_remove,
+            total_credits_refunded: total_credits_to_refund,
+            **pack.base_metadata
+          }
+        )
 
         Rails.logger.info "Successfully processed refund for charge #{id}"
       rescue UsageCredits::InsufficientCredits => e

@@ -1,0 +1,37 @@
+name: Ruby
+
+on:
+  pull_request:
+    paths-ignore:
+      - "README.md"
+  push:
+    paths-ignore:
+      - "README.md"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        rails_version: ["7.1.6", "7.2.3", "8.0.4", "8.1.1"]
+        ruby_version: ["3.2", "3.3", "3.4"]
+
+    env:
+      RAILS_ENV: test
+      BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby_version }}
+          bundler-cache: true
+        env:
+          RAILS_VERSION: ${{ matrix.rails_version }}
+      - name: Run tests
+        run: bundle exec rake test
+        env:
+          RAILS_VERSION: "${{ matrix.rails_version }}"

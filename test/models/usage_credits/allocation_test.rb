@@ -189,4 +189,175 @@ class UsageCredits::AllocationTest < ActiveSupport::TestCase
     assert_not_nil allocation.created_at
     assert_not_nil allocation.updated_at
   end
+
+  test "allocation with exact remaining amount succeeds on creation" do
+    source_tx = UsageCredits::Transaction.create!(
+      wallet: usage_credits_wallets(:rich_wallet),
+      amount: 100,
+      category: "signup_bonus"
+    )
+
+    spend_tx = UsageCredits::Transaction.create!(
+      wallet: usage_credits_wallets(:rich_wallet),
+      amount: -100,
+      category: "operation_charge"
+    )
+
+    # Should be able to allocate exact remaining amount
+    allocation = UsageCredits::Allocation.create!(
+      spend_transaction: spend_tx,
+      source_transaction: source_tx,
+      amount: 100
+    )
+
+    assert allocation.persisted?
+    assert_equal 0, source_tx.reload.remaining_amount
+  end
+
+  test "allocation amount must be integer" do
+    allocation = UsageCredits::Allocation.new(
+      spend_transaction: usage_credits_transactions(:rich_spent_credit),
+      source_transaction: usage_credits_transactions(:rich_initial_credit),
+      amount: 10.5
+    )
+
+    assert_not allocation.valid?
+  end
+
+  test "allocating from fully allocated source fails" do
+    source_tx = UsageCredits::Transaction.create!(
+      wallet: usage_credits_wallets(:rich_wallet),
+      amount: 100,
+      category: "signup_bonus"
+    )
+
+    spend_tx1 = UsageCredits::Transaction.create!(
+      wallet: usage_credits_wallets(:rich_wallet),
+      amount: -100,
+      category: "operation_charge"
+    )
+
+    # First allocation takes all 100
+    UsageCredits::Allocation.create!(
+      spend_transaction: spend_tx1,
+      source_transaction: source_tx,
+      amount: 100
+    )
+
+    spend_tx2 = UsageCredits::Transaction.create!(
+      wallet: usage_credits_wallets(:rich_wallet),
+      amount: -50,
+      category: "operation_charge"
+    )
+
+    # Second allocation should fail - no remaining amount
+    allocation = UsageCredits::Allocation.new(
+      spend_transaction: spend_tx2,
+      source_transaction: source_tx,
+      amount: 50
+    )
+
+    assert_not allocation.valid?
+    assert_includes allocation.errors.full_messages.join, "remaining amount"
+  end
+
+  test "source transaction tracks total allocated amount" do
+    source_tx = UsageCredits::Transaction.create!(
+      wallet: usage_credits_wallets(:rich_wallet),
+      amount: 500,
+      category: "signup_bonus"
+    )
+
+    # Allocate 100 from first spend
+    spend_tx1 = UsageCredits::Transaction.create!(
+      wallet: usage_credits_wallets(:rich_wallet),
+      amount: -100,
+      category: "operation_charge"
+    )
+    UsageCredits::Allocation.create!(
+      spend_transaction: spend_tx1,
+      source_transaction: source_tx,
+      amount: 100
+    )
+
+    # Allocate 150 from second spend
+    spend_tx2 = UsageCredits::Transaction.create!(
+      wallet: usage_credits_wallets(:rich_wallet),
+      amount: -150,
+      category: "operation_charge"
+    )
+    UsageCredits::Allocation.create!(
+      spend_transaction: spend_tx2,
+      source_transaction: source_tx,
+      amount: 150
+    )
+
+    # Total allocated should be 250
+    assert_equal 250, source_tx.reload.allocated_amount
+    assert_equal 250, source_tx.remaining_amount
+  end
+
+  test "spend transaction can have allocations from multiple sources" do
+    source_tx1 = UsageCredits::Transaction.create!(
+      wallet: usage_credits_wallets(:rich_wallet),
+      amount: 100,
+      category: "signup_bonus"
+    )
+
+    source_tx2 = UsageCredits::Transaction.create!(
+      wallet: usage_credits_wallets(:rich_wallet),
+      amount: 100,
+      category: "referral_bonus"
+    )
+
+    # Big spend that needs both sources
+    spend_tx = UsageCredits::Transaction.create!(
+      wallet: usage_credits_wallets(:rich_wallet),
+      amount: -150,
+      category: "operation_charge"
+    )
+
+    UsageCredits::Allocation.create!(
+      spend_transaction: spend_tx,
+      source_transaction: source_tx1,
+      amount: 100
+    )
+
+    UsageCredits::Allocation.create!(
+      spend_transaction: spend_tx,
+      source_transaction: source_tx2,
+      amount: 50
+    )
+
+    assert_equal 2, spend_tx.outgoing_allocations.count
+    assert_equal 150, spend_tx.outgoing_allocations.sum(:amount)
+  end
+
+  test "destroying allocation restores source remaining amount" do
+    source_tx = UsageCredits::Transaction.create!(
+      wallet: usage_credits_wallets(:rich_wallet),
+      amount: 100,
+      category: "signup_bonus"
+    )
+
+    spend_tx = UsageCredits::Transaction.create!(
+      wallet: usage_credits_wallets(:rich_wallet),
+      amount: -50,
+      category: "operation_charge"
+    )
+
+    allocation = UsageCredits::Allocation.create!(
+      spend_transaction: spend_tx,
+      source_transaction: source_tx,
+      amount: 50
+    )
+
+    assert_equal 50, source_tx.reload.remaining_amount
+
+    # Destroy the allocation
+    allocation.destroy!
+
+    # Remaining amount should be restored
+    assert_equal 100, source_tx.reload.remaining_amount
+  end
 end

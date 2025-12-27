@@ -3,6 +3,10 @@
 require "test_helper"
 
 class UsageCredits::TransactionTest < ActiveSupport::TestCase
+  teardown do
+    UsageCredits.reset!
+  end
+
   # ========================================
   # BASIC CREATION
   # ========================================
@@ -454,5 +458,141 @@ class UsageCredits::TransactionTest < ActiveSupport::TestCase
 
     assert_nil transaction.fulfillment_id
     assert transaction.valid?
+  end
+
+  # ========================================
+  # OWNER DELEGATION
+  # ========================================
+
+  test "owner returns wallet owner" do
+    transaction = usage_credits_transactions(:rich_initial_credit)
+
+    assert_equal users(:rich_user), transaction.owner
+  end
+
+  # ========================================
+  # DESCRIPTION FORMATTING
+  # ========================================
+
+  test "description returns titleized category for non-operation transactions" do
+    wallet = usage_credits_wallets(:rich_wallet)
+
+    transaction = UsageCredits::Transaction.create!(
+      wallet: wallet,
+      amount: 100,
+      category: "signup_bonus"
+    )
+
+    assert_equal "Signup Bonus", transaction.description
+  end
+
+  test "description returns operation name for operation_charge with metadata" do
+    wallet = usage_credits_wallets(:rich_wallet)
+
+    transaction = UsageCredits::Transaction.create!(
+      wallet: wallet,
+      amount: -10,
+      category: "operation_charge",
+      metadata: { operation: "process_video", cost: 10 }
+    )
+
+    description = transaction.description
+    assert_includes description, "Process Video"
+    assert_includes description, "10"
+  end
+
+  test "description for operation_charge without operation metadata" do
+    wallet = usage_credits_wallets(:rich_wallet)
+
+    transaction = UsageCredits::Transaction.create!(
+      wallet: wallet,
+      amount: -10,
+      category: "operation_charge",
+      metadata: {}
+    )
+
+    assert_equal "Operation charge", transaction.description
+  end
+
+  # ========================================
+  # FORMATTED AMOUNT WITH CUSTOM FORMATTER
+  # ========================================
+
+  test "formatted_amount uses configured formatter" do
+    UsageCredits.configure do |config|
+      config.format_credits { |amount| "#{amount} tokens" }
+    end
+
+    wallet = usage_credits_wallets(:rich_wallet)
+    transaction = UsageCredits::Transaction.create!(
+      wallet: wallet,
+      amount: 100,
+      category: "signup_bonus"
+    )
+
+    assert_equal "+100 tokens", transaction.formatted_amount
+  end
+
+  # ========================================
+  # VALIDATION: REMAINING AMOUNT CANNOT BE NEGATIVE
+  # ========================================
+
+  test "validates remaining amount cannot be negative on credit transactions" do
+    wallet = usage_credits_wallets(:rich_wallet)
+
+    # Create a credit transaction
+    source_tx = UsageCredits::Transaction.create!(
+      wallet: wallet,
+      amount: 100,
+      category: "signup_bonus"
+    )
+
+    # Allocate the full amount
+    spend_tx = UsageCredits::Transaction.create!(
+      wallet: wallet,
+      amount: -100,
+      category: "operation_charge"
+    )
+
+    UsageCredits::Allocation.create!(
+      spend_transaction: spend_tx,
+      source_transaction: source_tx,
+      amount: 100
+    )
+
+    # Now the source_tx has 0 remaining. Trying to over-allocate should fail
+    spend_tx2 = UsageCredits::Transaction.create!(
+      wallet: wallet,
+      amount: -50,
+      category: "operation_charge"
+    )
+
+    # Allocating more than remaining should fail at the allocation level
+    allocation = UsageCredits::Allocation.new(
+      spend_transaction: spend_tx2,
+      source_transaction: source_tx,
+      amount: 50
+    )
+
+    assert_not allocation.valid?
+    assert_includes allocation.errors[:amount].join, "remaining amount"
+  end
+
+  # ========================================
+  # AMOUNT VALIDATION
+  # ========================================
+
+  test "amount must be an integer" do
+    wallet = usage_credits_wallets(:rich_wallet)
+
+    # The validation is numericality: only_integer: true
+    transaction = UsageCredits::Transaction.new(
+      wallet: wallet,
+      amount: 10.5,
+      category: "signup_bonus"
+    )
+
+    assert_not transaction.valid?
+    assert transaction.errors[:amount].present?
   end
 end

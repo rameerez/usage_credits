@@ -28,7 +28,7 @@ module UsageCredits
 
     attr_reader :credit_formatter
 
-    attr_accessor :fulfillment_grace_period
+    attr_reader :fulfillment_grace_period
 
     # =========================================
     # Low balance

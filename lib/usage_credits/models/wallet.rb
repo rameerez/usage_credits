@@ -126,7 +126,7 @@ module UsageCredits
     def give_credits(amount, reason: nil, expires_at: nil)
       raise ArgumentError, "Amount is required" if amount.nil?
       raise ArgumentError, "Cannot give negative credits" if amount.to_i.negative?
-      raise ArgumentError, "Credit amount must be a whole number" unless amount.to_i.integer?
+      raise ArgumentError, "Credit amount must be a whole number" unless amount == amount.to_i
       raise ArgumentError, "Expiration date must be a valid datetime" if expires_at && !expires_at.respond_to?(:to_datetime)
       raise ArgumentError, "Expiration date must be in the future" if expires_at && expires_at <= Time.current
 
@@ -155,8 +155,6 @@ module UsageCredits
         amount = amount.to_i
         raise ArgumentError, "Cannot add non-positive credits" if amount <= 0
 
-        previous_balance = credits
-
         transaction = transactions.create!(
           amount: amount,
           category: category,
@@ -170,7 +168,6 @@ module UsageCredits
         save!
 
         notify_balance_change(:credits_added, amount)
-        check_low_balance if !was_low_balance?(previous_balance) && low_balance?
 
         # To finish, let's return the transaction that has been just created so we can reference it in parts of the code
         # Useful, for example, to update the transaction's `fulfillment` reference in the subscription extension
@@ -186,15 +183,18 @@ module UsageCredits
     # positive transactions still have leftover.
     #
     # TODO: This code enumerates all unexpired positive transactions each time.
-    # That’s fine if usage scale is moderate. We're already indexing this.
+    # That's fine if usage scale is moderate. We're already indexing this.
     # If performance becomes a concern, we need to create a separate model to store the partial allocations efficiently.
     def deduct_credits(amount, metadata: {}, category: :credit_deducted)
-    with_lock do
+      with_lock do
       amount = amount.to_i
       raise InsufficientCredits, "Cannot deduct a non-positive amount" if amount <= 0
 
+      # Capture previous balance for low_balance check
+      previous_balance = credits
+
       # Figure out how many credits are available right now
-      available = credits
+      available = previous_balance
       if amount > available && !allow_negative_balance?
         raise InsufficientCredits, "Insufficient credits (#{available} < #{amount})"
       end
@@ -254,9 +254,13 @@ module UsageCredits
 
       # Fire your existing notifications
       notify_balance_change(:credits_deducted, amount)
+
+      # Check if we crossed the low balance threshold
+      check_low_balance if !was_low_balance?(previous_balance) && low_balance?
+
       spend_tx
+      end
     end
-  end
 
 
     private

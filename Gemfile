@@ -12,6 +12,7 @@ gemspec
 
 gem "appraisal"
 gem "mocha"
+gem "simplecov", require: false
 gem "standard"
 gem "vcr"
 gem "webmock"
@@ -36,3 +37,6 @@ gem "importmap-rails"
 gem "sprockets-rails"
 gem "stimulus-rails"
 gem "turbo-rails"
+
+# Fix RDoc version conflict (Ruby 3.4.2 ships with 7.0.3, force using it)
+gem "rdoc", ">= 7.0"

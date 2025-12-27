@@ -1,0 +1,108 @@
+# Completed charge for rich_user (credit pack purchase)
+completed_charge:
+  id: 1
+  type: Pay::Charge
+  customer_id: 1
+  processor_id: ch_completed123456789
+  amount: 4900
+  currency: usd
+  amount_refunded: 0
+  metadata: {
+    purchase_type: "credit_pack",
+    pack_name: "starter",
+    credits: 500,
+    price_cents: 4900
+  }
+  data: {
+    status: "succeeded",
+    amount_captured: 4900,
+    paid: true
+  }
+  created_at: <%= 20.days.ago %>
+  updated_at: <%= 20.days.ago %>
+
+# Fully refunded charge for poor_user
+refunded_charge:
+  id: 2
+  type: Pay::Charge
+  customer_id: 5
+  processor_id: ch_refunded123456789
+  amount: 9900
+  currency: usd
+  amount_refunded: 9900
+  metadata: {
+    purchase_type: "credit_pack",
+    pack_name: "pro",
+    credits: 5000,
+    price_cents: 9900
+  }
+  data: {
+    status: "succeeded",
+    amount_captured: 9900,
+    paid: true,
+    refunded: true
+  }
+  created_at: <%= 15.days.ago %>
+  updated_at: <%= 10.days.ago %>
+
+# Partially refunded charge for refund_user
+partial_refund_charge:
+  id: 3
+  type: Pay::Charge
+  customer_id: 6
+  processor_id: ch_partial123456789
+  amount: 4900
+  currency: usd
+  amount_refunded: 2450
+  metadata: {
+    purchase_type: "credit_pack",
+    pack_name: "starter",
+    credits: 1000,
+    price_cents: 4900
+  }
+  data: {
+    status: "succeeded",
+    amount_captured: 4900,
+    paid: true,
+    amount_refunded: 2450
+  }
+  created_at: <%= 10.days.ago %>
+  updated_at: <%= 5.days.ago %>
+
+# Failed charge (not a credit pack, should be ignored)
+failed_charge:
+  id: 4
+  type: Pay::Stripe::Charge
+  customer_id: 5
+  processor_id: ch_failed123456789
+  amount: 4900
+  currency: usd
+  amount_refunded: 0
+  metadata: {}
+  data: {
+    status: "failed",
+    amount_captured: 0,
+    paid: false
+  }
+  created_at: <%= 3.days.ago %>
+  updated_at: <%= 3.days.ago %>
+
+# Charge without credit pack metadata (should be ignored)
+non_pack_charge:
+  id: 5
+  type: Pay::Charge
+  customer_id: 2
+  processor_id: ch_nonpack123456789
+  amount: 1999
+  currency: usd
+  amount_refunded: 0
+  metadata: {
+    product: "some_other_product"
+  }
+  data: {
+    status: "succeeded",
+    amount_captured: 1999,
+    paid: true
+  }
+  created_at: <%= 25.days.ago %>
+  updated_at: <%= 25.days.ago %>

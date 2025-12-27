@@ -24,3 +24,10 @@ pay.md
 
 **/.kamal/
 deploy.yml
+
+test/dummy/log/*
+
+.cursor/
+.claude/
+
+/Gemfile.lock

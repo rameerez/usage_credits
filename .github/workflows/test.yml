@@ -22,6 +22,7 @@ jobs:
           - gemfiles/pay_8.3.gemfile
           - gemfiles/pay_9.0.gemfile
           - gemfiles/pay_10.0.gemfile
+          - gemfiles/pay_11.0.gemfile
 
     env:
       RAILS_ENV: test

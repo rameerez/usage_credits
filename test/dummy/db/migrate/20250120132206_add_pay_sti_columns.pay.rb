@@ -13,9 +13,14 @@ class AddPayStiColumns < ActiveRecord::Migration[6.0]
     Pay::Customer.find_each do |pay_customer|
       pay_customer.update(type: "Pay::#{pay_customer.processor.classify}::Customer")
 
-      pay_customer.charges.update_all(type: "Pay::#{pay_customer.processor.classify}::Charge")
-      pay_customer.subscriptions.update_all(type: "Pay::#{pay_customer.processor.classify}::Subscription")
-      pay_customer.payment_methods.update_all(type: "Pay::#{pay_customer.processor.classify}::PaymentMethod")
+      # Pay 11.x renamed associations with pay_ prefix for compatibility
+      charges_association = pay_customer.respond_to?(:pay_charges) ? :pay_charges : :charges
+      subscriptions_association = pay_customer.respond_to?(:pay_subscriptions) ? :pay_subscriptions : :subscriptions
+      payment_methods_association = pay_customer.respond_to?(:pay_payment_methods) ? :pay_payment_methods : :payment_methods
+
+      pay_customer.public_send(charges_association).update_all(type: "Pay::#{pay_customer.processor.classify}::Charge")
+      pay_customer.public_send(subscriptions_association).update_all(type: "Pay::#{pay_customer.processor.classify}::Subscription")
+      pay_customer.public_send(payment_methods_association).update_all(type: "Pay::#{pay_customer.processor.classify}::PaymentMethod")
     end
 
     Pay::Merchant.find_each do |pay_merchant|

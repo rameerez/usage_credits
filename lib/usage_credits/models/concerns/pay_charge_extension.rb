@@ -136,34 +136,38 @@ module UsageCredits
       end
 
       begin
-        # Add credits to the user's wallet
-        credit_wallet.add_credits(
-          pack.total_credits,
-          category: "credit_pack_purchase",
-          metadata: {
-            purchase_charge_id: id,
-            purchased_at: created_at,
-            credits_fulfilled: true,
-            fulfilled_at: Time.current,
-            **pack.base_metadata
-          }
-        )
+        # Wrap in transaction to ensure atomicity - if Fulfillment.create! fails,
+        # the credits should NOT be added. This is critical for money handling.
+        ActiveRecord::Base.transaction do
+          # Add credits to the user's wallet
+          credit_wallet.add_credits(
+            pack.total_credits,
+            category: "credit_pack_purchase",
+            metadata: {
+              purchase_charge_id: id,
+              purchased_at: created_at,
+              credits_fulfilled: true,
+              fulfilled_at: Time.current,
+              **pack.base_metadata
+            }
+          )
 
-        # Also create a one-time fulfillment record for audit and consistency
-        # This Fulfillment record won't get picked up by the fulfillment job because `next_fulfillment_at` is nil
-        Fulfillment.create!(
-          wallet: credit_wallet,
-          source: self, # the Pay::Charge
-          fulfillment_type: "credit_pack",
-          credits_last_fulfillment: pack.total_credits,
-          last_fulfilled_at: Time.current,
-          next_fulfillment_at: nil, # so it doesn't get re-processed
-          metadata: {
-            purchase_charge_id: id,
-            purchased_at: created_at,
-            **pack.base_metadata
-          }
-        )
+          # Also create a one-time fulfillment record for audit and consistency
+          # This Fulfillment record won't get picked up by the fulfillment job because `next_fulfillment_at` is nil
+          Fulfillment.create!(
+            wallet: credit_wallet,
+            source: self, # the Pay::Charge
+            fulfillment_type: "credit_pack",
+            credits_last_fulfillment: pack.total_credits,
+            last_fulfilled_at: Time.current,
+            next_fulfillment_at: nil, # so it doesn't get re-processed
+            metadata: {
+              purchase_charge_id: id,
+              purchased_at: created_at,
+              **pack.base_metadata
+            }
+          )
+        end
 
         Rails.logger.info "Successfully fulfilled credit pack #{pack_name} for charge #{id}"
       rescue StandardError => e
@@ -173,15 +177,43 @@ module UsageCredits
     end
 
     # Returns the total credits already refunded for this charge
+    # Note: NOT memoized because refunds can happen incrementally within the same request
     def credits_previously_refunded
       transactions = credit_wallet&.transactions&.where(category: "credit_pack_refund")
       return 0 unless transactions.present?
 
-      # Sum all refund transactions for this charge (amounts are negative, so we negate)
-      transactions.select do |tx|
+      # Try database-level filtering first (more efficient)
+      begin
+        adapter = ActiveRecord::Base.connection.adapter_name.downcase
+        if adapter.include?("postgres")
+          # PostgreSQL supports the @> JSON containment operator
+          filtered = transactions.where(
+            "metadata @> ?",
+            { refunded_purchase_charge_id: id, credits_refunded: true }.to_json
+          )
+          return filtered.sum { |tx| -tx.amount }
+        else
+          # SQLite/MySQL with JSON_EXTRACT
+          filtered = transactions.where(
+            "json_extract(metadata, '$.refunded_purchase_charge_id') = ? AND json_extract(metadata, '$.credits_refunded') = ?",
+            id, true
+          )
+          return filtered.sum { |tx| -tx.amount }
+        end
+      rescue ActiveRecord::StatementInvalid => e
+        Rails.logger.warn "JSON query failed, falling back to Ruby filtering: #{e.message}"
+      end
+
+      # Fallback: filter in Ruby (for databases without JSON support)
+      # Sum in a single pass to avoid multiple iterations
+      transactions.sum do |tx|
         data = tx.metadata.is_a?(Hash) ? tx.metadata : (JSON.parse(tx.metadata) rescue {})
-        data["refunded_purchase_charge_id"].to_i == id.to_i && data["credits_refunded"].to_s == "true"
-      end.sum { |tx| -tx.amount }
+        if data["refunded_purchase_charge_id"].to_i == id.to_i && data["credits_refunded"].to_s == "true"
+          -tx.amount
+        else
+          0
+        end
+      end
     end
 
     def credits_already_refunded?

@@ -7,9 +7,10 @@ SimpleCov.start 'rails' do
   # Enable branch coverage (must be before minimum_coverage)
   enable_coverage :branch
 
-  # Set minimum coverage threshold
-  # Current coverage: Line 84.96%, Branch 72.58%
-  # minimum_coverage line: 84, branch: 70
+  # Set minimum coverage threshold to prevent coverage regression
+  # Current coverage: Line 84.38%, Branch 71.9%
+  # Note: Some paths (PostgreSQL JSON operators, error fallbacks) may not be exercised in SQLite tests
+  minimum_coverage line: 75, branch: 60
 
   # Add custom groups for better organization
   add_group 'Models', 'lib/usage_credits/models'

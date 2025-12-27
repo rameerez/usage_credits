@@ -30,6 +30,7 @@ gem "sqlite3"
 gem "pg"
 
 # Used for the dummy Rails app integration
+gem "bootsnap", require: false
 gem "puma"
 gem "web-console", group: :development
 

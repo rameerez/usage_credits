@@ -24,3 +24,7 @@ pay.md
 
 **/.kamal/
 deploy.yml
+
+.claude/
+
+Gemfile.lock

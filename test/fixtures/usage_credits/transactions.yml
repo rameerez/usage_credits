@@ -1,0 +1,233 @@
+# ========================================
+# RICH USER TRANSACTIONS
+# ========================================
+
+# Initial signup bonus
+rich_initial_credit:
+  id: 1
+  wallet_id: 1
+  amount: 1000
+  category: signup_bonus
+  expires_at: null
+  fulfillment_id: null
+  metadata: { reason: "initial_signup", awarded_at: "<%= 30.days.ago.iso8601 %>" }
+  created_at: <%= 30.days.ago %>
+  updated_at: <%= 30.days.ago %>
+
+# Credit pack purchase
+rich_pack_credit:
+  id: 2
+  wallet_id: 1
+  amount: 500
+  category: credit_pack_purchase
+  expires_at: null
+  fulfillment_id: 2
+  metadata: { pack_name: "starter", purchase_charge_id: 1 }
+  created_at: <%= 20.days.ago %>
+  updated_at: <%= 20.days.ago %>
+
+# Spent on operation
+rich_spent_credit:
+  id: 3
+  wallet_id: 1
+  amount: -50
+  category: operation_charge
+  expires_at: null
+  fulfillment_id: null
+  metadata: { operation: "send_email", cost: 50, params: {}, executed_at: "<%= 1.day.ago.iso8601 %>" }
+  created_at: <%= 1.day.ago %>
+  updated_at: <%= 1.day.ago %>
+
+# Manual adjustment
+rich_manual_adjustment:
+  id: 4
+  wallet_id: 1
+  amount: 100
+  category: manual_adjustment
+  expires_at: null
+  fulfillment_id: null
+  metadata: { reason: "customer_support_credit", adjusted_by: "admin" }
+  created_at: <%= 5.days.ago %>
+  updated_at: <%= 5.days.ago %>
+
+# ========================================
+# POOR USER TRANSACTIONS
+# ========================================
+
+# Small initial credit
+poor_initial_credit:
+  id: 5
+  wallet_id: 2
+  amount: 100
+  category: signup_bonus
+  expires_at: null
+  fulfillment_id: null
+  metadata: { reason: "signup" }
+  created_at: <%= 15.days.ago %>
+  updated_at: <%= 15.days.ago %>
+
+# Spent most credits
+poor_large_spend:
+  id: 6
+  wallet_id: 2
+  amount: -95
+  category: operation_charge
+  expires_at: null
+  fulfillment_id: null
+  metadata: { operation: "process_video", cost: 95, params: { size_mb: 10 } }
+  created_at: <%= 2.days.ago %>
+  updated_at: <%= 2.days.ago %>
+
+# ========================================
+# SUBSCRIBED USER TRANSACTIONS
+# ========================================
+
+# Subscription credits from last month
+subscribed_month1_credit:
+  id: 7
+  wallet_id: 3
+  amount: 500
+  category: subscription_credits
+  expires_at: <%= 30.days.from_now %>
+  fulfillment_id: 1
+  metadata: { subscription_id: 1, plan: "pro_plan_monthly", period: "2024-12" }
+  created_at: <%= 30.days.ago %>
+  updated_at: <%= 30.days.ago %>
+
+# Signup bonus
+subscribed_signup_bonus:
+  id: 8
+  wallet_id: 3
+  amount: 1000
+  category: subscription_signup_bonus
+  expires_at: null
+  fulfillment_id: null
+  metadata: { subscription_id: 1, plan: "pro_plan_monthly" }
+  created_at: <%= 60.days.ago %>
+  updated_at: <%= 60.days.ago %>
+
+# Some spent credits
+subscribed_spent:
+  id: 9
+  wallet_id: 3
+  amount: -200
+  category: operation_charge
+  expires_at: null
+  fulfillment_id: null
+  metadata: { operation: "send_email", cost: 200, params: { count: 200 } }
+  created_at: <%= 10.days.ago %>
+  updated_at: <%= 10.days.ago %>
+
+# ========================================
+# EXPIRY USER TRANSACTIONS (Mixed expiration dates)
+# ========================================
+
+# Non-expiring credit
+expiry_never_expires:
+  id: 10
+  wallet_id: 4
+  amount: 100
+  category: signup_bonus
+  expires_at: null
+  fulfillment_id: null
+  metadata: { reason: "signup" }
+  created_at: <%= 90.days.ago %>
+  updated_at: <%= 90.days.ago %>
+
+# Already expired credit (should not count in balance)
+expiry_already_expired:
+  id: 11
+  wallet_id: 4
+  amount: 200
+  category: credit_pack_purchase
+  expires_at: <%= 5.days.ago %>
+  fulfillment_id: null
+  metadata: { pack_name: "test_pack", note: "expired" }
+  created_at: <%= 35.days.ago %>
+  updated_at: <%= 35.days.ago %>
+
+# Expiring soon (within grace period)
+expiry_expires_soon:
+  id: 12
+  wallet_id: 4
+  amount: 150
+  category: credit_pack_purchase
+  expires_at: <%= 1.hour.from_now %>
+  fulfillment_id: null
+  metadata: { pack_name: "test_pack", note: "expires_soon" }
+  created_at: <%= 30.days.ago %>
+  updated_at: <%= 30.days.ago %>
+
+# Expiring in future
+expiry_expires_later:
+  id: 13
+  wallet_id: 4
+  amount: 250
+  category: subscription_credits
+  expires_at: <%= 15.days.from_now %>
+  fulfillment_id: null
+  metadata: { subscription_id: 2, note: "expires_later" }
+  created_at: <%= 15.days.ago %>
+  updated_at: <%= 15.days.ago %>
+
+# Some spent from expiry wallet
+expiry_spent:
+  id: 14
+  wallet_id: 4
+  amount: -100
+  category: operation_charge
+  expires_at: null
+  fulfillment_id: null
+  metadata: { operation: "send_email", cost: 100 }
+  created_at: <%= 3.days.ago %>
+  updated_at: <%= 3.days.ago %>
+
+# ========================================
+# TRIAL USER TRANSACTIONS
+# ========================================
+
+# Trial credits
+trial_credits:
+  id: 15
+  wallet_id: 5
+  amount: 500
+  category: subscription_trial
+  expires_at: <%= 7.days.from_now %>
+  fulfillment_id: null
+  metadata: { subscription_id: 2, plan: "pro_plan_monthly", trial: true }
+  created_at: <%= 7.days.ago %>
+  updated_at: <%= 7.days.ago %>
+
+# ========================================
+# REFUND USER TRANSACTIONS
+# ========================================
+
+# Original pack purchase
+refund_pack_credit:
+  id: 16
+  wallet_id: 7
+  amount: 1000
+  category: credit_pack_purchase
+  expires_at: null
+  fulfillment_id: 3
+  metadata: { pack_name: "starter", purchase_charge_id: 3, credits_fulfilled: true }
+  created_at: <%= 10.days.ago %>
+  updated_at: <%= 10.days.ago %>
+
+# Refund transaction (negative adjustment)
+refund_deduction:
+  id: 17
+  wallet_id: 7
+  amount: -500
+  category: credit_pack_refund
+  expires_at: null
+  fulfillment_id: null
+  metadata: {
+    refunded_purchase_charge_id: 3,
+    credits_refunded: true,
+    refund_percentage: 0.5,
+    refund_amount_cents: 2450,
+    pack_name: "starter"
+  }
+  created_at: <%= 5.days.ago %>
+  updated_at: <%= 5.days.ago %>

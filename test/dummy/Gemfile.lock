@@ -1,7 +1,7 @@
 PATH
   remote: ../..
   specs:
-    usage_credits (0.1.0)
+    usage_credits (0.1.1)
       pay (~> 8.3)
       rails (>= 6.1)
 

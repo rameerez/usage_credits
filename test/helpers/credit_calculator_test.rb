@@ -210,4 +210,68 @@ class CreditCalculatorTest < ActiveSupport::TestCase
     # 333 * 10 / 100 = 33.3, should round to 34 (not 33)
     assert result >= 34
   end
+
+  # ========================================
+  # ADDITIONAL EDGE CASES
+  # ========================================
+
+  test "handles very small exchange rates" do
+    UsageCredits.configure do |config|
+      config.rounding_strategy = :ceil
+    end
+
+    # 1000 cents at rate 0.01 = 1000 * 0.01 / 100 = 0.1 -> 1 credit
+    assert_equal 1, UsageCredits::CreditCalculator.money_to_credits(1000, 0.01)
+  end
+
+  test "handles very large exchange rates" do
+    UsageCredits.configure do |config|
+      config.rounding_strategy = :ceil
+    end
+
+    # 100 cents at rate 10000 = 100 * 10000 / 100 = 10000 credits
+    assert_equal 10000, UsageCredits::CreditCalculator.money_to_credits(100, 10000)
+  end
+
+  test "handles negative amounts gracefully" do
+    UsageCredits.configure do |config|
+      config.rounding_strategy = :ceil
+    end
+
+    # Negative amounts should still work mathematically
+    # -100 * 10 / 100 = -10
+    result = UsageCredits::CreditCalculator.money_to_credits(-100, 10)
+    assert_equal(-10, result)
+  end
+
+  test "apply_rounding handles negative numbers" do
+    UsageCredits.configure do |config|
+      config.rounding_strategy = :ceil
+    end
+
+    # -5.3 should ceil to -5 (towards zero)
+    assert_equal(-5, UsageCredits::CreditCalculator.apply_rounding(-5.3))
+  end
+
+  test "apply_rounding with floor handles negative numbers" do
+    UsageCredits.configure do |config|
+      config.rounding_strategy = :floor
+    end
+
+    # -5.3 should floor to -6 (away from zero)
+    assert_equal(-6, UsageCredits::CreditCalculator.apply_rounding(-5.3))
+  end
+
+  test "consistent behavior across all strategies for exact values" do
+    [5.0, 10.0, 100.0, 1000.0].each do |exact_value|
+      [:ceil, :floor, :round].each do |strategy|
+        UsageCredits.configure do |config|
+          config.rounding_strategy = strategy
+        end
+
+        result = UsageCredits::CreditCalculator.apply_rounding(exact_value)
+        assert_equal exact_value.to_i, result, "Strategy #{strategy} failed for #{exact_value}"
+      end
+    end
+  end
 end

@@ -460,4 +460,76 @@ class UsageCredits::CreditSubscriptionPlanTest < ActiveSupport::TestCase
     assert_equal :basic, plan_symbol.name
     assert_equal "premium", plan_string.name
   end
+
+  test "plan_id_for returns nil for unknown processor" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:test)
+    plan.processor_plan(:stripe, "price_123")
+
+    assert_nil plan.plan_id_for(:unknown_processor)
+  end
+
+  test "create_checkout_session raises when user doesn't respond to payment_processor" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:test)
+    plan.gives(500).every(:month)
+    plan.stripe_price("price_123")
+
+    user_without_payment = Object.new
+
+    error = assert_raises(ArgumentError) do
+      plan.create_checkout_session(user_without_payment, success_url: "/success", cancel_url: "/cancel")
+    end
+
+    assert_includes error.message, "must respond to payment_processor"
+  end
+
+  test "create_checkout_session raises when no plan id for processor" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:test)
+    plan.gives(500).every(:month)
+    # No stripe_price set
+
+    user = users(:rich_user)
+
+    error = assert_raises(ArgumentError) do
+      plan.create_checkout_session(user, success_url: "/success", cancel_url: "/cancel", processor: :stripe)
+    end
+
+    assert_includes error.message, "No Stripe plan ID configured"
+  end
+
+  test "create_checkout_session raises when fulfillment_period not set" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:test)
+    plan.instance_variable_set(:@credits_per_period, 500)  # Set credits but not period
+    plan.stripe_price("price_123")
+
+    user = users(:rich_user)
+
+    error = assert_raises(ArgumentError) do
+      plan.create_checkout_session(user, success_url: "/success", cancel_url: "/cancel")
+    end
+
+    assert_includes error.message, "No fulfillment period configured"
+  end
+
+  test "CreditGiver chain works correctly" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:test)
+
+    # This returns a CreditGiver, then .every returns the plan
+    result = plan.gives(1000).every(:week)
+
+    assert_equal plan, result
+    assert_equal 1000, plan.credits_per_period
+    assert_equal 1.week, plan.fulfillment_period
+  end
+
+  test "parsed_fulfillment_period handles string periods" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:test)
+    plan.gives(500).every(:month)
+
+    # Manually set a string period to test parsing
+    plan.instance_variable_set(:@fulfillment_period, "1.month")
+
+    parsed = plan.parsed_fulfillment_period
+
+    assert_kind_of ActiveSupport::Duration, parsed
+  end
 end

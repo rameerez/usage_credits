@@ -502,5 +502,74 @@ module UsageCredits
       latest_tx = wallet.transactions.order(:created_at).last
       assert_not_nil latest_tx.metadata["subscription_id"]
     end
+
+    # ========================================
+    # ADDITIONAL EDGE CASES
+    # ========================================
+
+    test "stopped fulfillment is not processed" do
+      wallet = usage_credits_wallets(:cancelled_wallet)
+      initial_credits = wallet.credits
+
+      # Use stopped fulfillment from fixtures
+      fulfillment = usage_credits_fulfillments(:stopped_fulfillment)
+
+      # Even if we try to create a service for it, it should not add credits
+      # because due_for_fulfillment? returns false for stopped fulfillments
+      service = FulfillmentService.new(fulfillment)
+      service.process
+
+      # Credits should not change
+      assert_equal initial_credits, wallet.reload.credits
+    end
+
+    test "expiration includes grace period from configuration" do
+      wallet = usage_credits_wallets(:subscribed_wallet)
+      fulfillment = usage_credits_fulfillments(:active_subscription_fulfillment)
+      fulfillment.update!(next_fulfillment_at: 1.second.ago)
+
+      service = FulfillmentService.new(fulfillment)
+      service.process
+
+      latest_tx = wallet.transactions.where(category: "subscription_credits").order(:created_at).last
+
+      # Expiration should be: next_fulfillment_at + grace_period
+      # Default grace period is 3 days
+      expected_min = fulfillment.reload.next_fulfillment_at + UsageCredits.configuration.fulfillment_grace_period - 1.minute
+      assert latest_tx.expires_at >= expected_min
+    end
+
+    test "process returns early for fulfillment already processed" do
+      wallet = usage_credits_wallets(:subscribed_wallet)
+      fulfillment = usage_credits_fulfillments(:active_subscription_fulfillment)
+
+      # Make it due now
+      fulfillment.update!(next_fulfillment_at: 1.second.ago)
+
+      service = FulfillmentService.new(fulfillment)
+      service.process
+
+      initial_credits = wallet.reload.credits
+
+      # Create new service and try to process again immediately
+      # The fulfillment should now have next_fulfillment_at in the future
+      service2 = FulfillmentService.new(fulfillment.reload)
+      service2.process
+
+      # Credits should not change (already processed)
+      assert_equal initial_credits, wallet.reload.credits
+    end
+
+    test "links transaction to fulfillment record" do
+      wallet = usage_credits_wallets(:subscribed_wallet)
+      fulfillment = usage_credits_fulfillments(:active_subscription_fulfillment)
+      fulfillment.update!(next_fulfillment_at: 1.second.ago)
+
+      service = FulfillmentService.new(fulfillment)
+      service.process
+
+      latest_tx = wallet.transactions.order(:created_at).last
+      assert_equal fulfillment.id, latest_tx.fulfillment_id
+    end
   end
 end

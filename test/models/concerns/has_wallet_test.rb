@@ -209,6 +209,21 @@ class HasWalletTest < ActiveSupport::TestCase
     assert_equal initial_credits + 100, user.reload.credits
   end
 
+  test "estimate_credits_to delegates to wallet" do
+    user = users(:rich_user)
+    user.reload  # Ensure fresh data
+
+    # Define variable cost operation
+    UsageCredits.configure do |config|
+      config.operation :test_variable_op do
+        costs 5.credits_per(:mb)
+      end
+    end
+
+    estimate = user.estimate_credits_to(:test_variable_op, mb: 10)
+    assert_equal 50, estimate
+  end
+
   # ========================================
   # CREDIT SUBSCRIPTIONS
   # ========================================

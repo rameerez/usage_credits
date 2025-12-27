@@ -25,6 +25,7 @@ pay.md
 **/.kamal/
 deploy.yml
 
+.cursor/
 .claude/
 
 Gemfile.lock

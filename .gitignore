@@ -30,4 +30,4 @@ test/dummy/log/*
 .cursor/
 .claude/
 
-Gemfile.lock
+/Gemfile.lock

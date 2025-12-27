@@ -1,4 +1,8 @@
 # test/test_helper.rb
+
+# SimpleCov must be loaded before any application code
+require 'simplecov'
+
 # Configure Rails Environment
 ENV["RAILS_ENV"] = "test"
 

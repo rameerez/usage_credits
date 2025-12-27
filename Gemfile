@@ -12,6 +12,7 @@ gemspec
 
 gem "appraisal"
 gem "mocha"
+gem "simplecov", require: false
 gem "standard"
 gem "vcr"
 gem "webmock"

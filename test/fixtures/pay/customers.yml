@@ -1,0 +1,71 @@
+# Pay customer for rich user
+rich_customer:
+  id: 1
+  owner_type: User
+  owner_id: 1
+  processor: fake_processor
+  processor_id: cus_rich123456789
+  default: true
+  data: {}
+  created_at: <%= 30.days.ago %>
+  updated_at: <%= 30.days.ago %>
+
+# Pay customer for subscribed user
+subscribed_customer:
+  id: 2
+  owner_type: User
+  owner_id: 4
+  processor: fake_processor
+  processor_id: cus_subscribed123456
+  default: true
+  data: {}
+  created_at: <%= 60.days.ago %>
+  updated_at: <%= 1.day.ago %>
+
+# Pay customer for trial user
+trial_customer:
+  id: 3
+  owner_type: User
+  owner_id: 6
+  processor: fake_processor
+  processor_id: cus_trial123456789
+  default: true
+  data: {}
+  created_at: <%= 7.days.ago %>
+  updated_at: <%= 7.days.ago %>
+
+# Pay customer for cancelled user
+cancelled_customer:
+  id: 4
+  owner_type: User
+  owner_id: 7
+  processor: fake_processor
+  processor_id: cus_cancelled123456
+  default: true
+  data: {}
+  created_at: <%= 90.days.ago %>
+  updated_at: <%= 2.days.ago %>
+
+# Pay customer for poor user
+poor_customer:
+  id: 5
+  owner_type: User
+  owner_id: 2
+  processor: fake_processor
+  processor_id: cus_poor123456789
+  default: true
+  data: {}
+  created_at: <%= 15.days.ago %>
+  updated_at: <%= 15.days.ago %>
+
+# Pay customer for refund user
+refund_customer:
+  id: 6
+  owner_type: User
+  owner_id: 8
+  processor: fake_processor
+  processor_id: cus_refund123456789
+  default: true
+  data: {}
+  created_at: <%= 20.days.ago %>
+  updated_at: <%= 5.days.ago %>

@@ -186,10 +186,10 @@ module UsageCredits
     # positive transactions still have leftover.
     #
     # TODO: This code enumerates all unexpired positive transactions each time.
-    # That’s fine if usage scale is moderate. We're already indexing this.
+    # That's fine if usage scale is moderate. We're already indexing this.
     # If performance becomes a concern, we need to create a separate model to store the partial allocations efficiently.
     def deduct_credits(amount, metadata: {}, category: :credit_deducted)
-    with_lock do
+      with_lock do
       amount = amount.to_i
       raise InsufficientCredits, "Cannot deduct a non-positive amount" if amount <= 0
 
@@ -255,8 +255,8 @@ module UsageCredits
       # Fire your existing notifications
       notify_balance_change(:credits_deducted, amount)
       spend_tx
+      end
     end
-  end
 
 
     private

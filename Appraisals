@@ -17,3 +17,9 @@ appraise "pay-10.0" do
   gem "pay", "~> 10.0.0"
   gem "stripe", "~> 15.0"
 end
+
+# Test against Pay 11.x (latest version)
+appraise "pay-11.0" do
+  gem "pay", "~> 11.0"
+  gem "stripe", "~> 18.0"
+end

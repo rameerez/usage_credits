@@ -1,0 +1,75 @@
+# Active subscription for subscribed_user
+active_subscription:
+  id: 1
+  customer_id: 2
+  name: default
+  processor_id: sub_active123456789
+  processor_plan: pro_plan_monthly
+  quantity: 1
+  status: active
+  current_period_start: <%= 1.day.ago %>
+  current_period_end: <%= 29.days.from_now %>
+  trial_ends_at: null
+  ends_at: null
+  metered: false
+  metadata: { plan_name: "pro" }
+  data: {}
+  created_at: <%= 60.days.ago %>
+  updated_at: <%= 1.day.ago %>
+
+# Trialing subscription for trial_user
+trialing_subscription:
+  id: 2
+  customer_id: 3
+  name: default
+  processor_id: sub_trial123456789
+  processor_plan: pro_plan_monthly
+  quantity: 1
+  status: trialing
+  current_period_start: <%= 7.days.ago %>
+  current_period_end: <%= 7.days.from_now %>
+  trial_ends_at: <%= 7.days.from_now %>
+  ends_at: null
+  metered: false
+  metadata: { plan_name: "pro", trial: true }
+  data: {}
+  created_at: <%= 7.days.ago %>
+  updated_at: <%= 7.days.ago %>
+
+# Canceled subscription for cancelled_user
+canceled_subscription:
+  id: 3
+  customer_id: 4
+  name: default
+  processor_id: sub_canceled123456789
+  processor_plan: basic_plan_monthly
+  quantity: 1
+  status: canceled
+  current_period_start: <%= 30.days.ago %>
+  current_period_end: <%= 1.day.ago %>
+  trial_ends_at: null
+  ends_at: <%= 1.day.ago %>
+  metered: false
+  metadata: { plan_name: "basic", cancelled: true }
+  data: {}
+  created_at: <%= 90.days.ago %>
+  updated_at: <%= 1.day.ago %>
+
+# Incomplete subscription (for testing status transitions)
+incomplete_subscription:
+  id: 4
+  customer_id: 5
+  name: default
+  processor_id: sub_incomplete123456
+  processor_plan: basic_plan_monthly
+  quantity: 1
+  status: incomplete
+  current_period_start: <%= 1.hour.ago %>
+  current_period_end: <%= 29.days.from_now %>
+  trial_ends_at: null
+  ends_at: null
+  metered: false
+  metadata: { plan_name: "basic" }
+  data: {}
+  created_at: <%= 1.hour.ago %>
+  updated_at: <%= 1.hour.ago %>

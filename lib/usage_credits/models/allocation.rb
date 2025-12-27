@@ -22,6 +22,8 @@ module UsageCredits
     private
 
     def allocation_does_not_exceed_remaining_amount
+      return if amount.blank? || source_transaction.blank?
+
       if source_transaction.remaining_amount < amount
         errors.add(:amount, "exceeds the remaining amount of the source transaction")
       end

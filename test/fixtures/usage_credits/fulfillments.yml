@@ -1,0 +1,79 @@
+# Active subscription fulfillment for subscribed_user
+active_subscription_fulfillment:
+  id: 1
+  wallet_id: 3
+  source_type: Pay::Subscription
+  source_id: 1
+  credits_last_fulfillment: 500
+  fulfillment_type: subscription
+  last_fulfilled_at: <%= 30.days.ago %>
+  next_fulfillment_at: <%= 1.day.from_now %>
+  fulfillment_period: "1.month"
+  stops_at: <%= 60.days.from_now %>
+  metadata: { subscription_id: 1, plan: "pro_plan_monthly" }
+  created_at: <%= 60.days.ago %>
+  updated_at: <%= 30.days.ago %>
+
+# One-time credit pack fulfillment for rich_user
+pack_fulfillment_rich:
+  id: 2
+  wallet_id: 1
+  source_type: Pay::Charge
+  source_id: 1
+  credits_last_fulfillment: 500
+  fulfillment_type: credit_pack
+  last_fulfilled_at: <%= 20.days.ago %>
+  next_fulfillment_at: null
+  fulfillment_period: null
+  stops_at: null
+  metadata: { pack_name: "starter", charge_id: 1 }
+  created_at: <%= 20.days.ago %>
+  updated_at: <%= 20.days.ago %>
+
+# One-time credit pack fulfillment for refund_user
+pack_fulfillment_refund:
+  id: 3
+  wallet_id: 7
+  source_type: Pay::Charge
+  source_id: 3
+  credits_last_fulfillment: 1000
+  fulfillment_type: credit_pack
+  last_fulfilled_at: <%= 10.days.ago %>
+  next_fulfillment_at: null
+  fulfillment_period: null
+  stops_at: null
+  metadata: { pack_name: "starter", charge_id: 3 }
+  created_at: <%= 10.days.ago %>
+  updated_at: <%= 10.days.ago %>
+
+# Trial subscription fulfillment (not recurring yet)
+trial_fulfillment:
+  id: 4
+  wallet_id: 5
+  source_type: Pay::Subscription
+  source_id: 2
+  credits_last_fulfillment: 500
+  fulfillment_type: subscription
+  last_fulfilled_at: <%= 7.days.ago %>
+  next_fulfillment_at: <%= 7.days.from_now %>
+  fulfillment_period: "1.month"
+  stops_at: null
+  metadata: { subscription_id: 2, plan: "pro_plan_monthly", trial: true }
+  created_at: <%= 7.days.ago %>
+  updated_at: <%= 7.days.ago %>
+
+# Stopped fulfillment for cancelled subscription
+stopped_fulfillment:
+  id: 5
+  wallet_id: 6
+  source_type: Pay::Subscription
+  source_id: 3
+  credits_last_fulfillment: 100
+  fulfillment_type: subscription
+  last_fulfilled_at: <%= 30.days.ago %>
+  next_fulfillment_at: <%= 1.day.ago %>
+  fulfillment_period: "1.month"
+  stops_at: <%= 1.day.ago %>
+  metadata: { subscription_id: 3, plan: "basic_plan_monthly", cancelled: true }
+  created_at: <%= 90.days.ago %>
+  updated_at: <%= 1.day.ago %>

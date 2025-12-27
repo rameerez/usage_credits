@@ -1,4 +1,8 @@
 # test/test_helper.rb
+
+# SimpleCov must be loaded before any application code
+require 'simplecov'
+
 # Configure Rails Environment
 ENV["RAILS_ENV"] = "test"
 
@@ -22,6 +26,10 @@ elsif ActiveSupport::TestCase.respond_to?(:fixture_path=)
 end
 ActiveSupport::TestCase.file_fixture_path = File.expand_path("../fixtures/files", __FILE__)
 ActiveSupport::TestCase.fixtures :all
+
+# Ensure Pay extensions are loaded in test environment
+Pay::Subscription.include UsageCredits::PaySubscriptionExtension unless Pay::Subscription.include?(UsageCredits::PaySubscriptionExtension)
+Pay::Charge.include UsageCredits::PayChargeExtension unless Pay::Charge.include?(UsageCredits::PayChargeExtension)
 
 class ActiveSupport::TestCase
   include ActionMailer::TestHelper

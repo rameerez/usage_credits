@@ -1,0 +1,79 @@
+# Wallet for rich user with high balance
+rich_wallet:
+  id: 1
+  owner_type: User
+  owner_id: 1
+  balance: 1000
+  metadata: {}
+  created_at: <%= 30.days.ago %>
+  updated_at: <%= 1.day.ago %>
+
+# Wallet for poor user with low balance (below typical threshold)
+poor_wallet:
+  id: 2
+  owner_type: User
+  owner_id: 2
+  balance: 5
+  metadata: {}
+  created_at: <%= 15.days.ago %>
+  updated_at: <%= 1.day.ago %>
+
+# Wallet for subscribed user
+subscribed_wallet:
+  id: 3
+  owner_type: User
+  owner_id: 4
+  balance: 500
+  metadata: { subscription_tier: "pro" }
+  created_at: <%= 60.days.ago %>
+  updated_at: <%= 1.day.ago %>
+
+# Wallet for expiry user with mixed expiring/non-expiring credits
+expiry_wallet:
+  id: 4
+  owner_type: User
+  owner_id: 5
+  balance: 300
+  metadata: {}
+  created_at: <%= 90.days.ago %>
+  updated_at: <%= 1.day.ago %>
+
+# Wallet for trial user
+trial_wallet:
+  id: 5
+  owner_type: User
+  owner_id: 6
+  balance: 500
+  metadata: {}
+  created_at: <%= 7.days.ago %>
+  updated_at: <%= 1.day.ago %>
+
+# Wallet for cancelled user
+cancelled_wallet:
+  id: 6
+  owner_type: User
+  owner_id: 7
+  balance: 50
+  metadata: {}
+  created_at: <%= 90.days.ago %>
+  updated_at: <%= 2.days.ago %>
+
+# Wallet for refund user
+refund_wallet:
+  id: 7
+  owner_type: User
+  owner_id: 8
+  balance: 1000
+  metadata: {}
+  created_at: <%= 20.days.ago %>
+  updated_at: <%= 1.day.ago %>
+
+# Empty wallet (for testing zero balance)
+empty_wallet:
+  id: 8
+  owner_type: User
+  owner_id: 3
+  balance: 0
+  metadata: {}
+  created_at: <%= 1.day.ago %>
+  updated_at: <%= 1.day.ago %>

@@ -35,4 +35,14 @@ Gem::Specification.new do |spec|
 
   spec.add_dependency "pay", ">= 8.3", "< 10.0"
   spec.add_dependency "rails", ">= 6.1"
+
+  # Development dependencies
+  spec.add_development_dependency "bundler", "~> 2.0"
+  spec.add_development_dependency "rake", "~> 13.0"
+  spec.add_development_dependency "minitest", "~> 5.0"
+  spec.add_development_dependency "sqlite3", "~> 2.1"
+  spec.add_development_dependency "rubocop", "~> 1.0"
+  spec.add_development_dependency "rubocop-minitest", "~> 0.35"
+  spec.add_development_dependency "rubocop-performance", "~> 1.0"
+
 end

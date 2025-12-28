@@ -430,7 +430,8 @@ module UsageCredits
     def handle_plan_downgrade(new_plan, fulfillment)
       # Schedule the downgrade for end of current period
       # User keeps current plan benefits until then
-      schedule_time = current_period_end || Time.current
+      # Ensure schedule_time is never in the past (handles edge cases like stale data)
+      schedule_time = [current_period_end || Time.current, Time.current].max
 
       # Use string keys consistently to avoid duplicates after JSON serialization
       fulfillment.update!(
@@ -447,7 +448,8 @@ module UsageCredits
       # User is downgrading from a credit plan to a non-credit plan
       # Schedule the fulfillment to stop at end of current period
       # User keeps their existing credits (no clawback)
-      schedule_time = current_period_end || Time.current
+      # Ensure schedule_time is never in the past
+      schedule_time = [current_period_end || Time.current, Time.current].max
 
       ActiveRecord::Base.transaction do
         # Use string keys consistently to avoid duplicates after JSON serialization

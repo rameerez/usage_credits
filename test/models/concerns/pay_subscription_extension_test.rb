@@ -795,4 +795,1295 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     # Credits remain unchanged (no deduction on downgrade)
     assert_equal 2200, wallet.reload.credits
   end
+
+  # ========================================
+  # EDGE CASES: CREDIT EXPIRATION ON UPGRADE
+  # ========================================
+
+  test "upgrade to expiring plan sets credit expiration correctly" do
+    # Create a user with a rollover plan (credits don't expire)
+    user = User.create!(email: "upgrade_expire@example.com", name: "Upgrade Expire User")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_upgrade_expire_test"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_upgrade_expire_test",
+      processor_plan: "rollover_plan_monthly",  # 1000 credits, no expiration
+      status: "active",
+      quantity: 1
+    )
+
+    # Rollover plan credits should NOT expire
+    rollover_tx = wallet.transactions.find_by(category: "subscription_credits")
+    assert_nil rollover_tx.expires_at, "Rollover credits should not expire"
+
+    # Upgrade to premium (expiring plan)
+    subscription.update!(processor_plan: "premium_plan_monthly")
+
+    # Upgrade credits SHOULD expire
+    upgrade_tx = wallet.transactions.find_by(category: "subscription_upgrade")
+    assert_not_nil upgrade_tx, "Should have upgrade transaction"
+    assert_not_nil upgrade_tx.expires_at, "Upgrade to expiring plan should have expiration date"
+
+    # Expiration should be approximately 1 month from now + grace period
+    expected_expiration = Time.current + 1.month + UsageCredits.configuration.fulfillment_grace_period
+    assert_in_delta expected_expiration.to_i, upgrade_tx.expires_at.to_i, 60, "Expiration should be ~1 month + grace period from now"
+  end
+
+  test "upgrade to rollover plan does not set credit expiration" do
+    # Create a user with an expiring plan
+    user = User.create!(email: "upgrade_rollover@example.com", name: "Upgrade Rollover User")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_upgrade_rollover_test"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_upgrade_rollover_test",
+      processor_plan: "pro_plan_monthly",  # 500 credits, expires
+      status: "active",
+      quantity: 1
+    )
+
+    # Pro plan credits SHOULD expire
+    pro_tx = wallet.transactions.find_by(category: "subscription_credits")
+    assert_not_nil pro_tx.expires_at, "Expiring plan credits should have expiration"
+
+    # Upgrade to rollover plan (more credits, no expiration)
+    subscription.update!(processor_plan: "rollover_plan_monthly")
+
+    # Upgrade credits should NOT expire (rollover plan)
+    upgrade_tx = wallet.transactions.find_by(category: "subscription_upgrade")
+    assert_not_nil upgrade_tx, "Should have upgrade transaction"
+    assert_nil upgrade_tx.expires_at, "Upgrade to rollover plan should not have expiration"
+  end
+
+  # ========================================
+  # EDGE CASES: NON-CREDIT PLAN TRANSITIONS
+  # ========================================
+
+  test "downgrade from credit plan to non-credit plan stops fulfillment" do
+    # Create a user with a premium subscription
+    user = User.create!(email: "downgrade_noncredit@example.com", name: "Downgrade NonCredit User")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_downgrade_noncredit_test"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_downgrade_noncredit_test",
+      processor_plan: "premium_plan_monthly",  # 2000 credits
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    # Initial credits: 2000 + 200 signup bonus = 2200
+    assert_equal 2200, wallet.reload.credits
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_not_nil fulfillment
+    original_stops_at = fulfillment.stops_at
+
+    # Downgrade to a non-credit plan (not defined in our test setup)
+    subscription.update!(processor_plan: "basic_plan_no_credits")
+
+    # Fulfillment should be scheduled to stop
+    fulfillment.reload
+    assert_not_nil fulfillment.stops_at, "Fulfillment should have a stop date"
+    assert fulfillment.stops_at <= 30.days.from_now, "Fulfillment should stop at end of period"
+    assert_equal "downgrade_to_non_credit_plan", fulfillment.metadata["stopped_reason"]
+
+    # Credits remain unchanged (no clawback)
+    assert_equal 2200, wallet.reload.credits
+  end
+
+  test "REGRESSION: credit to non-credit to credit reactivation works" do
+    # This tests the scenario:
+    # 1. User starts with a credit plan
+    # 2. User downgrades to a non-credit plan (fulfillment stops)
+    # 3. User later switches back to a credit plan (fulfillment should reactivate)
+    #
+    # The bug was: credits_already_fulfilled? would return true (fulfillment exists)
+    # even though it was stopped, blocking reactivation.
+
+    user = User.create!(email: "reactivation@example.com", name: "Reactivation User")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_reactivation_test"
+    )
+
+    # 1. Start with a credit plan
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_reactivation_test",
+      processor_plan: "pro_plan_monthly",  # 500 + 100 = 600 credits
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    assert_equal 600, wallet.reload.credits
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_not_nil fulfillment, "Should have fulfillment"
+    assert_nil fulfillment.metadata["stopped_reason"], "Fulfillment should be active"
+
+    # 2. Downgrade to a non-credit plan
+    # Set stops_at to a specific time we can test against
+    downgrade_period_end = 35.days.from_now
+
+    subscription.update!(
+      processor_plan: "basic_plan_no_credits",
+      current_period_end: downgrade_period_end
+    )
+
+    fulfillment.reload
+    assert_equal "downgrade_to_non_credit_plan", fulfillment.metadata["stopped_reason"]
+    assert_not_nil fulfillment.stops_at, "Fulfillment should be stopped"
+    assert_equal downgrade_period_end.to_i, fulfillment.stops_at.to_i, "stops_at should match period end"
+
+    # Credits remain the same after downgrade
+    assert_equal 600, wallet.reload.credits
+
+    # 3. Later, user switches back to a credit plan
+    # Move time past the stop date so fulfillment is truly "stopped"
+    travel_to downgrade_period_end + 5.days do
+      # The fulfillment should now be considered stopped (stops_at in the past)
+      fulfillment.reload
+      assert fulfillment.stops_at <= Time.current, "Fulfillment should be past its stop date"
+
+      # Track transaction count before reactivation
+      tx_count_before = wallet.transactions.count
+
+      # Switch back to credit plan
+      # We need to update current_period_end for proper fulfillment scheduling
+      subscription.update!(
+        processor_plan: "premium_plan_monthly",  # 2000 credits
+        current_period_end: Time.current + 30.days,
+        status: "active"
+      )
+
+      # Should have created a new transaction for reactivation credits
+      wallet.reload
+      tx_count_after = wallet.transactions.count
+      assert tx_count_after > tx_count_before,
+        "REGRESSION: Switching from non-credit back to credit should create transaction. " \
+        "Transactions before: #{tx_count_before}, after: #{tx_count_after}"
+
+      # Look for the most recent subscription_credits transaction (the reactivation credits)
+      new_credit_tx = wallet.transactions.where(category: "subscription_credits").order(created_at: :desc).first
+      assert_not_nil new_credit_tx, "Should have a new subscription_credits transaction"
+      assert_equal 2000, new_credit_tx.amount, "Reactivation should award 2000 credits"
+
+      # Fulfillment should be reactivated
+      fulfillment.reload
+      assert_nil fulfillment.metadata["stopped_reason"],
+        "REGRESSION: Fulfillment should be reactivated (stopped_reason cleared)"
+      assert_equal "premium_plan_monthly", fulfillment.metadata["plan"],
+        "Fulfillment should have new plan"
+      assert fulfillment.stops_at > Time.current,
+        "Fulfillment stops_at should be in the future"
+    end
+  end
+
+  test "REGRESSION: credit to non-credit to credit BEFORE stop date reactivates fulfillment" do
+    # This tests the scenario where a user:
+    # 1. Has a credit plan
+    # 2. Downgrades to non-credit (fulfillment scheduled to stop in the future)
+    # 3. Changes mind and switches back to credit BEFORE the stop date
+    #
+    # The bug was: credits_already_fulfilled? returned true because stops_at was still
+    # in the future, blocking reactivation.
+
+    user = User.create!(email: "reactivation_before_stop@example.com", name: "Reactivation Before Stop")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_reactivation_before_stop"
+    )
+
+    # 1. Start with a credit plan
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_reactivation_before_stop",
+      processor_plan: "pro_plan_monthly",  # 500 + 100 = 600 credits
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    assert_equal 600, wallet.reload.credits
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_not_nil fulfillment
+
+    # 2. Downgrade to a non-credit plan
+    subscription.update!(
+      processor_plan: "basic_plan_no_credits",
+      current_period_end: 30.days.from_now
+    )
+
+    fulfillment.reload
+    assert_equal "downgrade_to_non_credit_plan", fulfillment.metadata["stopped_reason"]
+    assert fulfillment.stops_at > Time.current, "stops_at should be in the FUTURE"
+
+    # Credits unchanged
+    assert_equal 600, wallet.reload.credits
+
+    # 3. User changes mind and switches back BEFORE stops_at
+    # This should still reactivate because stopped_reason is set
+    tx_count_before = wallet.transactions.count
+
+    subscription.update!(
+      processor_plan: "premium_plan_monthly",  # 2000 credits
+      current_period_end: 30.days.from_now,
+      status: "active"
+    )
+
+    # Should have created a new transaction for reactivation credits
+    wallet.reload
+    tx_count_after = wallet.transactions.count
+    assert tx_count_after > tx_count_before,
+      "REGRESSION: Switching back before stop date should create transaction"
+
+    # Verify the credits were awarded
+    new_credit_tx = wallet.transactions.where(category: "subscription_credits").order(created_at: :desc).first
+    assert_not_nil new_credit_tx
+    assert_equal 2000, new_credit_tx.amount, "Reactivation should award 2000 credits"
+
+    # Fulfillment should be reactivated (stopped_reason cleared)
+    fulfillment.reload
+    assert_nil fulfillment.metadata["stopped_reason"],
+      "REGRESSION: stopped_reason should be cleared on reactivation"
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"]
+    assert fulfillment.stops_at > Time.current
+  end
+
+  test "lateral plan change with same credits only updates metadata" do
+    # This tests the case where a user changes plans but the credit amounts are the same
+    # We need to define another plan with the same credits for this test
+    UsageCredits.configure do |config|
+      config.subscription_plan :test_pro_annual do
+        processor_plan(:fake_processor, "pro_plan_annual")
+        gives 500.credits.every(:year)  # Same credits as pro monthly but different period
+        unused_credits :expire
+      end
+    end
+
+    user = User.create!(email: "lateral_change@example.com", name: "Lateral Change User")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_lateral_test"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_lateral_test",
+      processor_plan: "pro_plan_monthly",  # 500 credits
+      status: "active",
+      quantity: 1
+    )
+
+    initial_credits = wallet.reload.credits
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_equal "pro_plan_monthly", fulfillment.metadata["plan"]
+
+    # Change to annual plan (same credits = 500)
+    assert_no_difference -> { wallet.reload.credits } do
+      subscription.update!(processor_plan: "pro_plan_annual")
+    end
+
+    # Only metadata should be updated, no credits granted
+    fulfillment.reload
+    assert_equal "pro_plan_annual", fulfillment.metadata["plan"]
+    assert_equal initial_credits, wallet.reload.credits
+  end
+
+  # ========================================
+  # EDGE CASES: MULTIPLE PLAN CHANGES
+  # ========================================
+
+  test "multiple upgrades in same period accumulate credits" do
+    user = User.create!(email: "multi_upgrade@example.com", name: "Multi Upgrade User")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_multi_upgrade_test"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_multi_upgrade_test",
+      processor_plan: "pro_plan_monthly",  # 500 credits + 100 bonus
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    # Initial: 500 + 100 = 600
+    assert_equal 600, wallet.reload.credits
+
+    # First upgrade to premium (2000 credits)
+    subscription.update!(processor_plan: "premium_plan_monthly")
+    assert_equal 2600, wallet.reload.credits  # 600 + 2000
+
+    # User downgrades back to pro (scheduled, no immediate change)
+    subscription.update!(processor_plan: "pro_plan_monthly")
+    assert_equal 2600, wallet.reload.credits  # Still 2600
+
+    # User upgrades again to premium before period ends
+    subscription.update!(processor_plan: "premium_plan_monthly")
+    assert_equal 4600, wallet.reload.credits  # 2600 + 2000
+
+    # User has accumulated credits - this is expected behavior per SaaS standards
+    # Billing proration would handle the monetary side via Stripe
+  end
+
+  # ========================================
+  # REGRESSION TESTS: REVIEWER'S CRITICAL ISSUES
+  # ========================================
+  # These tests explicitly verify the bugs identified by the PR reviewer
+  # to prevent accidental regression.
+
+  # REVIEWER ISSUE #1: Credit Expiration Not Set on Upgrades (CRITICAL)
+  # Location: pay_subscription_extension.rb:303-312 (original code)
+  # The handle_plan_upgrade method did not set expires_at when new plan has unused_credits :expire
+
+  test "REGRESSION: upgrade credits expire when new plan has unused_credits expire" do
+    # Setup: User on rollover plan (credits don't expire)
+    user = User.create!(email: "regression_expire1@example.com", name: "Regression Test 1")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_regression_expire1"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_regression_expire1",
+      processor_plan: "rollover_plan_monthly",  # Credits DON'T expire
+      status: "active",
+      quantity: 1
+    )
+
+    # Verify initial rollover credits don't expire
+    initial_tx = wallet.transactions.find_by(category: "subscription_credits")
+    assert_nil initial_tx.expires_at, "Rollover plan credits should not have expiration"
+
+    # Upgrade to premium (unused_credits :expire)
+    subscription.update!(processor_plan: "premium_plan_monthly")
+
+    # THE BUG: Without the fix, upgrade_tx.expires_at would be nil (WRONG!)
+    upgrade_tx = wallet.transactions.find_by(category: "subscription_upgrade")
+    assert_not_nil upgrade_tx, "Upgrade transaction should exist"
+    assert_not_nil upgrade_tx.expires_at,
+      "REGRESSION: Upgrade to expiring plan MUST set expires_at. " \
+      "This was the CRITICAL bug from PR review - credits would never expire!"
+
+    # Verify expiration is approximately 1 month + grace period from now
+    grace = UsageCredits.configuration.fulfillment_grace_period
+    expected_min = Time.current + 1.month - 1.minute
+    expected_max = Time.current + 1.month + grace + 1.minute
+    assert upgrade_tx.expires_at >= expected_min, "Expiration should be at least 1 month away"
+    assert upgrade_tx.expires_at <= expected_max, "Expiration should be within 1 month + grace period"
+  end
+
+  test "REGRESSION: upgrade credits do NOT expire when new plan has unused_credits rollover" do
+    # Setup: User on expiring plan
+    user = User.create!(email: "regression_expire2@example.com", name: "Regression Test 2")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_regression_expire2"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_regression_expire2",
+      processor_plan: "pro_plan_monthly",  # Credits DO expire
+      status: "active",
+      quantity: 1
+    )
+
+    # Verify initial credits expire
+    initial_tx = wallet.transactions.find_by(category: "subscription_credits")
+    assert_not_nil initial_tx.expires_at, "Pro plan credits should have expiration"
+
+    # Upgrade to rollover plan (more credits, no expiration)
+    subscription.update!(processor_plan: "rollover_plan_monthly")
+
+    # Upgrade credits should NOT expire since new plan is rollover
+    upgrade_tx = wallet.transactions.find_by(category: "subscription_upgrade")
+    assert_not_nil upgrade_tx, "Upgrade transaction should exist"
+    assert_nil upgrade_tx.expires_at,
+      "REGRESSION: Upgrade to rollover plan should NOT set expires_at"
+  end
+
+  test "REGRESSION: upgrade from expiring to expiring plan sets correct expiration" do
+    user = User.create!(email: "regression_expire3@example.com", name: "Regression Test 3")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_regression_expire3"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_regression_expire3",
+      processor_plan: "pro_plan_monthly",  # 500 credits, expires
+      status: "active",
+      quantity: 1
+    )
+
+    # Upgrade to premium (also expires)
+    subscription.update!(processor_plan: "premium_plan_monthly")
+
+    upgrade_tx = wallet.transactions.find_by(category: "subscription_upgrade")
+    assert_not_nil upgrade_tx, "Upgrade transaction should exist"
+    assert_not_nil upgrade_tx.expires_at,
+      "REGRESSION: Upgrade from expiring to expiring plan MUST set expires_at"
+  end
+
+  # REVIEWER ISSUE #2: Nil Old Plan Handling (HIGH)
+  # Location: pay_subscription_extension.rb:282-290 (original code)
+  # When upgrading from a non-credit plan to a credit plan, old_plan is nil
+  # and the code fell through to the else branch without granting credits.
+
+  test "REGRESSION: swap from non-credit plan to credit plan does not double-award" do
+    # This tests the CRITICAL bug where swapping from a non-credit plan to a credit plan
+    # would trigger BOTH handle_initial_award_and_fulfillment_setup AND handle_plan_change,
+    # resulting in double credit awards.
+    #
+    # The fix: plan_changed? should only return true if OLD plan was a credit plan.
+    # Non-credit → credit should be handled ONLY by handle_initial_award_and_fulfillment_setup.
+
+    user = User.create!(email: "regression_noncredit_to_credit@example.com", name: "NonCredit To Credit")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_regression_noncredit_to_credit"
+    )
+
+    # Create subscription with a non-credit plan first
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_regression_noncredit_to_credit",
+      processor_plan: "business_plan_no_credits",  # Not in UsageCredits config
+      status: "active",
+      quantity: 1
+    )
+
+    # No credits awarded (plan not in config)
+    assert_equal 0, wallet.reload.credits
+
+    # No fulfillment created for non-credit plan
+    assert_nil UsageCredits::Fulfillment.find_by(source: subscription)
+
+    # User swaps to a credit plan
+    subscription.update!(processor_plan: "pro_plan_monthly")
+
+    # Should award EXACTLY 600 credits (500 + 100 bonus), NOT MORE
+    # The bug was: 1100 credits (600 from initial + 500 from upgrade)
+    assert_equal 600, wallet.reload.credits,
+      "REGRESSION: Swap from non-credit to credit should award exactly 600 credits (500 + 100 bonus). " \
+      "If this is higher, handle_plan_change is incorrectly triggering for non-credit → credit swaps."
+
+    # Should have fulfillment now
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_not_nil fulfillment
+
+    # Should NOT have upgrade transaction (initial setup handles it)
+    upgrade_tx = wallet.transactions.find_by(category: "subscription_upgrade")
+    assert_nil upgrade_tx,
+      "REGRESSION: Should not have 'subscription_upgrade' transaction for non-credit → credit swap. " \
+      "This case should be handled by initial setup, not plan change."
+
+    # Should have normal subscription_credits and signup_bonus
+    assert_not_nil wallet.transactions.find_by(category: "subscription_credits")
+    assert_not_nil wallet.transactions.find_by(category: "subscription_signup_bonus")
+  end
+
+  test "REGRESSION: plan_changed guard does not fire on initial subscription creation" do
+    # This verifies we don't double-award credits on new subscriptions
+    user = User.create!(email: "regression_guard@example.com", name: "Regression Guard")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_regression_guard"
+    )
+
+    # When subscription is created, old_plan_id is nil
+    # plan_changed? should return false, not trigger upgrade logic
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_regression_guard",
+      processor_plan: "pro_plan_monthly",  # 500 credits + 100 bonus = 600
+      status: "active",
+      quantity: 1
+    )
+
+    # Should ONLY have 600 credits, not more
+    # THE BUG: Without the nil check, plan_changed? would fire and grant 500 MORE
+    assert_equal 600, wallet.reload.credits,
+      "REGRESSION: Initial subscription should award exactly 600 credits (500 + 100 bonus), " \
+      "not more. plan_changed? should NOT fire on initial creation."
+
+    # Should have subscription_credits and signup_bonus, but NOT subscription_upgrade
+    assert_not_nil wallet.transactions.find_by(category: "subscription_credits")
+    assert_not_nil wallet.transactions.find_by(category: "subscription_signup_bonus")
+    assert_nil wallet.transactions.find_by(category: "subscription_upgrade"),
+      "REGRESSION: Should NOT have upgrade transaction on initial subscription"
+  end
+
+  # REVIEWER ISSUE #3: plan_changed? Guard Issue (MEDIUM)
+  # Location: pay_subscription_extension.rb:88-90 (original code)
+  # Only checks if NEW plan provides credits. Downgrade from credit plan to
+  # non-credit plan won't trigger handle_plan_change.
+
+  test "REGRESSION: downgrade from credit plan to non-credit plan triggers plan change" do
+    user = User.create!(email: "regression_noncredit@example.com", name: "Regression NonCredit")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_regression_noncredit"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_regression_noncredit",
+      processor_plan: "premium_plan_monthly",
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_not_nil fulfillment
+    original_stops_at = fulfillment.stops_at
+
+    # THE BUG: Without the fix, downgrading to non-credit plan wouldn't trigger
+    # handle_plan_change because provides_credits? would return false
+    subscription.update!(processor_plan: "enterprise_no_credits")
+
+    fulfillment.reload
+    # THE FIX: Fulfillment should be scheduled to stop
+    assert_not_nil fulfillment.metadata["stopped_reason"],
+      "REGRESSION: Downgrade to non-credit plan MUST stop fulfillment. " \
+      "Without this, FulfillmentJob would keep awarding old plan credits!"
+    assert_equal "downgrade_to_non_credit_plan", fulfillment.metadata["stopped_reason"]
+    assert fulfillment.stops_at <= 30.days.from_now,
+      "REGRESSION: Fulfillment should stop at end of current period"
+  end
+
+  test "REGRESSION: downgrade to non-credit plan preserves existing credits" do
+    user = User.create!(email: "regression_preserve@example.com", name: "Regression Preserve")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_regression_preserve"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_regression_preserve",
+      processor_plan: "premium_plan_monthly",  # 2000 + 200 = 2200
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    initial_credits = wallet.reload.credits
+    assert_equal 2200, initial_credits
+
+    # Downgrade to non-credit plan
+    subscription.update!(processor_plan: "basic_no_credits")
+
+    # Credits should be PRESERVED (no clawback)
+    assert_equal initial_credits, wallet.reload.credits,
+      "REGRESSION: Downgrade to non-credit plan should preserve credits (no clawback)"
+  end
+
+  # ========================================
+  # EDGE CASES: REVIEWER'S SUGGESTED TESTS
+  # ========================================
+
+  test "lateral plan change same credits different period updates metadata only" do
+    UsageCredits.configure do |config|
+      config.subscription_plan :test_pro_weekly do
+        processor_plan(:fake_processor, "pro_plan_weekly")
+        gives 500.credits.every(:week)  # Same 500 credits as pro monthly
+        unused_credits :expire
+      end
+    end
+
+    user = User.create!(email: "lateral_period@example.com", name: "Lateral Period")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_lateral_period"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_lateral_period",
+      processor_plan: "pro_plan_monthly",  # 500 credits
+      status: "active",
+      quantity: 1
+    )
+
+    initial_credits = wallet.reload.credits  # 600 (500 + 100 bonus)
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+
+    # Change to weekly plan (same credits, different period)
+    assert_no_difference -> { wallet.reload.credits } do
+      subscription.update!(processor_plan: "pro_plan_weekly")
+    end
+
+    # Metadata updated, no credits granted
+    fulfillment.reload
+    assert_equal "pro_plan_weekly", fulfillment.metadata["plan"]
+    assert_nil wallet.transactions.find_by(category: "subscription_upgrade"),
+      "Lateral change should not create upgrade transaction"
+  end
+
+  test "cancellation with pending downgrade works correctly" do
+    user = User.create!(email: "cancel_pending@example.com", name: "Cancel Pending")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_cancel_pending"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_cancel_pending",
+      processor_plan: "premium_plan_monthly",
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    # Schedule a downgrade
+    subscription.update!(processor_plan: "pro_plan_monthly")
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_equal "pro_plan_monthly", fulfillment.metadata["pending_plan_change"]
+
+    # Now cancel the subscription
+    subscription.update!(status: "canceled", ends_at: 30.days.from_now)
+
+    # Fulfillment should have stops_at set - pending change becomes moot
+    # Note: stopped? returns true only when stops_at <= Time.current
+    fulfillment.reload
+    assert_not_nil fulfillment.stops_at, "Fulfillment should have stops_at set after cancellation"
+    assert fulfillment.stops_at <= 31.days.from_now, "Fulfillment stops_at should be at or before cancellation date"
+    # The pending_plan_change remains in metadata but becomes irrelevant since fulfillment is stopping
+  end
+
+  test "upgrade then immediate downgrade handles pending correctly" do
+    user = User.create!(email: "up_down@example.com", name: "Up Down")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_up_down"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_up_down",
+      processor_plan: "pro_plan_monthly",  # 500 + 100 = 600
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    assert_equal 600, wallet.reload.credits
+
+    # Upgrade to premium (immediate credits)
+    subscription.update!(processor_plan: "premium_plan_monthly")
+    assert_equal 2600, wallet.reload.credits
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"]
+
+    # Immediately downgrade back (scheduled, no refund)
+    subscription.update!(processor_plan: "pro_plan_monthly")
+    assert_equal 2600, wallet.reload.credits  # No change
+
+    fulfillment.reload
+    # Should have pending downgrade scheduled
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"]  # Still premium
+    assert_equal "pro_plan_monthly", fulfillment.metadata["pending_plan_change"]
+  end
+
+  test "REGRESSION: upgrade clears pending downgrade" do
+    # This tests the bug where a user schedules a downgrade, then upgrades again
+    # before renewal. The pending_plan_change would stick and get applied on renewal,
+    # switching them back unexpectedly. Upgrade should clear pending downgrades.
+
+    user = User.create!(email: "upgrade_clears_pending@example.com", name: "Upgrade Clears Pending")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_upgrade_clears_pending"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_upgrade_clears_pending",
+      processor_plan: "premium_plan_monthly",  # 2000 + 200 = 2200
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+
+    # 1. Schedule a downgrade to pro
+    subscription.update!(processor_plan: "pro_plan_monthly")
+
+    fulfillment.reload
+    assert_equal "pro_plan_monthly", fulfillment.metadata["pending_plan_change"],
+      "Downgrade should be scheduled"
+
+    # 2. User changes mind and upgrades back to premium
+    subscription.update!(processor_plan: "premium_plan_monthly")
+
+    fulfillment.reload
+    # The pending downgrade should be CLEARED
+    assert_nil fulfillment.metadata["pending_plan_change"],
+      "REGRESSION: Upgrade should clear pending downgrade. Otherwise the downgrade " \
+      "would apply on renewal, switching user back unexpectedly!"
+    assert_nil fulfillment.metadata["plan_change_at"],
+      "REGRESSION: Upgrade should clear plan_change_at as well"
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"],
+      "Plan metadata should reflect the upgrade"
+
+    # 3. Simulate renewal - should stay on premium
+    subscription.update!(
+      current_period_end: 60.days.from_now,
+      ends_at: nil
+    )
+
+    fulfillment.reload
+    # Should still be on premium, not switched to pro
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"],
+      "After renewal, should still be on premium (pending was cleared)"
+  end
+
+  test "downgrade during trial period does not trigger plan_changed" do
+    # NOTE: Plan changes during trial (status="trialing") are NOT currently handled
+    # by the plan_changed? logic, which requires status="active". This is intentional
+    # because during trial, the user hasn't paid yet and billing works differently.
+    # The plan change would only take effect when the subscription becomes active.
+
+    user = User.create!(email: "trial_downgrade@example.com", name: "Trial Downgrade")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_trial_downgrade"
+    )
+
+    trial_ends = 7.days.from_now
+
+    # Start with premium trial (no trial_includes in premium config)
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_trial_downgrade",
+      processor_plan: "premium_plan_monthly",
+      status: "trialing",
+      trial_ends_at: trial_ends,
+      quantity: 1
+    )
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_not_nil fulfillment
+
+    # Change to pro during trial
+    subscription.update!(processor_plan: "pro_plan_monthly")
+
+    fulfillment.reload
+    # Since status="trialing" (not "active"), plan_changed? returns false
+    # The plan change is NOT handled by UsageCredits during trial
+    # The fulfillment metadata is NOT updated because handle_plan_change didn't fire
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"],
+      "Plan change during trial should NOT trigger handle_plan_change (status != active)"
+    assert_nil fulfillment.metadata["pending_plan_change"],
+      "No pending change scheduled during trial"
+  end
+
+  test "upgrade during trial period does not trigger plan_changed" do
+    # NOTE: Plan changes during trial (status="trialing") are NOT currently handled
+    # by the plan_changed? logic, which requires status="active". This is intentional
+    # because during trial, the user hasn't paid yet and billing works differently.
+    #
+    # During trial, only trial_includes credits are awarded. The full subscription
+    # credits are only granted when the trial ends and status becomes "active".
+
+    user = User.create!(email: "trial_upgrade@example.com", name: "Trial Upgrade")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_trial_upgrade"
+    )
+
+    trial_ends = 7.days.from_now
+
+    # Start with pro trial (has trial_includes 50)
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_trial_upgrade",
+      processor_plan: "pro_plan_monthly",
+      status: "trialing",
+      trial_ends_at: trial_ends,
+      quantity: 1
+    )
+
+    # Should have 50 trial credits
+    assert_equal 50, wallet.reload.credits
+
+    # Upgrade to premium during trial
+    subscription.update!(processor_plan: "premium_plan_monthly")
+
+    # Since status="trialing" (not "active"), plan_changed? returns false
+    # No upgrade credits granted during trial
+    assert_equal 50, wallet.reload.credits,
+      "Plan change during trial should NOT trigger handle_plan_change (status != active)"
+
+    upgrade_tx = wallet.transactions.find_by(category: "subscription_upgrade")
+    assert_nil upgrade_tx, "No upgrade transaction during trial"
+
+    # The new plan will take effect when subscription becomes active
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    # Metadata still points to original plan since handle_plan_change didn't fire
+    assert_equal "pro_plan_monthly", fulfillment.metadata["plan"]
+  end
+
+  # ========================================
+  # EDGE CASES: FULFILLMENT INTEGRITY
+  # ========================================
+
+  test "fulfillment metadata stays consistent through multiple changes" do
+    user = User.create!(email: "metadata_consistent@example.com", name: "Metadata Consistent")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_metadata_consistent"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_metadata_consistent",
+      processor_plan: "pro_plan_monthly",
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_equal "pro_plan_monthly", fulfillment.metadata["plan"]
+    assert_equal subscription.id, fulfillment.metadata["subscription_id"]
+
+    # Upgrade
+    subscription.update!(processor_plan: "premium_plan_monthly")
+    fulfillment.reload
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"]
+    assert_equal subscription.id, fulfillment.metadata["subscription_id"]  # Preserved
+
+    # Downgrade (scheduled)
+    subscription.update!(processor_plan: "pro_plan_monthly")
+    fulfillment.reload
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"]  # Still premium
+    assert_equal "pro_plan_monthly", fulfillment.metadata["pending_plan_change"]
+    assert_equal subscription.id, fulfillment.metadata["subscription_id"]  # Preserved
+  end
+
+  test "pending plan change metadata is cleared after application" do
+    user = User.create!(email: "pending_clear@example.com", name: "Pending Clear")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_pending_clear"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_pending_clear",
+      processor_plan: "premium_plan_monthly",
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    # Schedule downgrade
+    subscription.update!(processor_plan: "pro_plan_monthly")
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_not_nil fulfillment.metadata["pending_plan_change"]
+    assert_not_nil fulfillment.metadata["plan_change_at"]
+
+    # Simulate renewal
+    subscription.update!(
+      current_period_end: 60.days.from_now,
+      ends_at: nil
+    )
+
+    fulfillment.reload
+    # Pending change should be applied and cleared
+    assert_equal "pro_plan_monthly", fulfillment.metadata["plan"]
+    assert_nil fulfillment.metadata["pending_plan_change"]
+    assert_nil fulfillment.metadata["plan_change_at"]
+  end
+
+  # ========================================
+  # EDGE CASES: TRANSACTION CATEGORIES
+  # ========================================
+
+  test "upgrade transaction has correct category and metadata" do
+    user = User.create!(email: "tx_category@example.com", name: "TX Category")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_tx_category"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_tx_category",
+      processor_plan: "pro_plan_monthly",
+      status: "active",
+      quantity: 1
+    )
+
+    subscription.update!(processor_plan: "premium_plan_monthly")
+
+    upgrade_tx = wallet.transactions.find_by(category: "subscription_upgrade")
+    assert_not_nil upgrade_tx
+
+    assert_equal "subscription_upgrade", upgrade_tx.category
+    assert_equal 2000, upgrade_tx.amount
+    assert_equal "premium_plan_monthly", upgrade_tx.metadata["plan"]
+    assert_equal "plan_upgrade", upgrade_tx.metadata["reason"]
+    assert_equal subscription.id, upgrade_tx.metadata["subscription_id"]
+    assert_not_nil upgrade_tx.metadata["fulfilled_at"]
+  end
+
+  test "initial subscription creates correct transaction categories" do
+    user = User.create!(email: "tx_initial@example.com", name: "TX Initial")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_tx_initial"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_tx_initial",
+      processor_plan: "pro_plan_monthly",  # Has signup_bonus
+      status: "active",
+      quantity: 1
+    )
+
+    # Should have two transactions: subscription_credits and subscription_signup_bonus
+    credits_tx = wallet.transactions.find_by(category: "subscription_credits")
+    bonus_tx = wallet.transactions.find_by(category: "subscription_signup_bonus")
+    upgrade_tx = wallet.transactions.find_by(category: "subscription_upgrade")
+
+    assert_not_nil credits_tx, "Should have subscription_credits transaction"
+    assert_not_nil bonus_tx, "Should have subscription_signup_bonus transaction"
+    assert_nil upgrade_tx, "Should NOT have subscription_upgrade on initial"
+
+    assert_equal 500, credits_tx.amount
+    assert_equal 100, bonus_tx.amount
+  end
+
+  # ========================================
+  # EDGE CASES: CONCURRENT SCENARIOS
+  # ========================================
+
+  test "renewal during scheduled downgrade applies change correctly" do
+    user = User.create!(email: "concurrent_renew@example.com", name: "Concurrent Renew")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_concurrent_renew"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_concurrent_renew",
+      processor_plan: "premium_plan_monthly",
+      status: "active",
+      quantity: 1,
+      current_period_end: 1.day.from_now  # About to renew
+    )
+
+    # Schedule downgrade
+    subscription.update!(processor_plan: "pro_plan_monthly")
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_not_nil fulfillment.metadata["pending_plan_change"]
+
+    # Renewal webhook arrives
+    subscription.update!(
+      current_period_end: 31.days.from_now,
+      ends_at: nil
+    )
+
+    fulfillment.reload
+    # Downgrade should be applied on renewal
+    assert_equal "pro_plan_monthly", fulfillment.metadata["plan"]
+    assert_nil fulfillment.metadata["pending_plan_change"]
+
+    # Next fulfillment should award pro plan credits (500), not premium (2000)
+    # We verify the metadata is correct for FulfillmentService
+  end
+
+  test "status change without plan change does not trigger plan_changed" do
+    user = User.create!(email: "status_only@example.com", name: "Status Only")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_status_only"
+    )
+
+    # Start as incomplete
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_status_only",
+      processor_plan: "pro_plan_monthly",
+      status: "incomplete",
+      quantity: 1
+    )
+
+    assert_equal 0, wallet.reload.credits  # No credits for incomplete
+
+    # Activate (this should use initial setup, not plan change)
+    subscription.update!(status: "active")
+
+    # Should have exactly 600 (500 + 100 bonus)
+    assert_equal 600, wallet.reload.credits
+
+    # Should NOT have upgrade transaction
+    assert_nil wallet.transactions.find_by(category: "subscription_upgrade")
+  end
+
+  # ========================================
+  # EDGE CASES: BOUNDARY CONDITIONS
+  # ========================================
+
+  test "upgrade to plan with zero signup bonus works correctly" do
+    # test_rollover has no signup_bonus configured
+    user = User.create!(email: "no_bonus@example.com", name: "No Bonus")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_no_bonus"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_no_bonus",
+      processor_plan: "pro_plan_monthly",  # 500 + 100 bonus = 600
+      status: "active",
+      quantity: 1
+    )
+
+    assert_equal 600, wallet.reload.credits
+
+    # Upgrade to rollover (1000 credits, no signup bonus)
+    subscription.update!(processor_plan: "rollover_plan_monthly")
+
+    # Should get 1000 upgrade credits
+    assert_equal 1600, wallet.reload.credits
+
+    upgrade_tx = wallet.transactions.find_by(category: "subscription_upgrade")
+    assert_equal 1000, upgrade_tx.amount
+  end
+
+  test "downgrade handles missing current_period_end gracefully" do
+    user = User.create!(email: "no_period_end@example.com", name: "No Period End")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_no_period_end"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_no_period_end",
+      processor_plan: "premium_plan_monthly",
+      status: "active",
+      quantity: 1,
+      current_period_end: nil  # Edge case: no period end set
+    )
+
+    # Downgrade
+    subscription.update!(processor_plan: "pro_plan_monthly")
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    # Should use Time.current as fallback
+    assert_not_nil fulfillment.metadata["pending_plan_change"]
+    assert_not_nil fulfillment.metadata["plan_change_at"]
+  end
+
+  test "non-credit to non-credit plan change is ignored" do
+    user = User.create!(email: "noncredit_both@example.com", name: "Non Credit Both")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_noncredit_both"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_noncredit_both",
+      processor_plan: "business_no_credits",  # Not in config
+      status: "active",
+      quantity: 1
+    )
+
+    assert_equal 0, wallet.reload.credits
+    assert_nil UsageCredits::Fulfillment.find_by(source: subscription)
+
+    # Change to another non-credit plan
+    subscription.update!(processor_plan: "enterprise_no_credits")
+
+    # Nothing should happen
+    assert_equal 0, wallet.reload.credits
+    assert_nil UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_nil wallet.transactions.find_by(category: "subscription_upgrade")
+  end
+
+  # ========================================
+  # EDGE CASES: WALLET VALIDATION
+  # ========================================
+
+  test "plan change without valid wallet is handled gracefully" do
+    user = User.create!(email: "no_wallet_change@example.com", name: "No Wallet Change")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_no_wallet_change"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_no_wallet_change",
+      processor_plan: "pro_plan_monthly",
+      status: "active",
+      quantity: 1
+    )
+
+    initial_credits = wallet.reload.credits
+
+    # Destroy wallet
+    wallet.destroy!
+    user.reload
+
+    # Plan change should not crash
+    assert_nothing_raised do
+      subscription.update!(processor_plan: "premium_plan_monthly")
+    end
+  end
 end

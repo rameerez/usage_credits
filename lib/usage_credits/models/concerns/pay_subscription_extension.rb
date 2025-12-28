@@ -35,8 +35,8 @@ module UsageCredits
 
       after_commit :update_fulfillment_on_renewal,        if: :subscription_renewed?
       after_commit :update_fulfillment_on_cancellation,   if: :subscription_canceled?
+      after_commit :handle_plan_change,                   if: :plan_changed?
 
-      # TODO: handle plan changes (upgrades / downgrades)
       # TODO: handle paused subscriptions (may still have an "active" status?)
     end
 
@@ -83,6 +83,10 @@ module UsageCredits
     # the sub just gets its `ends_at` set from nil to the actual cancellation date.
     def subscription_canceled?
       saved_change_to_status? && status == "canceled"
+    end
+
+    def plan_changed?
+      saved_change_to_processor_plan? && status == "active" && provides_credits?
     end
 
     # =========================================
@@ -245,6 +249,25 @@ module UsageCredits
       # check if the plan expires credits or not, and if rollover we may need to add a negative transaction to offset
       # the remaining balance)
 
+    end
+
+    # Handle plan changes (upgrades/downgrades)
+    def handle_plan_change
+      return unless has_valid_wallet?
+
+      fulfillment = UsageCredits::Fulfillment.find_by(source: self)
+      return unless fulfillment
+
+      ActiveRecord::Base.transaction do
+        # Update fulfillment metadata with new plan
+        fulfillment.update!(
+          metadata: fulfillment.metadata.merge(plan: processor_plan)
+        )
+        Rails.logger.info "Fulfillment #{fulfillment.id} plan updated to #{processor_plan}"
+      rescue => e
+        Rails.logger.error "Failed to update fulfillment plan for subscription #{id}: #{e.message}"
+        raise ActiveRecord::Rollback
+      end
     end
 
   end

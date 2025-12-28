@@ -42,6 +42,13 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
         gives 1000.credits.every(:month)
         unused_credits :rollover
       end
+
+      config.subscription_plan :test_premium do
+        processor_plan(:fake_processor, "premium_plan_monthly")
+        gives 2000.credits.every(:month)
+        signup_bonus 200.credits
+        unused_credits :expire
+      end
     end
   end
 
@@ -619,5 +626,40 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
 
     assert_equal subscription.id, fulfillment.source_id
     assert fulfillment.metadata["trial"]
+  end
+
+  # ========================================
+  # SUBSCRIPTION PLAN CHANGES
+  # ========================================
+
+  test "plan change updates fulfillment metadata" do
+    # Create a fresh user with a pro subscription
+    user = User.create!(email: "planchange@example.com", name: "Plan Change User")
+    user.credit_wallet  # Ensure wallet exists
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_planchange_test"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_planchange_test",
+      processor_plan: "pro_plan_monthly",  # Start with pro plan
+      status: "active",
+      quantity: 1
+    )
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_equal "pro_plan_monthly", fulfillment.metadata["plan"]
+
+    # Swap to premium plan
+    subscription.update!(processor_plan: "premium_plan_monthly")
+
+    # Fulfillment should now reference the new plan
+    fulfillment.reload
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"]
   end
 end

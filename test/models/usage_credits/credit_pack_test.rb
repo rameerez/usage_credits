@@ -396,4 +396,151 @@ class UsageCredits::CreditPackTest < ActiveSupport::TestCase
     assert_equal 0.99, pack.price
     assert pack.validate!
   end
+
+  # ========================================
+  # STRIPE CHECKOUT SESSION CREATION
+  # ========================================
+
+  test "create_checkout_session uses payment mode for one-time purchases" do
+    pack = UsageCredits::CreditPack.new(:starter)
+    pack.gives(1000)
+    pack.costs(49.dollars)
+
+    user = users(:rich_user)
+
+    # Mock the payment processor to verify the arguments passed
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    # Verify payment mode is used (not subscription mode)
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      assert_equal "payment", args[:mode], "Credit packs should use payment mode"
+      assert args[:line_items].present?, "line_items should be present"
+
+      # Verify line items structure
+      line_item = args[:line_items].first
+      assert line_item[:price_data].present?, "price_data should be present for dynamic pricing"
+      assert_equal "usd", line_item[:price_data][:currency]
+      assert_equal 4900, line_item[:price_data][:unit_amount]
+      assert_equal 1, line_item[:quantity]
+
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      pack.create_checkout_session(user)
+    end
+
+    mock_payment_processor.verify
+  end
+
+  test "create_checkout_session passes payment_intent_data for payment mode" do
+    pack = UsageCredits::CreditPack.new(:pro)
+    pack.gives(5000)
+    pack.costs(99.dollars)
+
+    user = users(:rich_user)
+
+    # Mock the payment processor to verify payment_intent_data is passed
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    # For payment mode, payment_intent_data IS allowed and should be present
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      assert_equal "payment", args[:mode]
+
+      # payment_intent_data is VALID for payment mode (unlike subscription mode)
+      assert args.key?(:payment_intent_data), "payment_intent_data should be present for payment mode"
+      assert args[:payment_intent_data][:metadata].present?, "payment_intent_data metadata should be present"
+
+      # Verify metadata contains pack info
+      metadata = args[:payment_intent_data][:metadata]
+      assert_equal "credit_pack", metadata[:purchase_type]
+      assert_equal :pro, metadata[:pack_name]
+      assert_equal 5000, metadata[:credits]
+
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      pack.create_checkout_session(user)
+    end
+
+    mock_payment_processor.verify
+  end
+
+  test "create_checkout_session includes all pack configuration in metadata" do
+    pack = UsageCredits::CreditPack.new(:enterprise)
+    pack.gives(10_000)
+    pack.bonus(2_000)
+    pack.costs(199.dollars)
+
+    user = users(:rich_user)
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      metadata = args[:payment_intent_data][:metadata]
+
+      # Verify all pack configuration is included
+      assert_equal "credit_pack", metadata[:purchase_type]
+      assert_equal :enterprise, metadata[:pack_name]
+      assert_equal 10_000, metadata[:credits]
+      assert_equal 2_000, metadata[:bonus_credits]
+      assert_equal 19900, metadata[:price_cents]
+      assert_equal "USD", metadata[:price_currency]
+
+      # Also verify session-level metadata
+      assert_equal metadata, args[:metadata], "Session metadata should match payment_intent_data metadata"
+
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      pack.create_checkout_session(user)
+    end
+
+    mock_payment_processor.verify
+  end
+
+  test "create_checkout_session raises when user has no payment processor" do
+    pack = UsageCredits::CreditPack.new(:test)
+    pack.gives(100)
+    pack.costs(10.dollars)
+
+    user_without_payment = Object.new
+
+    error = assert_raises(ArgumentError) do
+      pack.create_checkout_session(user_without_payment)
+    end
+
+    assert_includes error.message, "must have a payment processor"
+  end
+
+  test "create_checkout_session includes product name and description" do
+    pack = UsageCredits::CreditPack.new(:starter)
+    pack.gives(1000)
+    pack.costs(49.dollars)
+
+    user = users(:rich_user)
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      product_data = args[:line_items].first[:price_data][:product_data]
+
+      assert_equal "Starter pack", product_data[:name]
+      assert_equal "1000 credits", product_data[:description]
+
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      pack.create_checkout_session(user)
+    end
+
+    mock_payment_processor.verify
+  end
 end

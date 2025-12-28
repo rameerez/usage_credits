@@ -532,4 +532,148 @@ class UsageCredits::CreditSubscriptionPlanTest < ActiveSupport::TestCase
 
     assert_kind_of ActiveSupport::Duration, parsed
   end
+
+  # ========================================
+  # STRIPE CHECKOUT SESSION CREATION
+  # ========================================
+
+  test "create_stripe_checkout_session passes subscription_data metadata" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:premium)
+    plan.gives(1000).every(:month)
+    plan.signup_bonus(200)
+    plan.trial_includes(50)
+    plan.stripe_price("price_123")
+
+    user = users(:rich_user)
+
+    # Mock the payment processor to verify the arguments passed
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    # Expect checkout to be called with subscription_data but NOT payment_intent_data
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      assert_equal "subscription", args[:mode]
+      assert_equal "price_123", args[:line_items].first[:price]
+      assert_equal 1, args[:line_items].first[:quantity]
+      assert args[:subscription_data].present?, "subscription_data should be present"
+      assert args[:subscription_data][:metadata].present?, "subscription_data metadata should be present"
+
+      # Verify metadata contains all required fields
+      metadata = args[:subscription_data][:metadata]
+      assert_equal "credit_subscription", metadata[:purchase_type]
+      assert_equal :premium, metadata[:subscription_name]
+      assert_equal 1000, metadata[:credits_per_period]
+      assert_equal 200, metadata[:signup_bonus_credits]
+      assert_equal 50, metadata[:trial_credits]
+
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      plan.create_stripe_checkout_session(user, "price_123", "/success", "/cancel")
+    end
+
+    mock_payment_processor.verify
+  end
+
+  test "create_stripe_checkout_session does not pass payment_intent_data for subscription mode" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:basic)
+    plan.gives(500).every(:month)
+    plan.stripe_price("price_456")
+
+    user = users(:rich_user)
+
+    # Mock the payment processor to verify payment_intent_data is NOT passed
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    # Verify that payment_intent_data is NOT in the arguments
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      # According to Stripe API, payment_intent_data is only allowed for mode: "payment"
+      # For mode: "subscription", it should not be present
+      refute args.key?(:payment_intent_data), "payment_intent_data should not be present for subscription mode checkout sessions"
+
+      # But subscription_data should be present
+      assert args.key?(:subscription_data), "subscription_data should be present for subscription mode"
+
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      plan.create_stripe_checkout_session(user, "price_456", "/success", "/cancel")
+    end
+
+    mock_payment_processor.verify
+  end
+
+  test "create_checkout_session delegates to create_stripe_checkout_session for stripe processor" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:test)
+    plan.gives(500).every(:month)
+    plan.stripe_price("price_789")
+
+    user = users(:rich_user)
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |_args|
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      result = plan.create_checkout_session(
+        user,
+        success_url: "/success",
+        cancel_url: "/cancel",
+        processor: :stripe
+      )
+
+      assert_equal "https://checkout.stripe.com/test", result.url
+    end
+
+    mock_payment_processor.verify
+  end
+
+  test "create_checkout_session includes all plan configuration in metadata" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:enterprise)
+    plan.gives(10_000).every(:month)
+    plan.signup_bonus(1_000)
+    plan.trial_includes(500)
+    plan.unused_credits(:rollover)
+    plan.expire_after(30.days)
+    plan.meta(tier: "enterprise", max_users: 100)
+    plan.stripe_price("price_enterprise")
+
+    user = users(:rich_user)
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      metadata = args[:subscription_data][:metadata]
+
+      # Verify all configuration is included
+      assert_equal "credit_subscription", metadata[:purchase_type]
+      assert_equal :enterprise, metadata[:subscription_name]
+      assert_equal 10_000, metadata[:credits_per_period]
+      assert_equal 1_000, metadata[:signup_bonus_credits]
+      assert_equal 500, metadata[:trial_credits]
+      assert_equal true, metadata[:rollover_enabled]
+      assert_equal true, metadata[:expire_credits_on_cancel]
+      assert_equal 30.days.to_i, metadata[:credit_expiration_period]
+      assert_equal({ tier: "enterprise", max_users: 100 }, metadata[:metadata])
+
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      plan.create_checkout_session(
+        user,
+        success_url: "/success",
+        cancel_url: "/cancel"
+      )
+    end
+
+    mock_payment_processor.verify
+  end
 end

@@ -35,7 +35,7 @@ module UsageCredits
 
       after_commit :update_fulfillment_on_renewal,        if: :subscription_renewed?
       after_commit :update_fulfillment_on_cancellation,   if: :subscription_canceled?
-      after_commit :handle_plan_change,                   if: :plan_changed?
+      after_commit :handle_plan_change_wrapper
 
       # TODO: handle paused subscriptions (may still have an "active" status?)
     end
@@ -251,6 +251,12 @@ module UsageCredits
 
     end
 
+    # Wrapper to check condition and call handle_plan_change
+    def handle_plan_change_wrapper
+      return unless plan_changed?
+      handle_plan_change
+    end
+
     # Handle plan changes (upgrades/downgrades)
     def handle_plan_change
       return unless has_valid_wallet?
@@ -258,16 +264,64 @@ module UsageCredits
       fulfillment = UsageCredits::Fulfillment.find_by(source: self)
       return unless fulfillment
 
+      old_plan_id = saved_change_to_processor_plan[0]  # [old_value, new_value]
+      new_plan_id = processor_plan
+
+      old_plan = UsageCredits.configuration.find_subscription_plan_by_processor_id(old_plan_id)
+      new_plan = UsageCredits.configuration.find_subscription_plan_by_processor_id(new_plan_id)
+
+      return unless new_plan  # New plan doesn't provide credits
+
       ActiveRecord::Base.transaction do
-        # Update fulfillment metadata with new plan
-        fulfillment.update!(
-          metadata: fulfillment.metadata.merge(plan: processor_plan)
-        )
-        Rails.logger.info "Fulfillment #{fulfillment.id} plan updated to #{processor_plan}"
+        # Determine if this is an upgrade (more credits) or downgrade (fewer credits)
+        if old_plan && new_plan.credits_per_period > old_plan.credits_per_period
+          # UPGRADE: Grant new plan credits immediately
+          handle_plan_upgrade(new_plan, fulfillment)
+        elsif old_plan && new_plan.credits_per_period < old_plan.credits_per_period
+          # DOWNGRADE: Schedule for end of period (future enhancement)
+          handle_plan_downgrade(new_plan, fulfillment)
+        else
+          # Same credits amount (maybe different period?) - just update metadata
+          update_fulfillment_plan_metadata(fulfillment, new_plan_id)
+        end
       rescue => e
-        Rails.logger.error "Failed to update fulfillment plan for subscription #{id}: #{e.message}"
+        Rails.logger.error "Failed to handle plan change for subscription #{id}: #{e.message}"
+        Rails.logger.error e.backtrace.join("\n")
         raise ActiveRecord::Rollback
       end
+    end
+
+    def handle_plan_upgrade(new_plan, fulfillment)
+      wallet = customer.owner.credit_wallet
+
+      # Grant full new plan credits immediately
+      wallet.add_credits(
+        new_plan.credits_per_period,
+        category: "subscription_upgrade",
+        metadata: {
+          subscription_id: id,
+          plan: processor_plan,
+          reason: "plan_upgrade",
+          fulfilled_at: Time.current
+        }
+      )
+
+      # Update fulfillment metadata
+      update_fulfillment_plan_metadata(fulfillment, processor_plan)
+
+      Rails.logger.info "Subscription #{id} upgraded to #{processor_plan}, granted #{new_plan.credits_per_period} credits"
+    end
+
+    def handle_plan_downgrade(new_plan, fulfillment)
+      # For now, just update metadata (downgrade scheduling will be added later)
+      update_fulfillment_plan_metadata(fulfillment, processor_plan)
+      Rails.logger.info "Subscription #{id} downgraded to #{processor_plan}"
+    end
+
+    def update_fulfillment_plan_metadata(fulfillment, new_plan_id)
+      fulfillment.update!(
+        metadata: fulfillment.metadata.merge(plan: new_plan_id)
+      )
     end
 
   end

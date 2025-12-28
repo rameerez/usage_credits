@@ -662,4 +662,42 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     fulfillment.reload
     assert_equal "premium_plan_monthly", fulfillment.metadata["plan"]
   end
+
+  test "upgrade to higher plan grants immediate credits" do
+    # Create a fresh user with a pro subscription (500 credits/month)
+    user = User.create!(email: "upgrade@example.com", name: "Upgrade User")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_upgrade_test"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_upgrade_test",
+      processor_plan: "pro_plan_monthly",  # 500 credits + 100 signup bonus
+      status: "active",
+      quantity: 1
+    )
+
+    # Initial credits: 500 + 100 signup bonus = 600
+    assert_equal 600, wallet.reload.credits
+
+    # Upgrade to premium (2000 credits/month + 200 signup bonus, but no signup bonus on upgrade)
+    assert_difference -> { wallet.reload.credits }, 2000 do
+      subscription.update!(processor_plan: "premium_plan_monthly")
+    end
+
+    # Total should be 600 + 2000 = 2600
+    assert_equal 2600, wallet.reload.credits
+
+    # Should have a transaction for the upgrade
+    upgrade_tx = wallet.transactions.where(category: "subscription_upgrade").last
+    assert_not_nil upgrade_tx
+    assert_equal 2000, upgrade_tx.amount
+    assert_equal "premium_plan_monthly", upgrade_tx.metadata["plan"]
+  end
 end

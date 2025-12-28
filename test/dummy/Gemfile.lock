@@ -2,7 +2,7 @@ PATH
   remote: ../..
   specs:
     usage_credits (0.1.1)
-      pay (~> 8.3)
+      pay (>= 8.3, < 12.0)
       rails (>= 6.1)
 
 GEM
@@ -321,13 +321,19 @@ DEPENDENCIES
   awesome_print
   bootsnap
   brakeman
+  bundler (~> 2.0)
   debug
   importmap-rails
   jbuilder
   kamal
+  minitest (~> 5.0)
   propshaft
   puma (>= 5.0)
   rails (~> 8.0.1)
+  rake (~> 13.0)
+  rubocop (~> 1.0)
+  rubocop-minitest (~> 0.35)
+  rubocop-performance (~> 1.0)
   rubocop-rails-omakase
   solid_cable
   solid_cache

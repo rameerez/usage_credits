@@ -237,6 +237,7 @@ module UsageCredits
         if is_reactivation
           # Reactivate the existing stopped/scheduled-to-stop fulfillment
           # Merge metadata to preserve any custom keys while updating core fields
+          # Use string keys consistently to avoid duplicates after JSON serialization
           existing_reactivatable_fulfillment.update!(
             credits_last_fulfillment: total_credits_awarded,
             fulfillment_period: plan.fulfillment_period_display,
@@ -246,9 +247,9 @@ module UsageCredits
             metadata: existing_reactivatable_fulfillment.metadata
               .except("stopped_reason", "stopped_at", "pending_plan_change", "plan_change_at")
               .merge(
-                subscription_id: id,
-                plan: processor_plan,
-                reactivated_at: Time.current
+                "subscription_id" => id,
+                "plan" => processor_plan,
+                "reactivated_at" => Time.current
               )
           )
           fulfillment = existing_reactivatable_fulfillment
@@ -256,18 +257,19 @@ module UsageCredits
           Rails.logger.info "Reactivated fulfillment #{fulfillment.id} for subscription #{id}"
         else
           # Create new fulfillment
+          # Use string keys consistently to avoid duplicates after JSON serialization
           fulfillment = UsageCredits::Fulfillment.create!(
             wallet: wallet,
             source: self,
             fulfillment_type: "subscription",
             credits_last_fulfillment: total_credits_awarded,
             fulfillment_period: plan.fulfillment_period_display,
-            last_fulfilled_at: Time.now,
+            last_fulfilled_at: Time.current,
             next_fulfillment_at: next_fulfillment_at,
             stops_at: fullfillment_should_stop_at, # Pre-emptively set when the fulfillment will stop, in case we miss a future event (like sub cancellation)
             metadata: {
-              subscription_id: id,
-              plan: processor_plan,
+              "subscription_id" => id,
+              "plan" => processor_plan,
             }
           )
 
@@ -344,33 +346,49 @@ module UsageCredits
       fulfillment = UsageCredits::Fulfillment.find_by(source: self)
       return unless fulfillment
 
-      old_plan_id = saved_change_to_processor_plan[0]  # [old_value, new_value]
+      # Warn if current_period_end is nil for an active subscription - this is an edge case
+      # that could indicate incomplete data from the payment processor
+      if current_period_end.nil? && status == "active"
+        Rails.logger.warn "Subscription #{id} is active but current_period_end is nil - using Time.current as fallback for plan change scheduling"
+      end
+
+      # Get the current active plan (what the user is ACTUALLY on right now)
+      # This is crucial for handling multiple plan changes in one billing period
+      current_plan_id = fulfillment.metadata["plan"]
       new_plan_id = processor_plan
 
-      old_plan = UsageCredits.configuration.find_subscription_plan_by_processor_id(old_plan_id)
+      current_plan = UsageCredits.configuration.find_subscription_plan_by_processor_id(current_plan_id)
       new_plan = UsageCredits.configuration.find_subscription_plan_by_processor_id(new_plan_id)
 
       # Handle downgrade to a non-credit plan: schedule fulfillment stop for end of period
-      if new_plan.nil? && old_plan.present?
+      if new_plan.nil? && current_plan.present?
         handle_downgrade_to_non_credit_plan(fulfillment)
         return
       end
 
-      return unless new_plan  # Neither old nor new plan provides credits - nothing to do
+      return unless new_plan  # Neither current nor new plan provides credits - nothing to do
 
       ActiveRecord::Base.transaction do
-        # Determine if this is an upgrade (more credits) or downgrade (fewer credits)
-        old_credits = old_plan&.credits_per_period || 0
+        # FIRST: Check if returning to current plan (canceling a pending change)
+        # This must come first! Returning to current plan = no credits, just clear pending
+        # This matches Stripe's billing: no new charge means no new credits
+        if current_plan_id == new_plan_id
+          clear_pending_plan_change(fulfillment)
+          return
+        end
+
+        # Now compare credits to determine upgrade vs downgrade
+        current_credits = current_plan&.credits_per_period || 0
         new_credits = new_plan.credits_per_period
 
-        if new_credits > old_credits
+        if new_credits > current_credits
           # UPGRADE: Grant new plan credits immediately
           handle_plan_upgrade(new_plan, fulfillment)
-        elsif new_credits < old_credits
-          # DOWNGRADE: Schedule for end of period
+        elsif new_credits < current_credits
+          # DOWNGRADE: Schedule for end of period (overwrites any previous pending)
           handle_plan_downgrade(new_plan, fulfillment)
         else
-          # Same credits amount (maybe different period?) - just update metadata
+          # Same credits amount, different plan - update metadata immediately
           update_fulfillment_plan_metadata(fulfillment, new_plan_id)
         end
       rescue => e
@@ -407,10 +425,11 @@ module UsageCredits
 
       # Update fulfillment metadata AND clear any pending downgrade
       # If user had scheduled a downgrade but then upgrades, the upgrade takes precedence
+      # Use string keys consistently to avoid duplicates after JSON serialization
       fulfillment.update!(
         metadata: fulfillment.metadata
-          .merge(plan: processor_plan)
           .except("pending_plan_change", "plan_change_at")
+          .merge("plan" => processor_plan)
       )
 
       Rails.logger.info "Subscription #{id} upgraded to #{processor_plan}, granted #{new_plan.credits_per_period} credits"
@@ -421,10 +440,11 @@ module UsageCredits
       # User keeps current plan benefits until then
       schedule_time = current_period_end || Time.current
 
+      # Use string keys consistently to avoid duplicates after JSON serialization
       fulfillment.update!(
         metadata: fulfillment.metadata.merge(
-          pending_plan_change: processor_plan,
-          plan_change_at: schedule_time
+          "pending_plan_change" => processor_plan,
+          "plan_change_at" => schedule_time
         )
       )
 
@@ -438,11 +458,12 @@ module UsageCredits
       schedule_time = current_period_end || Time.current
 
       ActiveRecord::Base.transaction do
+        # Use string keys consistently to avoid duplicates after JSON serialization
         fulfillment.update!(
           stops_at: schedule_time,
           metadata: fulfillment.metadata.merge(
-            stopped_reason: "downgrade_to_non_credit_plan",
-            stopped_at: schedule_time
+            "stopped_reason" => "downgrade_to_non_credit_plan",
+            "stopped_at" => schedule_time
           )
         )
 
@@ -455,19 +476,33 @@ module UsageCredits
     end
 
     def update_fulfillment_plan_metadata(fulfillment, new_plan_id)
+      # Use string keys consistently to avoid duplicates after JSON serialization
       fulfillment.update!(
-        metadata: fulfillment.metadata.merge(plan: new_plan_id)
+        metadata: fulfillment.metadata.merge("plan" => new_plan_id)
       )
+    end
+
+    # Clear any pending plan change metadata
+    # Used when user upgrades back to their current plan after scheduling a downgrade
+    def clear_pending_plan_change(fulfillment)
+      return unless fulfillment.metadata["pending_plan_change"].present?
+
+      fulfillment.update!(
+        metadata: fulfillment.metadata.except("pending_plan_change", "plan_change_at")
+      )
+
+      Rails.logger.info "Subscription #{id} pending plan change cleared (returned to current plan)"
     end
 
     def apply_pending_plan_change(fulfillment)
       pending_plan = fulfillment.metadata["pending_plan_change"]
 
       # Update to the new plan and clear the pending change
+      # Use string keys consistently to avoid duplicates after JSON serialization
       fulfillment.update!(
         metadata: fulfillment.metadata
-          .merge(plan: pending_plan)
           .except("pending_plan_change", "plan_change_at")
+          .merge("plan" => pending_plan)
       )
 
       Rails.logger.info "Applied pending plan change for subscription #{id}: now on #{pending_plan}"

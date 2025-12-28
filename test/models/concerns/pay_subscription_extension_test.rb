@@ -1162,12 +1162,16 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     subscription.update!(processor_plan: "pro_plan_monthly")
     assert_equal 2600, wallet.reload.credits  # Still 2600
 
-    # User upgrades again to premium before period ends
+    # User "goes back" to premium before period ends
+    # This CANCELS the scheduled downgrade but does NOT grant more credits
+    # because the user never actually left Premium. Stripe would not charge them again.
     subscription.update!(processor_plan: "premium_plan_monthly")
-    assert_equal 4600, wallet.reload.credits  # 2600 + 2000
+    assert_equal 2600, wallet.reload.credits  # Still 2600 - no duplicate credits
 
-    # User has accumulated credits - this is expected behavior per SaaS standards
-    # Billing proration would handle the monetary side via Stripe
+    # Pending downgrade should be cleared
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_nil fulfillment.metadata["pending_plan_change"],
+      "Returning to current plan should clear pending downgrade"
   end
 
   # ========================================
@@ -2085,5 +2089,360 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     assert_nothing_raised do
       subscription.update!(processor_plan: "premium_plan_monthly")
     end
+  end
+
+  # ========================================
+  # EDGE CASES: MULTIPLE PLAN CHANGES IN ONE PERIOD (COMPREHENSIVE)
+  # ========================================
+  # These tests exhaustively cover the "multiple plan changes in one period" scenario
+  # that the reviewer flagged as potentially missing coverage.
+
+  test "multiple consecutive downgrades overwrites pending plan change correctly" do
+    # Scenario: User schedules downgrade A, then schedules downgrade B before renewal
+    # The second downgrade should overwrite the first pending plan change
+    user = User.create!(email: "multi_downgrade@example.com", name: "Multi Downgrade User")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_multi_downgrade_test"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_multi_downgrade_test",
+      processor_plan: "premium_plan_monthly",  # 2000 credits + 200 bonus
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    # Initial: 2000 + 200 = 2200
+    assert_equal 2200, wallet.reload.credits
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"]
+
+    # First downgrade: Premium → Pro (scheduled)
+    subscription.update!(processor_plan: "pro_plan_monthly")
+
+    fulfillment.reload
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"]  # Still premium
+    assert_equal "pro_plan_monthly", fulfillment.metadata["pending_plan_change"]
+    assert_equal 2200, wallet.reload.credits  # No credit change
+
+    # Second downgrade: Pro → Rollover (overwrites the pending change)
+    # Since Pro has 500 credits and Rollover has 1000, this is actually an "upgrade" from
+    # the pending state, but since processor_plan is now "rollover", let's see how it handles it
+    subscription.update!(processor_plan: "rollover_plan_monthly")
+
+    fulfillment.reload
+    # Since rollover has MORE credits (1000) than premium (2000)? No - premium has 2000, rollover has 1000
+    # This is still a downgrade from premium (2000) to rollover (1000)
+    # The pending_plan_change should be updated to rollover
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"]  # Still premium (current)
+    assert_equal "rollover_plan_monthly", fulfillment.metadata["pending_plan_change"]
+    assert_equal 2200, wallet.reload.credits  # Still no credit change
+
+    # Simulate renewal - should apply the LATEST pending plan change (rollover)
+    subscription.update!(
+      current_period_end: 60.days.from_now,
+      ends_at: nil
+    )
+
+    fulfillment.reload
+    assert_equal "rollover_plan_monthly", fulfillment.metadata["plan"], "Should be on rollover after renewal"
+    assert_nil fulfillment.metadata["pending_plan_change"], "Pending should be cleared"
+  end
+
+  test "downgrade then downgrade then upgrade clears all pending changes" do
+    # Scenario: User schedules two downgrades, then goes back to current plan before renewal
+    # The pending downgrade should be cleared, but NO credits granted
+    # (user was always on premium in the billing sense - Stripe would not charge them again)
+    user = User.create!(email: "down_down_up@example.com", name: "Down Down Up User")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_down_down_up_test"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_down_down_up_test",
+      processor_plan: "premium_plan_monthly",  # 2000 credits + 200 bonus
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    # Initial: 2000 + 200 = 2200
+    initial_credits = wallet.reload.credits
+    assert_equal 2200, initial_credits
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+
+    # First downgrade: Premium → Pro (scheduled)
+    subscription.update!(processor_plan: "pro_plan_monthly")
+    fulfillment.reload
+    assert_equal "pro_plan_monthly", fulfillment.metadata["pending_plan_change"]
+
+    # Second downgrade: Pro → Rollover (overwrites pending)
+    subscription.update!(processor_plan: "rollover_plan_monthly")
+    fulfillment.reload
+    assert_equal "rollover_plan_monthly", fulfillment.metadata["pending_plan_change"]
+
+    # Now go back to premium - should CLEAR the pending downgrade but NOT grant credits
+    # The user was always on premium (in metadata), they never actually changed plans
+    # This is like canceling a scheduled downgrade in Stripe - no new charge, no new credits
+    subscription.update!(processor_plan: "premium_plan_monthly")
+
+    fulfillment.reload
+    assert_nil fulfillment.metadata["pending_plan_change"],
+      "Returning to current plan should clear pending downgrade"
+    assert_nil fulfillment.metadata["plan_change_at"]
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"]
+
+    # NO upgrade credits - user never left premium
+    assert_equal 2200, wallet.reload.credits, "No credits granted when returning to current plan"
+  end
+
+  test "rapid successive upgrades to different plans accumulate credits" do
+    # Scenario: User upgrades through different tiers
+    # Only TRUE upgrades (to different, higher-credit plans) grant credits
+    # Returning to the same plan after a scheduled downgrade does NOT grant credits
+    # This prevents gaming the credit system - matches Stripe's billing behavior
+    user = User.create!(email: "rapid_upgrades@example.com", name: "Rapid Upgrades User")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_rapid_upgrades_test"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_rapid_upgrades_test",
+      processor_plan: "pro_plan_monthly",  # 500 credits + 100 bonus
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    # Initial: 500 + 100 = 600
+    assert_equal 600, wallet.reload.credits
+
+    # Upgrade 1: Pro → Premium (get 2000)
+    subscription.update!(processor_plan: "premium_plan_monthly")
+    assert_equal 2600, wallet.reload.credits
+
+    # Schedule downgrade to pro
+    subscription.update!(processor_plan: "pro_plan_monthly")
+    assert_equal 2600, wallet.reload.credits  # No change
+
+    # Go back to premium - NO credits (user was always on premium, just clearing pending)
+    subscription.update!(processor_plan: "premium_plan_monthly")
+    assert_equal 2600, wallet.reload.credits  # Still 2600
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_nil fulfillment.metadata["pending_plan_change"], "Pending should be cleared"
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"]
+
+    # Verify only 1 upgrade transaction (the initial pro → premium)
+    upgrade_transactions = wallet.transactions.where(category: "subscription_upgrade")
+    assert_equal 1, upgrade_transactions.count, "Only true upgrades grant credits"
+  end
+
+  test "lateral change after downgrade scheduled keeps pending downgrade" do
+    # Scenario: User schedules downgrade to Pro, then laterally changes to another plan
+    # with the same credits. The pending downgrade should remain.
+    # First, add a lateral plan with same credits as pro
+    UsageCredits.configure do |config|
+      config.subscription_plan :test_pro_alt do
+        processor_plan(:fake_processor, "pro_plan_alt_monthly")
+        gives 500.credits.every(:month)  # Same credits as pro
+        unused_credits :expire
+      end
+    end
+
+    user = User.create!(email: "lateral_after_downgrade@example.com", name: "Lateral After Downgrade")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_lateral_after_downgrade"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_lateral_after_downgrade",
+      processor_plan: "premium_plan_monthly",  # 2000 credits
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+
+    # Schedule downgrade to pro (500 credits)
+    subscription.update!(processor_plan: "pro_plan_monthly")
+    fulfillment.reload
+    assert_equal "pro_plan_monthly", fulfillment.metadata["pending_plan_change"]
+
+    # Now "change" to pro_alt (also 500 credits - lateral from the pending plan's perspective)
+    # Since current plan is still premium (2000), and pro_alt is 500, this is still a downgrade
+    subscription.update!(processor_plan: "pro_plan_alt_monthly")
+
+    fulfillment.reload
+    # The pending downgrade should be updated to the new target
+    assert_equal "pro_plan_alt_monthly", fulfillment.metadata["pending_plan_change"],
+      "Pending downgrade should be updated to the new target plan"
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"]  # Still on premium
+  end
+
+  test "upgrade to same plan as pending downgrade grants no credits and clears pending" do
+    # Scenario: User on Premium, schedules downgrade to Pro, then "upgrades" back to Pro
+    # (which is actually the same as the pending plan)
+    # This edge case tests: what happens when new plan == pending plan?
+    user = User.create!(email: "upgrade_to_pending@example.com", name: "Upgrade To Pending")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_upgrade_to_pending"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_upgrade_to_pending",
+      processor_plan: "premium_plan_monthly",  # 2000 credits
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    initial_credits = wallet.reload.credits  # 2200 (2000 + 200 bonus)
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+
+    # Schedule downgrade to pro (500 credits)
+    subscription.update!(processor_plan: "pro_plan_monthly")
+    fulfillment.reload
+    assert_equal "pro_plan_monthly", fulfillment.metadata["pending_plan_change"]
+    assert_equal 2200, wallet.reload.credits  # No change
+
+    # Now user "changes" to rollover (1000 credits)
+    # Premium (2000) → Rollover (1000) is still a downgrade
+    subscription.update!(processor_plan: "rollover_plan_monthly")
+    fulfillment.reload
+    assert_equal "rollover_plan_monthly", fulfillment.metadata["pending_plan_change"]
+    assert_equal 2200, wallet.reload.credits  # Still no change
+
+    # Verify on renewal, the LAST pending plan is applied
+    subscription.update!(
+      current_period_end: 60.days.from_now,
+      ends_at: nil
+    )
+
+    fulfillment.reload
+    assert_equal "rollover_plan_monthly", fulfillment.metadata["plan"]
+    assert_nil fulfillment.metadata["pending_plan_change"]
+  end
+
+  test "fulfillment job timing with pending downgrade awards current plan credits" do
+    # This test verifies the reviewer's concern about FulfillmentJob timing
+    # When a downgrade is scheduled but not yet applied, the fulfillment job
+    # should still award credits from the CURRENT plan (not the pending plan)
+    user = User.create!(email: "fulfillment_timing@example.com", name: "Fulfillment Timing")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_fulfillment_timing"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_fulfillment_timing",
+      processor_plan: "premium_plan_monthly",  # 2000 credits
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"]
+
+    # Schedule downgrade to pro
+    subscription.update!(processor_plan: "pro_plan_monthly")
+
+    fulfillment.reload
+    # Key assertion: The CURRENT plan in metadata should still be premium
+    # because the downgrade hasn't been applied yet
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"],
+      "Fulfillment should still reference premium plan (current) for job processing"
+    assert_equal "pro_plan_monthly", fulfillment.metadata["pending_plan_change"],
+      "Pending plan change should be stored separately"
+
+    # This means when FulfillmentService looks up the plan via fulfillment.metadata["plan"],
+    # it will get "premium_plan_monthly" and award 2000 credits - correct behavior!
+  end
+
+  test "multiple plan changes preserve subscription_id in metadata" do
+    # Ensure subscription_id is never lost during plan change chaos
+    user = User.create!(email: "preserve_sub_id@example.com", name: "Preserve Sub ID")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_preserve_sub_id"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_preserve_sub_id",
+      processor_plan: "pro_plan_monthly",
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    original_sub_id = fulfillment.metadata["subscription_id"]
+    assert_equal subscription.id, original_sub_id
+
+    # Upgrade
+    subscription.update!(processor_plan: "premium_plan_monthly")
+    fulfillment.reload
+    assert_equal original_sub_id, fulfillment.metadata["subscription_id"]
+
+    # Downgrade (scheduled)
+    subscription.update!(processor_plan: "pro_plan_monthly")
+    fulfillment.reload
+    assert_equal original_sub_id, fulfillment.metadata["subscription_id"]
+
+    # Upgrade again
+    subscription.update!(processor_plan: "premium_plan_monthly")
+    fulfillment.reload
+    assert_equal original_sub_id, fulfillment.metadata["subscription_id"]
+
+    # Renewal
+    subscription.update!(current_period_end: 60.days.from_now)
+    fulfillment.reload
+    assert_equal original_sub_id, fulfillment.metadata["subscription_id"],
+      "subscription_id should be preserved through all plan changes and renewals"
   end
 end

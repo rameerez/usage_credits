@@ -218,6 +218,11 @@ module UsageCredits
       return unless fulfillment
 
       ActiveRecord::Base.transaction do
+        # Check if there's a pending plan change to apply
+        if fulfillment.metadata["pending_plan_change"].present?
+          apply_pending_plan_change(fulfillment)
+        end
+
         # Subscription renewed, we can set the new Fulfillment stops_at to the extended date
         fulfillment.update!(stops_at: fullfillment_should_stop_at)
         Rails.logger.info "Fulfillment #{fulfillment.id} stops_at updated to #{fulfillment.stops_at}"
@@ -313,15 +318,37 @@ module UsageCredits
     end
 
     def handle_plan_downgrade(new_plan, fulfillment)
-      # For now, just update metadata (downgrade scheduling will be added later)
-      update_fulfillment_plan_metadata(fulfillment, processor_plan)
-      Rails.logger.info "Subscription #{id} downgraded to #{processor_plan}"
+      # Schedule the downgrade for end of current period
+      # User keeps current plan benefits until then
+      schedule_time = current_period_end || Time.current
+
+      fulfillment.update!(
+        metadata: fulfillment.metadata.merge(
+          pending_plan_change: processor_plan,
+          plan_change_at: schedule_time
+        )
+      )
+
+      Rails.logger.info "Subscription #{id} downgrade to #{processor_plan} scheduled for #{schedule_time}"
     end
 
     def update_fulfillment_plan_metadata(fulfillment, new_plan_id)
       fulfillment.update!(
         metadata: fulfillment.metadata.merge(plan: new_plan_id)
       )
+    end
+
+    def apply_pending_plan_change(fulfillment)
+      pending_plan = fulfillment.metadata["pending_plan_change"]
+
+      # Update to the new plan and clear the pending change
+      fulfillment.update!(
+        metadata: fulfillment.metadata
+          .merge(plan: pending_plan)
+          .except("pending_plan_change", "plan_change_at")
+      )
+
+      Rails.logger.info "Applied pending plan change for subscription #{id}: now on #{pending_plan}"
     end
 
   end

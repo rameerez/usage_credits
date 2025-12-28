@@ -700,4 +700,99 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     assert_equal 2000, upgrade_tx.amount
     assert_equal "premium_plan_monthly", upgrade_tx.metadata["plan"]
   end
+
+  test "downgrade schedules plan change for end of period" do
+    # Create a fresh user with a premium subscription (2000 credits/month)
+    user = User.create!(email: "downgrade@example.com", name: "Downgrade User")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_downgrade_test"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_downgrade_test",
+      processor_plan: "premium_plan_monthly",  # 2000 credits + 200 signup bonus
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    # Initial credits: 2000 + 200 signup bonus = 2200
+    assert_equal 2200, wallet.reload.credits
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"]
+
+    # Downgrade to starter (500 credits/month)
+    # Should NOT deduct credits immediately
+    assert_no_difference -> { wallet.reload.credits } do
+      subscription.update!(processor_plan: "pro_plan_monthly")
+    end
+
+    # Credits should remain unchanged
+    assert_equal 2200, wallet.reload.credits
+
+    # Fulfillment should have pending plan change scheduled
+    fulfillment.reload
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"], "Current plan should still be premium"
+    assert_equal "pro_plan_monthly", fulfillment.metadata["pending_plan_change"], "Should schedule downgrade"
+    assert_not_nil fulfillment.metadata["plan_change_at"], "Should have scheduled time"
+
+    # No downgrade transaction should exist yet
+    assert_nil wallet.transactions.find_by(category: "subscription_downgrade")
+  end
+
+  test "scheduled downgrade applies on subscription renewal" do
+    # Create a fresh user with a premium subscription
+    user = User.create!(email: "downgrade_renew@example.com", name: "Downgrade Renew User")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_downgrade_renew_test"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_downgrade_renew_test",
+      processor_plan: "premium_plan_monthly",
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    # Initial credits: 2000 + 200 signup bonus = 2200
+    assert_equal 2200, wallet.reload.credits
+
+    # Schedule a downgrade
+    subscription.update!(processor_plan: "pro_plan_monthly")
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert fulfillment.metadata.key?("pending_plan_change"), "Should have pending plan change"
+    assert_equal "pro_plan_monthly", fulfillment.metadata["pending_plan_change"]
+
+    # Simulate subscription renewal (what happens when Stripe sends renewal webhook)
+    # The subscription's current_period_end moves forward
+    new_period_end = 60.days.from_now
+    subscription.update!(
+      current_period_end: new_period_end,
+      ends_at: nil  # Renewal clears ends_at
+    )
+
+    # After renewal, the scheduled downgrade should be applied
+    fulfillment.reload
+    assert_equal "pro_plan_monthly", fulfillment.metadata["plan"], "Should now be on starter plan"
+    assert_nil fulfillment.metadata["pending_plan_change"], "Pending change should be cleared"
+    assert_nil fulfillment.metadata["plan_change_at"], "Scheduled time should be cleared"
+
+    # Credits remain unchanged (no deduction on downgrade)
+    assert_equal 2200, wallet.reload.credits
+  end
 end

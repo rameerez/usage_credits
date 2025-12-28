@@ -2550,4 +2550,304 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     assert_equal "premium_plan_monthly", fulfillment.metadata["plan"],
       "Should remain on original plan when pending plan is invalid"
   end
+
+  # ========================================
+  # ANTI-GAMING TESTS: COMPREHENSIVE COVERAGE
+  # ========================================
+  # These tests verify that the credit system cannot be exploited
+  # by various plan switching strategies
+
+  test "ANTI-GAMING: upgrade-downgrade-upgrade same plan grants credits only once" do
+    # Gaming attempt: upgrade to premium, schedule downgrade, "upgrade" back to premium
+    # Expected: only ONE upgrade credit grant (the initial upgrade)
+    user = User.create!(email: "gaming_same_plan@example.com", name: "Gaming Same Plan")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_gaming_same_plan"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_gaming_same_plan",
+      processor_plan: "pro_plan_monthly",  # 500 + 100 bonus = 600
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    assert_equal 600, wallet.reload.credits
+
+    # Step 1: Upgrade to Premium (+2000)
+    subscription.update!(processor_plan: "premium_plan_monthly")
+    assert_equal 2600, wallet.reload.credits
+
+    # Gaming attempt: schedule downgrade then "upgrade" back repeatedly
+    3.times do |i|
+      # Schedule downgrade
+      subscription.update!(processor_plan: "pro_plan_monthly")
+      assert_equal 2600, wallet.reload.credits, "Downgrade #{i+1} should not change credits"
+
+      # Try to "upgrade" back to premium (should be BLOCKED - same plan in metadata)
+      subscription.update!(processor_plan: "premium_plan_monthly")
+      assert_equal 2600, wallet.reload.credits, "Return to premium #{i+1} should NOT grant credits"
+    end
+
+    # Verify only 1 upgrade transaction ever occurred
+    upgrade_count = wallet.transactions.where(category: "subscription_upgrade").count
+    assert_equal 1, upgrade_count, "ANTI-GAMING: Only 1 upgrade transaction should exist despite 3 attempts"
+  end
+
+  test "ANTI-GAMING: downgrade to lower plan then upgrade to middle plan is still downgrade" do
+    # Gaming attempt: on Premium (2000), schedule downgrade to Pro (500),
+    # then try to "upgrade" to Rollover (1000) hoping to get credits
+    # Expected: Rollover < Premium, so it's still a downgrade, no credits
+    user = User.create!(email: "gaming_middle_plan@example.com", name: "Gaming Middle Plan")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_gaming_middle_plan"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_gaming_middle_plan",
+      processor_plan: "premium_plan_monthly",  # 2000 + 200 bonus = 2200
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    assert_equal 2200, wallet.reload.credits
+
+    # Schedule downgrade to Pro (500 credits)
+    subscription.update!(processor_plan: "pro_plan_monthly")
+    assert_equal 2200, wallet.reload.credits  # No change
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_equal "pro_plan_monthly", fulfillment.metadata["pending_plan_change"]
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"]
+
+    # Gaming attempt: "upgrade" to Rollover (1000 credits)
+    # Since current plan is Premium (2000), and Rollover is 1000, this is STILL a downgrade
+    subscription.update!(processor_plan: "rollover_plan_monthly")
+
+    fulfillment.reload
+    # Should overwrite the pending downgrade, still no credits
+    assert_equal "rollover_plan_monthly", fulfillment.metadata["pending_plan_change"],
+      "Should update pending to Rollover (still a downgrade)"
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"],
+      "Should still be on Premium (current active plan)"
+    assert_equal 2200, wallet.reload.credits, "ANTI-GAMING: No credits for downgrade to Rollover"
+
+    # Verify no upgrade transactions
+    upgrade_count = wallet.transactions.where(category: "subscription_upgrade").count
+    assert_equal 0, upgrade_count, "ANTI-GAMING: No upgrade transactions for downgrades"
+  end
+
+  test "ANTI-GAMING: oscillating between downgrades never grants credits" do
+    # Gaming attempt: rapidly switch between different downgrade targets
+    # Expected: no credits ever granted, just pending overwrites
+    user = User.create!(email: "gaming_oscillate@example.com", name: "Gaming Oscillate")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_gaming_oscillate"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_gaming_oscillate",
+      processor_plan: "premium_plan_monthly",  # 2000 + 200 = 2200
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    initial_credits = wallet.reload.credits
+    assert_equal 2200, initial_credits
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+
+    # Oscillate between downgrades
+    subscription.update!(processor_plan: "pro_plan_monthly")  # 500
+    assert_equal "pro_plan_monthly", fulfillment.reload.metadata["pending_plan_change"]
+
+    subscription.update!(processor_plan: "rollover_plan_monthly")  # 1000
+    assert_equal "rollover_plan_monthly", fulfillment.reload.metadata["pending_plan_change"]
+
+    subscription.update!(processor_plan: "pro_plan_monthly")  # 500
+    assert_equal "pro_plan_monthly", fulfillment.reload.metadata["pending_plan_change"]
+
+    subscription.update!(processor_plan: "rollover_plan_monthly")  # 1000
+    assert_equal "rollover_plan_monthly", fulfillment.reload.metadata["pending_plan_change"]
+
+    # Credits should NEVER change
+    assert_equal 2200, wallet.reload.credits, "ANTI-GAMING: Credits should never change during downgrade oscillation"
+
+    # No upgrade transactions
+    upgrade_count = wallet.transactions.where(category: "subscription_upgrade").count
+    assert_equal 0, upgrade_count, "ANTI-GAMING: No upgrade transactions for downgrade oscillations"
+  end
+
+  test "ANTI-GAMING: genuine upgrades to higher plans do grant credits (this is legitimate)" do
+    # This tests that LEGITIMATE upgrades still work
+    # When user genuinely upgrades to a plan with MORE credits than current, they get credits
+    # This is NOT gaming - Stripe charges them for the upgrade
+
+    # First, configure an ultra plan with more credits than premium
+    UsageCredits.configure do |config|
+      config.subscription_plan :test_ultra do
+        processor_plan(:fake_processor, "ultra_plan_monthly")
+        gives 5000.credits.every(:month)
+        unused_credits :expire
+      end
+    end
+
+    user = User.create!(email: "legitimate_upgrade@example.com", name: "Legitimate Upgrade")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_legitimate_upgrade"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_legitimate_upgrade",
+      processor_plan: "pro_plan_monthly",  # 500 + 100 = 600
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    assert_equal 600, wallet.reload.credits
+
+    # Upgrade 1: Pro (500) → Premium (2000) = +2000
+    subscription.update!(processor_plan: "premium_plan_monthly")
+    assert_equal 2600, wallet.reload.credits
+
+    # Upgrade 2: Premium (2000) → Ultra (5000) = +5000
+    subscription.update!(processor_plan: "ultra_plan_monthly")
+    assert_equal 7600, wallet.reload.credits
+
+    # These are LEGITIMATE upgrades - user pays Stripe for each one
+    upgrade_count = wallet.transactions.where(category: "subscription_upgrade").count
+    assert_equal 2, upgrade_count, "Legitimate upgrades should create 2 upgrade transactions"
+  end
+
+  test "ANTI-GAMING: lateral change with same credits grants no credits" do
+    # Gaming attempt: change to different plan with SAME credits
+    # Expected: no credits, just metadata update
+
+    UsageCredits.configure do |config|
+      config.subscription_plan :test_pro_v2 do
+        processor_plan(:fake_processor, "pro_plan_v2_monthly")
+        gives 500.credits.every(:month)  # Same as regular Pro
+        unused_credits :expire
+      end
+    end
+
+    user = User.create!(email: "gaming_lateral@example.com", name: "Gaming Lateral")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_gaming_lateral"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_gaming_lateral",
+      processor_plan: "pro_plan_monthly",  # 500 + 100 = 600
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    initial_credits = wallet.reload.credits
+    assert_equal 600, initial_credits
+
+    # Lateral change to Pro V2 (same 500 credits)
+    subscription.update!(processor_plan: "pro_plan_v2_monthly")
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_equal "pro_plan_v2_monthly", fulfillment.metadata["plan"],
+      "Plan metadata should update for lateral change"
+
+    assert_equal 600, wallet.reload.credits, "ANTI-GAMING: No credits for lateral change"
+
+    # No upgrade transactions
+    upgrade_count = wallet.transactions.where(category: "subscription_upgrade").count
+    assert_equal 0, upgrade_count, "ANTI-GAMING: No upgrade transactions for lateral changes"
+  end
+
+  test "ANTI-GAMING: credits comparison uses current ACTIVE plan not pending" do
+    # This is the critical anti-gaming test
+    # The comparison must be against fulfillment.metadata["plan"] (current active)
+    # NOT against the pending_plan_change
+
+    user = User.create!(email: "gaming_pending_vs_current@example.com", name: "Gaming Pending")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_gaming_pending_vs_current"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_gaming_pending_vs_current",
+      processor_plan: "premium_plan_monthly",  # 2000 + 200 = 2200
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    assert_equal 2200, wallet.reload.credits
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+
+    # Schedule downgrade to Pro (500 credits)
+    subscription.update!(processor_plan: "pro_plan_monthly")
+
+    fulfillment.reload
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"]  # CURRENT = Premium
+    assert_equal "pro_plan_monthly", fulfillment.metadata["pending_plan_change"]  # PENDING = Pro
+
+    # Gaming attempt: try to "upgrade" to Rollover (1000 credits)
+    # If compared against PENDING (500), this would be an "upgrade" (+1000)
+    # But we compare against CURRENT (2000), so it's a DOWNGRADE (no credits)
+    subscription.update!(processor_plan: "rollover_plan_monthly")
+
+    fulfillment.reload
+    # Should be treated as downgrade (1000 < 2000)
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"],
+      "Current plan should still be Premium"
+    assert_equal "rollover_plan_monthly", fulfillment.metadata["pending_plan_change"],
+      "Pending should now be Rollover (replacing Pro)"
+
+    assert_equal 2200, wallet.reload.credits,
+      "ANTI-GAMING CRITICAL: Rollover is downgrade from Premium, no credits granted"
+
+    # No upgrade transactions
+    upgrade_count = wallet.transactions.where(category: "subscription_upgrade").count
+    assert_equal 0, upgrade_count,
+      "ANTI-GAMING CRITICAL: No upgrade when comparing against current (not pending)"
+  end
 end

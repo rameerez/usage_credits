@@ -50,7 +50,7 @@ module UsageCredits
       credit_subscription_plan.present?
     end
 
-    def fullfillment_should_stop_at
+    def fulfillment_should_stop_at
       (ends_at || current_period_end)
     end
 
@@ -155,11 +155,8 @@ module UsageCredits
       plan = credit_subscription_plan
       wallet = customer.owner.credit_wallet
 
-      # Calculate expiration using a sensible base time
-      # For reactivation or subscriptions created long ago, use current_period_start or Time.current
-      # to avoid setting expiration in the past
-      expiration_base = current_period_start || Time.current
-      credits_expire_at = !plan.rollover_enabled ? (expiration_base + plan.parsed_fulfillment_period + UsageCredits.configuration.fulfillment_grace_period) : nil
+      # Calculate credit expiration using the shared helper
+      credits_expire_at = calculate_credit_expiration(plan, current_period_start)
 
       Rails.logger.info "Fulfilling #{is_reactivation ? 'reactivation' : 'initial'} credits for subscription #{id}"
       Rails.logger.info "  Status: #{status}"
@@ -243,7 +240,7 @@ module UsageCredits
             fulfillment_period: plan.fulfillment_period_display,
             last_fulfilled_at: Time.current,
             next_fulfillment_at: next_fulfillment_at,
-            stops_at: fullfillment_should_stop_at,
+            stops_at: fulfillment_should_stop_at,
             metadata: existing_reactivatable_fulfillment.metadata
               .except("stopped_reason", "stopped_at", "pending_plan_change", "plan_change_at")
               .merge(
@@ -266,7 +263,7 @@ module UsageCredits
             fulfillment_period: plan.fulfillment_period_display,
             last_fulfilled_at: Time.current,
             next_fulfillment_at: next_fulfillment_at,
-            stops_at: fullfillment_should_stop_at, # Pre-emptively set when the fulfillment will stop, in case we miss a future event (like sub cancellation)
+            stops_at: fulfillment_should_stop_at, # Pre-emptively set when the fulfillment will stop, in case we miss a future event (like sub cancellation)
             metadata: {
               "subscription_id" => id,
               "plan" => processor_plan,
@@ -301,7 +298,7 @@ module UsageCredits
         end
 
         # Subscription renewed, we can set the new Fulfillment stops_at to the extended date
-        fulfillment.update!(stops_at: fullfillment_should_stop_at)
+        fulfillment.update!(stops_at: fulfillment_should_stop_at)
         Rails.logger.info "Fulfillment #{fulfillment.id} stops_at updated to #{fulfillment.stops_at}"
       rescue => e
         Rails.logger.error "Failed to extend fulfillment period for subscription #{id}: #{e.message}"
@@ -320,7 +317,7 @@ module UsageCredits
 
       ActiveRecord::Base.transaction do
         # Subscription cancelled, so stop awarding credits in the future
-        fulfillment.update!(stops_at: fullfillment_should_stop_at)
+        fulfillment.update!(stops_at: fulfillment_should_stop_at)
         Rails.logger.info "Fulfillment #{fulfillment.id} stops_at set to #{fulfillment.stops_at} due to cancellation"
       rescue => e
         Rails.logger.error "Failed to stop credit fulfillment for subscription #{id}: #{e.message}"
@@ -401,25 +398,20 @@ module UsageCredits
     def handle_plan_upgrade(new_plan, fulfillment)
       wallet = customer.owner.credit_wallet
 
-      # Calculate expiration for the upgrade credits
-      # Use current_period_end for consistency with billing cycle, or fall back to Time.current + period
-      credits_expire_at = if new_plan.rollover_enabled
-                            nil
-                          else
-                            base_time = current_period_end || (Time.current + new_plan.parsed_fulfillment_period)
-                            base_time + UsageCredits.configuration.fulfillment_grace_period
-                          end
+      # Calculate expiration using shared helper (uses current_period_end for upgrades)
+      credits_expire_at = calculate_credit_expiration(new_plan, current_period_end)
 
       # Grant full new plan credits immediately
+      # Use string keys consistently to avoid duplicates after JSON serialization
       wallet.add_credits(
         new_plan.credits_per_period,
         category: "subscription_upgrade",
         expires_at: credits_expire_at,
         metadata: {
-          subscription_id: id,
-          plan: processor_plan,
-          reason: "plan_upgrade",
-          fulfilled_at: Time.current
+          "subscription_id" => id,
+          "plan" => processor_plan,
+          "reason" => "plan_upgrade",
+          "fulfilled_at" => Time.current
         }
       )
 
@@ -497,6 +489,17 @@ module UsageCredits
     def apply_pending_plan_change(fulfillment)
       pending_plan = fulfillment.metadata["pending_plan_change"]
 
+      # Validate that the pending plan still exists in configuration
+      # This handles the edge case where an admin removes a plan after a user scheduled a downgrade
+      unless UsageCredits.configuration.find_subscription_plan_by_processor_id(pending_plan)
+        Rails.logger.error "Cannot apply pending plan change for subscription #{id}: plan '#{pending_plan}' not found in configuration"
+        # Clear the invalid pending change to prevent repeated failures
+        fulfillment.update!(
+          metadata: fulfillment.metadata.except("pending_plan_change", "plan_change_at")
+        )
+        return
+      end
+
       # Update to the new plan and clear the pending change
       # Use string keys consistently to avoid duplicates after JSON serialization
       fulfillment.update!(
@@ -506,6 +509,24 @@ module UsageCredits
       )
 
       Rails.logger.info "Applied pending plan change for subscription #{id}: now on #{pending_plan}"
+    end
+
+    # =========================================
+    # Helper Methods
+    # =========================================
+
+    # Calculate credit expiration date for a given plan
+    # Handles the edge case where base_time might be in the past (e.g., paused subscription reactivated)
+    # by ensuring we never create credits that are already expired
+    def calculate_credit_expiration(plan, base_time = nil)
+      return nil if plan.rollover_enabled
+
+      # Use the provided base_time or fall back to current time
+      # Crucially: ensure we never use a time in the past, which would create already-expired credits
+      # This fixes the bug where a paused subscription reactivated would have past expiration dates
+      effective_base = [base_time || Time.current, Time.current].max
+
+      effective_base + plan.parsed_fulfillment_period + UsageCredits.configuration.fulfillment_grace_period
     end
 
   end

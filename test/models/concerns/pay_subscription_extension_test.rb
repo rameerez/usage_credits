@@ -2445,4 +2445,109 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     assert_equal original_sub_id, fulfillment.metadata["subscription_id"],
       "subscription_id should be preserved through all plan changes and renewals"
   end
+
+  # ========================================
+  # EDGE CASE TESTS: REVIEWER'S CRITICAL ISSUES
+  # ========================================
+
+  test "reactivation with past current_period_start does not create already-expired credits" do
+    # This tests the bug where credits could be created with expiration in the past
+    # if current_period_start is in the past (e.g., paused subscription reactivated)
+    user = User.create!(email: "past_period_start@example.com", name: "Past Period Start")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_past_period_start"
+    )
+
+    # Create subscription with current_period_start in the past (simulating reactivation)
+    # In reality, this happens when a subscription is paused and then resumed
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_past_period_start",
+      processor_plan: "pro_plan_monthly",  # 500 credits, expires
+      status: "active",
+      quantity: 1,
+      current_period_start: 2.months.ago,  # KEY: start is in the past
+      current_period_end: 30.days.from_now
+    )
+
+    # Credits should have been awarded
+    assert wallet.reload.credits.positive?, "Credits should be awarded"
+
+    # Check the credit transaction - expiration should NOT be in the past
+    credit_transaction = wallet.transactions.where("amount > 0").order(created_at: :desc).first
+    assert credit_transaction.present?, "Credit transaction should exist"
+
+    if credit_transaction.expires_at.present?
+      assert credit_transaction.expires_at > Time.current,
+        "Credits should NOT expire in the past! expires_at=#{credit_transaction.expires_at}, now=#{Time.current}"
+    end
+  end
+
+  test "pending plan change to deleted plan is handled gracefully" do
+    # This tests the edge case where an admin removes a plan from config
+    # after a user has scheduled a downgrade to it
+    user = User.create!(email: "deleted_plan@example.com", name: "Deleted Plan User")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_deleted_plan"
+    )
+
+    # Create a temporary plan for this test
+    UsageCredits.configure do |config|
+      config.subscription_plan :temp_plan do
+        processor_plan(:fake_processor, "temp_plan_monthly")
+        gives 100.credits.every(:month)
+        unused_credits :expire
+      end
+    end
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_deleted_plan",
+      processor_plan: "premium_plan_monthly",  # 2000 credits
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    initial_credits = wallet.reload.credits
+
+    # Schedule a downgrade to the temp plan
+    subscription.update!(processor_plan: "temp_plan_monthly")
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_equal "temp_plan_monthly", fulfillment.metadata["pending_plan_change"]
+
+    # Now "delete" the plan by clearing the config (simulate admin removing it)
+    # We need to unconfigure the temp plan - set up with only the original plans
+    # Actually, the plan is still there but we can manually set an invalid pending plan
+    fulfillment.update!(
+      metadata: fulfillment.metadata.merge("pending_plan_change" => "nonexistent_plan_id")
+    )
+
+    # Simulate renewal - the pending plan doesn't exist
+    subscription.update!(
+      current_period_end: 60.days.from_now,
+      ends_at: nil
+    )
+
+    # The system should handle this gracefully
+    fulfillment.reload
+
+    # The invalid pending plan change should be cleared
+    assert_nil fulfillment.metadata["pending_plan_change"],
+      "Invalid pending plan should be cleared"
+
+    # The fulfillment should still be on the original plan (premium)
+    assert_equal "premium_plan_monthly", fulfillment.metadata["plan"],
+      "Should remain on original plan when pending plan is invalid"
+  end
 end

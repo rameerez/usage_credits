@@ -98,6 +98,11 @@ module UsageCredits
     # @example Multiple periods
     #   processor_plan(:stripe, { month: "price_m", year: "price_y" })
     def processor_plan(processor, id)
+      if id.is_a?(Hash)
+        raise ArgumentError, "Period hash cannot be empty" if id.empty?
+        # Normalize all keys to symbols for consistent lookup
+        id = id.transform_keys(&:to_sym)
+      end
       processor_plan_ids[processor.to_sym] = id
     end
 

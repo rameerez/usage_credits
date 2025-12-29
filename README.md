@@ -385,6 +385,31 @@ end
 
 For now, only Stripe subscriptions are supported (contribute to the codebase to help us add more payment processors!)
 
+#### Subscriptions with a monthly + yearly price
+
+For plans that offer multiple billing periods (e.g., monthly and yearly pricing), you can specify multiple Stripe price IDs using a hash:
+
+```ruby
+subscription_plan :pro do
+  # Multi-period pricing: same plan, different billing frequencies
+  stripe_price month: "price_pro_monthly", year: "price_pro_yearly"
+
+  gives 10_000.credits.every(:month)
+  # ...
+end
+```
+
+The gem automatically handles plan matching for webhook events - when Stripe sends subscription events, the plan will be correctly identified regardless of which billing period was selected.
+
+**Note:** Single-price plans (the traditional format) continue to work as before for backward compatibility:
+
+```ruby
+subscription_plan :basic do
+  stripe_price "price_basic_monthly"  # Single price ID (still works)
+  gives 1_000.credits.every(:month)
+end
+```
+
 ### Specify a fulfillment period
 
 Next, specify how many credits a user subscribed to this plan gets, and when they get them.

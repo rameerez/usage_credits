@@ -740,6 +740,27 @@ class UsageCredits::CreditSubscriptionPlanTest < ActiveSupport::TestCase
     assert_equal({}, plan.stripe_prices)
   end
 
+  test "stripe_price normalizes string keys to symbols" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:pro)
+    # User might pass string keys instead of symbols
+    plan.stripe_price "month" => "price_m", "year" => "price_y"
+
+    # Keys should be normalized to symbols for consistent lookup
+    assert_equal "price_m", plan.stripe_price(:month)
+    assert_equal "price_y", plan.stripe_price(:year)
+    assert_equal({ month: "price_m", year: "price_y" }, plan.stripe_price)
+  end
+
+  test "stripe_price rejects empty hash" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:pro)
+
+    error = assert_raises(ArgumentError) do
+      plan.stripe_price({})
+    end
+
+    assert_includes error.message, "Period hash cannot be empty"
+  end
+
   test "processor_plan accepts hash for multi-period storage" do
     plan = UsageCredits::CreditSubscriptionPlan.new(:pro)
     plan.processor_plan(:stripe, { month: "price_m", year: "price_y" })
@@ -806,6 +827,28 @@ class UsageCredits::CreditSubscriptionPlanTest < ActiveSupport::TestCase
     user.stub(:payment_processor, mock_payment_processor) do
       # Should work without period parameter for single-price plans
       result = plan.create_checkout_session(user, success_url: "/success", cancel_url: "/cancel")
+      assert_equal "https://checkout.stripe.com/test", result.url
+    end
+
+    mock_payment_processor.verify
+  end
+
+  test "create_checkout_session accepts explicit period: nil for single-price plan" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:basic)
+    plan.gives(500).every(:month)
+    plan.stripe_price "price_single"
+
+    user = users(:rich_user)
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |_args|
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      # Explicitly passing period: nil should work for backward compatibility
+      result = plan.create_checkout_session(user, success_url: "/success", cancel_url: "/cancel", period: nil)
       assert_equal "https://checkout.stripe.com/test", result.url
     end
 

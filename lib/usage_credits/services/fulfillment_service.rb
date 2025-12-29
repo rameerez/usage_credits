@@ -100,7 +100,15 @@ module UsageCredits
       return nil unless @fulfillment.fulfillment_type == "subscription" && @plan
       return nil if @plan.rollover_enabled
 
-      @fulfillment.calculate_next_fulfillment + UsageCredits.configuration.fulfillment_grace_period
+      # Cap the grace period to the fulfillment period to prevent balance accumulation
+      # when fulfillment_period << grace_period (e.g., 15 seconds vs 5 minutes)
+      fulfillment_period = @plan.parsed_fulfillment_period
+      effective_grace = [
+        UsageCredits.configuration.fulfillment_grace_period,
+        fulfillment_period
+      ].min
+
+      @fulfillment.calculate_next_fulfillment + effective_grace
     end
 
     def fulfillment_category

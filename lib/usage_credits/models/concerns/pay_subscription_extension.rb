@@ -528,7 +528,15 @@ module UsageCredits
       # This fixes the bug where a paused subscription reactivated would have past expiration dates
       effective_base = [base_time || Time.current, Time.current].max
 
-      effective_base + plan.parsed_fulfillment_period + UsageCredits.configuration.fulfillment_grace_period
+      # Cap the grace period to the fulfillment period to prevent balance accumulation
+      # when fulfillment_period << grace_period (e.g., 15 seconds vs 5 minutes)
+      fulfillment_period = plan.parsed_fulfillment_period
+      effective_grace = [
+        UsageCredits.configuration.fulfillment_grace_period,
+        fulfillment_period
+      ].min
+
+      effective_base + fulfillment_period + effective_grace
     end
 
   end

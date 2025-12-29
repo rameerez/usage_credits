@@ -98,11 +98,22 @@ UsageCredits.configure do |config|
   #
   #
   #
-  # For how long expiring credits from the previous fulfillment cycle will "overlap" the following fulfillment period.
+  # Grace period for credit expiration (default: 5.minutes)
+  #
+  # This is for how long expiring credits from the previous fulfillment cycle will "overlap" the following fulfillment period.
   # During this time, old credits from the previous period will erroneously count as available balance.
   # But if we set this to 0 or nil, user balance will show up as zero some time until the next fulfillment cycle hits.
   # A good default is to match the frequency of your UsageCredits::FulfillmentJob
+  #
   # config.fulfillment_grace_period = 5.minutes
+  #
+  # NOTE: If your fulfillment period is shorter than the grace period (e.g., credits
+  # every 15 seconds with a 5-minute grace), the grace period is AUTOMATICALLY CAPPED
+  # to the fulfillment period. This prevents balance accumulation where credits pile
+  # up faster than they expire. A warning will be logged during initialization.
+  #
+  # This is typically only relevant for development/testing with very short periods.
+  # In production with monthly/daily fulfillment cycles, the default should work just fine.
   #
   #
   #

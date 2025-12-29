@@ -440,6 +440,25 @@ subscription_plan :pro do
 end
 ```
 
+### Grace period for credit expiration
+
+When credits expire (i.e., `unused_credits :expire`), there's a configurable **grace period** to ensure smooth transitions between fulfillment cycles. This prevents users from seeing zero credits between the moment old credits expire and new credits are fulfilled.
+
+```ruby
+UsageCredits.configure do |config|
+  # Grace period for credit expiration (default: 5 minutes)
+  # Should match the frequency of your UsageCredits::FulfillmentJob runs
+  config.fulfillment_grace_period = 5.minutes
+end
+```
+
+> [!NOTE]
+> **Automatic grace period capping:** If your fulfillment period is shorter than the grace period (e.g., credits every 15 seconds with a 5-minute grace period), the grace period is **automatically capped** to the fulfillment period. This prevents balance accumulation where credits pile up faster than they expire.
+>
+> For example, with `gives 100.credits.every(15.seconds)` and a 5-minute grace period, the effective grace period will be 15 seconds, not 5 minutes. A warning will be logged during initialization to alert you of this behavior.
+>
+> This is typically only relevant for development/testing with very short fulfillment periods. In production with monthly or daily fulfillment cycles, the default 5-minute grace period works perfectly.
+
 ### Upgrades, downgrades, and plan changes
 
 `usage_credits` reacts to plan changes (via the `pay` gem), and we handle automatically credit issuing for upgrades & downgrades:

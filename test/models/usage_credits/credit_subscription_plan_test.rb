@@ -676,4 +676,297 @@ class UsageCredits::CreditSubscriptionPlanTest < ActiveSupport::TestCase
 
     mock_payment_processor.verify
   end
+
+  # ========================================
+  # MULTI-PERIOD STRIPE PRICES
+  # ========================================
+
+  test "stripe_price accepts hash for multi-period plans" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:pro)
+    plan.gives(1000).every(:month)
+    plan.stripe_price month: "price_monthly", year: "price_yearly"
+
+    assert_equal({ month: "price_monthly", year: "price_yearly" }, plan.stripe_price)
+  end
+
+  test "stripe_price getter returns specific period from multi-period plan" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:pro)
+    plan.stripe_price month: "price_m", year: "price_y"
+
+    assert_equal "price_m", plan.stripe_price(:month)
+    assert_equal "price_y", plan.stripe_price(:year)
+  end
+
+  test "stripe_price returns nil for non-existent period" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:pro)
+    plan.stripe_price month: "price_m", year: "price_y"
+
+    assert_nil plan.stripe_price(:quarter)
+  end
+
+  test "stripe_price backward compatible with single price string" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:basic)
+    plan.stripe_price "price_single"
+
+    assert_equal "price_single", plan.stripe_price
+  end
+
+  test "stripe_price getter on single-price plan returns nil for period query" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:basic)
+    plan.stripe_price "price_single"
+
+    # Single-price plans don't have period-specific prices
+    assert_nil plan.stripe_price(:month)
+    assert_nil plan.stripe_price(:year)
+  end
+
+  test "stripe_prices returns hash for multi-period plan" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:pro)
+    plan.stripe_price month: "price_m", year: "price_y"
+
+    assert_equal({ month: "price_m", year: "price_y" }, plan.stripe_prices)
+  end
+
+  test "stripe_prices wraps single price in hash with :default key" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:basic)
+    plan.stripe_price "price_single"
+
+    assert_equal({ default: "price_single" }, plan.stripe_prices)
+  end
+
+  test "stripe_prices returns empty hash when no prices set" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:test)
+
+    assert_equal({}, plan.stripe_prices)
+  end
+
+  test "stripe_price normalizes string keys to symbols" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:pro)
+    # User might pass string keys instead of symbols
+    plan.stripe_price "month" => "price_m", "year" => "price_y"
+
+    # Keys should be normalized to symbols for consistent lookup
+    assert_equal "price_m", plan.stripe_price(:month)
+    assert_equal "price_y", plan.stripe_price(:year)
+    assert_equal({ month: "price_m", year: "price_y" }, plan.stripe_price)
+  end
+
+  test "stripe_price rejects empty hash" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:pro)
+
+    error = assert_raises(ArgumentError) do
+      plan.stripe_price({})
+    end
+
+    assert_includes error.message, "Period hash cannot be empty"
+  end
+
+  test "processor_plan accepts hash for multi-period storage" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:pro)
+    plan.processor_plan(:stripe, { month: "price_m", year: "price_y" })
+
+    assert_equal({ month: "price_m", year: "price_y" }, plan.plan_id_for(:stripe))
+  end
+
+  test "plan_id_for with period returns specific period price" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:pro)
+    plan.processor_plan(:stripe, { month: "price_m", year: "price_y" })
+
+    assert_equal "price_m", plan.plan_id_for(:stripe, period: :month)
+    assert_equal "price_y", plan.plan_id_for(:stripe, period: :year)
+  end
+
+  test "plan_id_for with period returns nil for single-price plan" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:basic)
+    plan.processor_plan(:stripe, "price_single")
+
+    assert_nil plan.plan_id_for(:stripe, period: :month)
+  end
+
+  test "matches_processor_id? works with multi-period plan" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:pro)
+    plan.stripe_price month: "price_m", year: "price_y"
+
+    assert plan.matches_processor_id?("price_m")
+    assert plan.matches_processor_id?("price_y")
+    refute plan.matches_processor_id?("price_unknown")
+  end
+
+  test "matches_processor_id? works with single-price plan" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:basic)
+    plan.stripe_price "price_single"
+
+    assert plan.matches_processor_id?("price_single")
+    refute plan.matches_processor_id?("price_other")
+  end
+
+  test "matches_processor_id? works with multiple processors" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:multi)
+    plan.stripe_price month: "stripe_m", year: "stripe_y"
+    plan.processor_plan(:paddle, "paddle_price")
+
+    assert plan.matches_processor_id?("stripe_m")
+    assert plan.matches_processor_id?("stripe_y")
+    assert plan.matches_processor_id?("paddle_price")
+    refute plan.matches_processor_id?("unknown")
+  end
+
+  test "create_checkout_session works with single-price plan" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:basic)
+    plan.gives(500).every(:month)
+    plan.stripe_price "price_single"
+
+    user = users(:rich_user)
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |_args|
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      # Should work without period parameter for single-price plans
+      result = plan.create_checkout_session(user, success_url: "/success", cancel_url: "/cancel")
+      assert_equal "https://checkout.stripe.com/test", result.url
+    end
+
+    mock_payment_processor.verify
+  end
+
+  test "create_checkout_session accepts explicit period: nil for single-price plan" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:basic)
+    plan.gives(500).every(:month)
+    plan.stripe_price "price_single"
+
+    user = users(:rich_user)
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |_args|
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      # Explicitly passing period: nil should work for backward compatibility
+      result = plan.create_checkout_session(user, success_url: "/success", cancel_url: "/cancel", period: nil)
+      assert_equal "https://checkout.stripe.com/test", result.url
+    end
+
+    mock_payment_processor.verify
+  end
+
+  test "create_checkout_session requires period for multi-period plan" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:pro)
+    plan.gives(1000).every(:month)
+    plan.stripe_price month: "price_m", year: "price_y"
+
+    user = users(:rich_user)
+
+    error = assert_raises(ArgumentError) do
+      plan.create_checkout_session(user, success_url: "/success", cancel_url: "/cancel")
+    end
+
+    assert_includes error.message, "multiple billing periods"
+    assert_includes error.message, "specify period:"
+  end
+
+  test "create_checkout_session works with period specified for multi-period plan" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:pro)
+    plan.gives(1000).every(:month)
+    plan.stripe_price month: "price_m", year: "price_y"
+
+    user = users(:rich_user)
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/monthly")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      assert_equal "price_m", args[:line_items].first[:price]
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      result = plan.create_checkout_session(user, success_url: "/success", cancel_url: "/cancel", period: :month)
+      assert_equal "https://checkout.stripe.com/monthly", result.url
+    end
+
+    mock_payment_processor.verify
+  end
+
+  test "create_checkout_session raises for invalid period" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:pro)
+    plan.gives(1000).every(:month)
+    plan.stripe_price month: "price_m", year: "price_y"
+
+    user = users(:rich_user)
+
+    error = assert_raises(ArgumentError) do
+      plan.create_checkout_session(user, success_url: "/success", cancel_url: "/cancel", period: :quarter)
+    end
+
+    assert_includes error.message, "Period :quarter not found"
+    assert_includes error.message, "[:month, :year]"
+  end
+
+  test "find_subscription_plan_by_processor_id works with multi-period plans" do
+    UsageCredits.configure do |config|
+      config.subscription_plan :pro_multi do
+        gives 1000.credits.every(:month)
+        stripe_price month: "price_pro_m", year: "price_pro_y"
+      end
+
+      config.subscription_plan :basic_single do
+        gives 100.credits.every(:month)
+        stripe_price "price_basic"
+      end
+    end
+
+    # Should find by monthly price
+    plan = UsageCredits.find_subscription_plan_by_processor_id("price_pro_m")
+    assert_not_nil plan
+    assert_equal :pro_multi, plan.name
+
+    # Should find by yearly price
+    plan = UsageCredits.find_subscription_plan_by_processor_id("price_pro_y")
+    assert_not_nil plan
+    assert_equal :pro_multi, plan.name
+
+    # Should find single-price plan
+    plan = UsageCredits.find_subscription_plan_by_processor_id("price_basic")
+    assert_not_nil plan
+    assert_equal :basic_single, plan.name
+
+    # Should return nil for unknown price
+    plan = UsageCredits.find_subscription_plan_by_processor_id("unknown_price")
+    assert_nil plan
+  end
+
+  test "multi-period plan with same fulfillment period as billing works" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:annual)
+    plan.gives(12000).every(:year)
+    plan.stripe_price month: "price_m", year: "price_y"
+
+    assert plan.validate!
+    assert_equal 12000, plan.credits_per_period
+    assert_equal 1.year, plan.fulfillment_period
+  end
+
+  test "can mix single and multi-period plans in same configuration" do
+    UsageCredits.configure do |config|
+      config.subscription_plan :single_price do
+        gives 100.credits.every(:month)
+        stripe_price "price_single"
+      end
+
+      config.subscription_plan :multi_price do
+        gives 1000.credits.every(:month)
+        stripe_price month: "price_m", year: "price_y"
+      end
+    end
+
+    single = UsageCredits.find_subscription_plan(:single_price)
+    multi = UsageCredits.find_subscription_plan(:multi_price)
+
+    assert_equal "price_single", single.stripe_price
+    assert_equal({ month: "price_m", year: "price_y" }, multi.stripe_price)
+  end
 end

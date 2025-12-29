@@ -88,32 +88,134 @@ module UsageCredits
     # Payment Processor Integration
     # =========================================
 
-    # Set the processor-specific plan ID
+    # Set the processor-specific plan ID(s)
+    # Accepts either a single ID (String) or multiple period-specific IDs (Hash)
+    #
+    # @param processor [Symbol] The payment processor (e.g., :stripe)
+    # @param id [String, Hash] Single ID or hash of period => ID pairs
+    # @example Single ID (backward compatible)
+    #   processor_plan(:stripe, "price_123")
+    # @example Multiple periods
+    #   processor_plan(:stripe, { month: "price_m", year: "price_y" })
     def processor_plan(processor, id)
+      if id.is_a?(Hash)
+        raise ArgumentError, "Period hash cannot be empty" if id.empty?
+        # Normalize all keys to symbols for consistent lookup
+        id = id.transform_keys(&:to_sym)
+      end
       processor_plan_ids[processor.to_sym] = id
     end
 
-    # Get the plan ID for a specific processor
-    def plan_id_for(processor)
-      processor_plan_ids[processor.to_sym]
+    # Get the plan ID(s) for a specific processor
+    # @param processor [Symbol] The payment processor
+    # @param period [Symbol, nil] Optional specific period to retrieve
+    # @return [String, Hash, nil] Single ID, hash of IDs, or nil
+    def plan_id_for(processor, period: nil)
+      ids = processor_plan_ids[processor.to_sym]
+
+      # If no period specified, return as-is (String or Hash)
+      return ids if period.nil?
+
+      # If ids is a Hash, return the specific period
+      return ids[period.to_sym] if ids.is_a?(Hash)
+
+      # If ids is a String and they asked for a period, return nil (not multi-period)
+      nil
     end
 
-    # Shorthand for Stripe price ID
-    def stripe_price(id = nil)
-      if id.nil?
-        plan_id_for(:stripe) # getter
+    # Shorthand for Stripe price ID(s)
+    # Supports both single price and multi-period prices
+    #
+    # @overload stripe_price
+    #   Get all Stripe price IDs
+    #   @return [String, Hash] Single price ID or hash of period => price_id
+    # @overload stripe_price(id)
+    #   Set a single Stripe price ID (backward compatible)
+    #   @param id [String] The Stripe price ID
+    # @overload stripe_price(prices)
+    #   Set multiple period-specific Stripe price IDs
+    #   @param prices [Hash] Hash of period => price_id (e.g., { month: "price_m", year: "price_y" })
+    # @overload stripe_price(period)
+    #   Get Stripe price ID for a specific period
+    #   @param period [Symbol] The billing period (e.g., :month, :year)
+    #   @return [String, nil] Price ID for that period
+    #
+    # @example Get all prices
+    #   plan.stripe_price # => { month: "price_m", year: "price_y" }
+    # @example Get specific period
+    #   plan.stripe_price(:month) # => "price_m"
+    # @example Set single price (backward compatible)
+    #   stripe_price "price_123"
+    # @example Set multiple periods
+    #   stripe_price month: "price_m", year: "price_y"
+    def stripe_price(id_or_period = nil)
+      if id_or_period.nil?
+        # Getter: return all prices
+        plan_id_for(:stripe)
+      elsif id_or_period.is_a?(Hash)
+        # Setter: hash of period => price_id
+        processor_plan(:stripe, id_or_period)
+      elsif id_or_period.is_a?(Symbol)
+        # Getter: specific period
+        plan_id_for(:stripe, period: id_or_period)
       else
-        processor_plan(:stripe, id) # setter
+        # Setter: single price ID (backward compatible)
+        processor_plan(:stripe, id_or_period)
+      end
+    end
+
+    # Get all Stripe price IDs as a hash (always returns hash format)
+    # @return [Hash] Hash of period => price_id, or { default: price_id } for single-price plans
+    def stripe_prices
+      ids = plan_id_for(:stripe)
+      return {} if ids.nil?
+      return ids if ids.is_a?(Hash)
+      { default: ids } # Wrap single ID in hash for consistency
+    end
+
+    # Check if this plan matches a given processor price ID
+    # Works with both single-price and multi-period plans
+    # @param processor_id [String] The price ID to match
+    # @return [Boolean] True if this plan includes the given price ID
+    def matches_processor_id?(processor_id)
+      processor_plan_ids.values.any? do |ids|
+        if ids.is_a?(Hash)
+          ids.values.include?(processor_id)
+        else
+          ids == processor_id
+        end
       end
     end
 
     # Create a checkout session for this subscription plan
-    def create_checkout_session(user, success_url:, cancel_url:, processor: :stripe)
+    # @param user [Object] The user creating the checkout session
+    # @param success_url [String] URL to redirect after successful checkout
+    # @param cancel_url [String] URL to redirect if checkout is cancelled
+    # @param processor [Symbol] Payment processor to use (default: :stripe)
+    # @param period [Symbol, nil] Billing period for multi-period plans (e.g., :month, :year)
+    #
+    # @example Single-price plan (backward compatible)
+    #   plan.create_checkout_session(user, success_url: "/success", cancel_url: "/cancel")
+    #
+    # @example Multi-period plan (must specify period)
+    #   plan.create_checkout_session(user, success_url: "/success", cancel_url: "/cancel", period: :month)
+    #   plan.create_checkout_session(user, success_url: "/success", cancel_url: "/cancel", period: :year)
+    def create_checkout_session(user, success_url:, cancel_url:, processor: :stripe, period: nil)
       raise ArgumentError, "User must respond to payment_processor" unless user.respond_to?(:payment_processor)
       raise ArgumentError, "No fulfillment period configured for plan: #{name}" unless fulfillment_period
 
-      plan_id = plan_id_for(processor)
-      raise ArgumentError, "No #{processor.to_s.titleize} plan ID configured for plan: #{name}" unless plan_id
+      plan_ids = plan_id_for(processor)
+      raise ArgumentError, "No #{processor.to_s.titleize} plan ID configured for plan: #{name}" unless plan_ids
+
+      # Determine which price ID to use
+      plan_id = if plan_ids.is_a?(Hash)
+        # Multi-period plan: period is required
+        raise ArgumentError, "This plan has multiple billing periods (#{plan_ids.keys.join(', ')}). Please specify period: parameter (e.g., period: :month)" if period.nil?
+        plan_ids[period.to_sym] || raise(ArgumentError, "Period #{period.inspect} not found. Available periods: #{plan_ids.keys.inspect}")
+      else
+        # Single-price plan: use the ID directly
+        plan_ids
+      end
 
       case processor
       when :stripe

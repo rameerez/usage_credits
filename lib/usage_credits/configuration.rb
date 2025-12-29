@@ -111,9 +111,12 @@ module UsageCredits
     end
 
     # Find a subscription plan by its processor-specific ID
+    # Works with both single-price and multi-period plans
+    # @param processor_id [String] The price ID to search for
+    # @return [CreditSubscriptionPlan, nil] The matching plan or nil
     def find_subscription_plan_by_processor_id(processor_id)
       @credit_subscription_plans.values.find do |plan|
-        plan.processor_plan_ids.values.include?(processor_id)
+        plan.matches_processor_id?(processor_id)
       end
     end
 

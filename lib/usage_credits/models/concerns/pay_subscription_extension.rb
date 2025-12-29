@@ -343,6 +343,16 @@ module UsageCredits
       fulfillment = UsageCredits::Fulfillment.find_by(source: self)
       return unless fulfillment
 
+      # Debug logging to track plan changes and potential issues
+      Rails.logger.info "=" * 80
+      Rails.logger.info "[UsageCredits] Plan change detected for subscription #{id}"
+      Rails.logger.info "  Processor plan changed: #{saved_change_to_processor_plan.inspect}"
+      Rails.logger.info "  Subscription status: #{status}"
+      Rails.logger.info "  Current period end: #{current_period_end}"
+      Rails.logger.info "  Fulfillment metadata: #{fulfillment.metadata.inspect}"
+      Rails.logger.info "  Fulfillment period: #{fulfillment.fulfillment_period}"
+      Rails.logger.info "  Next fulfillment at: #{fulfillment.next_fulfillment_at}"
+
       # Warn if current_period_end is nil for an active subscription - this is an edge case
       # that could indicate incomplete data from the payment processor
       if current_period_end.nil? && status == "active"
@@ -354,8 +364,14 @@ module UsageCredits
       current_plan_id = fulfillment.metadata["plan"]
       new_plan_id = processor_plan
 
+      Rails.logger.info "  Looking up current plan: #{current_plan_id}"
+      Rails.logger.info "  Looking up new plan: #{new_plan_id}"
+
       current_plan = UsageCredits.configuration.find_subscription_plan_by_processor_id(current_plan_id)
       new_plan = UsageCredits.configuration.find_subscription_plan_by_processor_id(new_plan_id)
+
+      Rails.logger.info "  Current plan found: #{current_plan&.name} (#{current_plan&.credits_per_period} credits)"
+      Rails.logger.info "  New plan found: #{new_plan&.name} (#{new_plan&.credits_per_period} credits)"
 
       # Handle downgrade to a non-credit plan: schedule fulfillment stop for end of period
       if new_plan.nil? && current_plan.present?
@@ -370,6 +386,7 @@ module UsageCredits
         # This must come first! Returning to current plan = no credits, just clear pending
         # This matches Stripe's billing: no new charge means no new credits
         if current_plan_id == new_plan_id
+          Rails.logger.info "  Action: Returning to current plan (clearing pending change)"
           clear_pending_plan_change(fulfillment)
           return
         end
@@ -378,14 +395,19 @@ module UsageCredits
         current_credits = current_plan&.credits_per_period || 0
         new_credits = new_plan.credits_per_period
 
+        Rails.logger.info "  Comparing credits: #{current_credits} → #{new_credits}"
+
         if new_credits > current_credits
           # UPGRADE: Grant new plan credits immediately
+          Rails.logger.info "  Action: UPGRADE detected - awarding #{new_credits} credits immediately"
           handle_plan_upgrade(new_plan, fulfillment)
         elsif new_credits < current_credits
           # DOWNGRADE: Schedule for end of period (overwrites any previous pending)
+          Rails.logger.info "  Action: DOWNGRADE detected - scheduling for end of period"
           handle_plan_downgrade(new_plan, fulfillment)
         else
           # Same credits amount, different plan - update metadata immediately
+          Rails.logger.info "  Action: Same credits, different plan - updating metadata only"
           update_fulfillment_plan_metadata(fulfillment, new_plan_id)
         end
       rescue => e
@@ -393,13 +415,23 @@ module UsageCredits
         Rails.logger.error e.backtrace.join("\n")
         raise ActiveRecord::Rollback
       end
+
+      Rails.logger.info "  Plan change completed successfully"
+      Rails.logger.info "=" * 80
     end
 
     def handle_plan_upgrade(new_plan, fulfillment)
       wallet = customer.owner.credit_wallet
 
+      Rails.logger.info "    [UPGRADE] Starting upgrade process"
+      Rails.logger.info "    [UPGRADE] Wallet ID: #{wallet.id}, Current balance: #{wallet.balance}"
+      Rails.logger.info "    [UPGRADE] Credits to award: #{new_plan.credits_per_period}"
+      Rails.logger.info "    [UPGRADE] New plan period: #{new_plan.fulfillment_period_display}"
+
       # Calculate expiration using shared helper (uses current_period_end for upgrades)
       credits_expire_at = calculate_credit_expiration(new_plan, current_period_end)
+
+      Rails.logger.info "    [UPGRADE] Credits expire at: #{credits_expire_at || 'never (rollover enabled)'}"
 
       # Grant full new plan credits immediately
       # Use string keys consistently to avoid duplicates after JSON serialization
@@ -415,16 +447,35 @@ module UsageCredits
         }
       )
 
-      # Update fulfillment metadata AND clear any pending downgrade
-      # If user had scheduled a downgrade but then upgrades, the upgrade takes precedence
+      Rails.logger.info "    [UPGRADE] Credits awarded successfully"
+      Rails.logger.info "    [UPGRADE] New balance: #{wallet.reload.balance}"
+
+      # Calculate next fulfillment time based on the NEW plan's period
+      # This ensures the fulfillment schedule matches the new plan's cadence
+      next_fulfillment_at = Time.current + new_plan.parsed_fulfillment_period
+
+      Rails.logger.info "    [UPGRADE] Updating fulfillment record"
+      Rails.logger.info "    [UPGRADE] Old fulfillment_period: #{fulfillment.fulfillment_period}"
+      Rails.logger.info "    [UPGRADE] New fulfillment_period: #{new_plan.fulfillment_period_display}"
+      Rails.logger.info "    [UPGRADE] Old next_fulfillment_at: #{fulfillment.next_fulfillment_at}"
+      Rails.logger.info "    [UPGRADE] New next_fulfillment_at: #{next_fulfillment_at}"
+
+      # Update fulfillment with ALL new plan properties
+      # This includes the period display string and the next fulfillment time
+      # to ensure future fulfillments happen on the correct schedule
       # Use string keys consistently to avoid duplicates after JSON serialization
       fulfillment.update!(
+        fulfillment_period: new_plan.fulfillment_period_display,
+        next_fulfillment_at: next_fulfillment_at,
         metadata: fulfillment.metadata
           .except("pending_plan_change", "plan_change_at")
           .merge("plan" => processor_plan)
       )
 
+      Rails.logger.info "    [UPGRADE] Fulfillment updated successfully"
       Rails.logger.info "Subscription #{id} upgraded to #{processor_plan}, granted #{new_plan.credits_per_period} credits"
+      Rails.logger.info "  Fulfillment period updated to: #{new_plan.fulfillment_period_display}"
+      Rails.logger.info "  Next fulfillment scheduled for: #{next_fulfillment_at}"
     end
 
     def handle_plan_downgrade(new_plan, fulfillment)

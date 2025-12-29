@@ -797,6 +797,150 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
   end
 
   # ========================================
+  # REGRESSION: FULFILLMENT PERIOD UPDATE ON UPGRADE
+  # ========================================
+
+  test "REGRESSION: upgrade updates fulfillment_period and next_fulfillment_at" do
+    # This test ensures that when upgrading between plans with different fulfillment periods,
+    # the fulfillment record is properly updated with the new plan's schedule.
+    # Bug: Previously, only metadata was updated, leaving fulfillment_period and next_fulfillment_at
+    # on the old plan's schedule, causing delayed or incorrect future fulfillments.
+
+    # Create test plans with different fulfillment periods
+    # Note: We need to temporarily override min_fulfillment_period for this test
+    UsageCredits.configure do |config|
+      config.min_fulfillment_period = 1.second  # Allow short periods for testing
+
+      config.subscription_plan :test_fast do
+        processor_plan(:fake_processor, "fast_plan")
+        gives 100.credits.every(1.day)
+        unused_credits :rollover
+      end
+
+      config.subscription_plan :test_slower do
+        processor_plan(:fake_processor, "slower_plan")
+        gives 500.credits.every(7.days)
+        unused_credits :rollover
+      end
+    end
+
+    user = User.create!(email: "period_upgrade@example.com", name: "Period Upgrade User")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_period_upgrade"
+    )
+
+    # Start with fast plan (15 seconds)
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_period_upgrade",
+      processor_plan: "fast_plan",
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    assert_equal "1 day", fulfillment.fulfillment_period
+    initial_next_fulfillment = fulfillment.next_fulfillment_at
+
+    # Verify initial next_fulfillment is ~1 day from now
+    assert_in_delta Time.current + 1.day, initial_next_fulfillment, 5.seconds
+
+    # Upgrade to slower plan (7 days)
+    travel_to 1.hour.from_now do
+      subscription.update!(processor_plan: "slower_plan")
+    end
+
+    # Verify fulfillment record was updated with new plan's period
+    fulfillment.reload
+    assert_equal "7 days", fulfillment.fulfillment_period,
+      "Fulfillment period should be updated to new plan's period"
+
+    # Verify next_fulfillment_at was recalculated based on new plan
+    # It should be ~7 days from the upgrade time (1 hour from initial time)
+    expected_next_fulfillment = Time.current + 1.hour + 7.days
+    assert_in_delta expected_next_fulfillment, fulfillment.next_fulfillment_at, 5.seconds,
+      "Next fulfillment should be rescheduled based on new plan's period"
+
+    # Verify it's significantly different from the old schedule
+    assert fulfillment.next_fulfillment_at > initial_next_fulfillment + 1.day,
+      "Next fulfillment should be much later than the old 1-day schedule"
+
+    # Verify metadata was also updated
+    assert_equal "slower_plan", fulfillment.metadata["plan"]
+
+    # Verify credits were awarded
+    assert_equal 600, wallet.reload.credits # 100 initial + 500 upgrade
+  end
+
+  test "REGRESSION: upgrade between plans with same period only updates metadata" do
+    # Ensure that upgrading between plans with the same fulfillment period
+    # doesn't unnecessarily reset the next_fulfillment_at schedule
+
+    UsageCredits.configure do |config|
+      config.subscription_plan :test_monthly_basic do
+        processor_plan(:fake_processor, "monthly_basic")
+        gives 100.credits.every(:month)
+        unused_credits :rollover
+      end
+
+      config.subscription_plan :test_monthly_premium do
+        processor_plan(:fake_processor, "monthly_premium")
+        gives 500.credits.every(:month)
+        unused_credits :rollover
+      end
+    end
+
+    user = User.create!(email: "same_period@example.com", name: "Same Period User")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_same_period"
+    )
+
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_same_period",
+      processor_plan: "monthly_basic",
+      status: "active",
+      quantity: 1,
+      current_period_end: 30.days.from_now
+    )
+
+    fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
+    initial_next_fulfillment = fulfillment.next_fulfillment_at
+
+    # Upgrade to premium (same period, different credits)
+    travel_to 5.seconds.from_now do
+      subscription.update!(processor_plan: "monthly_premium")
+    end
+
+    fulfillment.reload
+
+    # Period should be updated (even though it's the same value)
+    # Note: :month normalizes to "1 month", not "30 days"
+    assert_equal "1 month", fulfillment.fulfillment_period
+
+    # Next fulfillment should be recalculated from upgrade time
+    expected_next_fulfillment = Time.current + 5.seconds + 1.month
+    assert_in_delta expected_next_fulfillment, fulfillment.next_fulfillment_at, 5.seconds
+
+    # Metadata should be updated
+    assert_equal "monthly_premium", fulfillment.metadata["plan"]
+
+    # Credits should be awarded
+    assert_equal 600, wallet.reload.credits # 100 initial + 500 upgrade
+  end
+
+  # ========================================
   # EDGE CASES: CREDIT EXPIRATION ON UPGRADE
   # ========================================
 

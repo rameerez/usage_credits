@@ -415,6 +415,30 @@ subscription_plan :pro do
 end
 ```
 
+### Upgrades, downgrades, and plan changes
+
+`usage_credits` reacts to plan changes (via the `pay` gem), and we handle automatically credit issuing for upgrades & downgrades:
+
+- **Upgrades**: credits are granted immediately for the new plan. If the new plan expires credits, upgrade credits expire too.
+- **Downgrades**: scheduled for the end of the current period; users keep current benefits until then.
+- **Non-credit plan changes**: moving from credit → non-credit stops fulfillment at period end (no clawback).
+- **Reactivation**: moving back to a credit plan reactivates fulfillment and grants credits (no signup bonus on reactivation).
+- **Pending downgrades**: if a user returns to their current plan before the downgrade takes effect, we cancel the pending change and do **not** grant extra credits.
+- **Credit gaming prevention**: we take measures to protect against user gaming the credit system by repeatedly upgrading/downgrading their subscription.
+
+This happens automatically thanks to our Pay Subscription extension (changes to the `Subscription` model in the `pay` gem trigger `usage_credits` issuing the right credits based on the subscription change)
+
+### What we handle vs. what we don't (brief)
+
+Handled:
+- Subscription create, renew, cancel, upgrade, downgrade, non-credit transitions
+- Pending downgrade application on renewal
+- Credit expiration and rollover
+
+Not handled (yet):
+- Plan changes while **trialing** (we only handle `status == "active"`)
+- Paused subscriptions (see TODO in code)
+
 ## Transaction history & audit trail
 
 Every transaction (whether adding or deducting credits) is logged in the ledger, and automatically tracked with metadata:
@@ -564,9 +588,7 @@ Real billing systems usually find edge cases when handling things like:
 Please help us by contributing to add tests to cover all critical paths!
 
 ## TODO
-
-- [ ] Write a comprehensive `minitest` test suite that covers all critical paths (both happy paths and weird edge cases)
-- [ ] Handle subscription upgrades and downgrades (upgrade immediately; downgrade at end of billing period? Cover all scenarios allowed by the Stripe Customer Portal?)
+No open TODOs here right now. If you find an edge case, please open an issue or PR.
 
 ## Testing
 

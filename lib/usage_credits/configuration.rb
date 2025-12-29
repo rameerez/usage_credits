@@ -30,6 +30,11 @@ module UsageCredits
 
     attr_reader :fulfillment_grace_period
 
+    # Minimum allowed fulfillment period for subscription plans.
+    # Defaults to 1.day to prevent accidental 1-second refill loops in production.
+    # Can be set to shorter periods (e.g., 2.seconds) in development/test for faster iteration.
+    attr_reader :min_fulfillment_period
+
     # =========================================
     # Low balance
     # =========================================
@@ -59,6 +64,9 @@ module UsageCredits
       # long enough that there's a smooth transition and users never get zero credits in between fulfillment periods
       # A good setting is to match the frequency of your UsageCredits::FulfillmentJob runs
       @fulfillment_grace_period = 5.minutes # If you run your fulfillment job every 5 minutes, this should be enough
+
+      # Minimum fulfillment period - prevents accidental 1-second refill loops in production
+      @min_fulfillment_period = 1.day
 
       @allow_negative_balance = false
       @low_balance_threshold = nil
@@ -151,6 +159,18 @@ module UsageCredits
       end
 
       @fulfillment_grace_period = value
+    end
+
+    def min_fulfillment_period=(value)
+      unless value.is_a?(ActiveSupport::Duration)
+        raise ArgumentError, "Minimum fulfillment period must be an ActiveSupport::Duration (e.g. 1.day, 2.seconds)"
+      end
+
+      if value < 1.second
+        raise ArgumentError, "Minimum fulfillment period must be at least 1 second"
+      end
+
+      @min_fulfillment_period = value
     end
 
     # =========================================

@@ -7,6 +7,9 @@ module UsageCredits
 
     # Canonical periods and their aliases
     VALID_PERIODS = {
+      second: [:second, :seconds],        # 1.second
+      minute: [:minute, :minutes],        # 1.minute
+      hour: [:hour, :hours, :hourly],     # 1.hour
       day: [:day, :daily],                # 1.day
       week: [:week, :weekly],             # 1.week
       month: [:month, :monthly],          # 1.month
@@ -14,9 +17,19 @@ module UsageCredits
       year: [:year, :yearly, :annually]   # 1.year
     }.freeze
 
-    MIN_PERIOD = 1.day
+    MIN_PERIOD = 1.day  # Deprecated: Use UsageCredits.configuration.min_fulfillment_period instead
 
     module_function
+
+    # Get the configured minimum fulfillment period
+    def min_fulfillment_period
+      # Use configured value if available, otherwise fall back to default
+      if defined?(UsageCredits) && UsageCredits.respond_to?(:configuration)
+        UsageCredits.configuration.min_fulfillment_period
+      else
+        MIN_PERIOD
+      end
+    end
 
     # Turns things like `:monthly` into `1.month` to always store consistent time periods
     def normalize_period(period)
@@ -24,11 +37,15 @@ module UsageCredits
 
       # Handle ActiveSupport::Duration objects directly
       if period.is_a?(ActiveSupport::Duration)
-        raise ArgumentError, "Period must be at least #{MIN_PERIOD.inspect}" if period < MIN_PERIOD
+        min_period = min_fulfillment_period
+        raise ArgumentError, "Period must be at least #{min_period.inspect}" if period < min_period
         period
       else
         # Convert symbols to canonical durations
-        case period
+        duration = case period
+        when *VALID_PERIODS[:second] then 1.second
+        when *VALID_PERIODS[:minute] then 1.minute
+        when *VALID_PERIODS[:hour] then 1.hour
         when *VALID_PERIODS[:day] then 1.day
         when *VALID_PERIODS[:week] then 1.week
         when *VALID_PERIODS[:month] then 1.month
@@ -37,6 +54,10 @@ module UsageCredits
         else
           raise ArgumentError, "Unsupported period: #{period}. Supported periods: #{VALID_PERIODS.values.flatten.inspect}"
         end
+
+        min_period = min_fulfillment_period
+        raise ArgumentError, "Period must be at least #{min_period.inspect}" if duration < min_period
+        duration
       end
     end
 
@@ -57,12 +78,29 @@ module UsageCredits
           raise ArgumentError, "Unsupported period unit: #{unit}. Supported units: #{valid_units.inspect}"
         end
 
-        duration = amount.send(unit)
-        raise ArgumentError, "Period must be at least #{MIN_PERIOD.inspect}" if duration < MIN_PERIOD
+        # Map alias to canonical unit (e.g., :hourly -> :hour, :seconds -> :second)
+        canonical_unit = canonical_unit_for(unit)
+
+        duration = amount.send(canonical_unit)
+        min_period = min_fulfillment_period
+        raise ArgumentError, "Period must be at least #{min_period.inspect}" if duration < min_period
         duration
       else
         raise ArgumentError, "Invalid period format: #{period_str}. Expected format: '1.month', '2 months', etc."
       end
+    end
+
+    # Map any alias to its canonical unit method name
+    # @param unit [Symbol] The unit symbol (e.g., :hourly, :seconds, :day)
+    # @return [Symbol] The canonical unit method (e.g., :hour, :second, :day)
+    def canonical_unit_for(unit)
+      # Find which canonical unit this alias belongs to
+      VALID_PERIODS.each do |canonical, aliases|
+        return canonical if aliases.include?(unit)
+      end
+
+      # Fallback to the unit itself if not found (shouldn't happen if validation passed)
+      unit
     end
 
     # Validates that a period string matches the expected format and units

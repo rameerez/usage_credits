@@ -19,7 +19,7 @@ module UsageCredits
 
     attr_writer :fulfillment_period
 
-    MIN_PERIOD = 1.day
+    MIN_PERIOD = 1.day  # Deprecated: Use UsageCredits.configuration.min_fulfillment_period instead
 
     def initialize(name)
       @name = name

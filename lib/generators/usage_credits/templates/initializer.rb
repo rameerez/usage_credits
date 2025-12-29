@@ -2,6 +2,13 @@
 
 UsageCredits.configure do |config|
   #
+  # Minimum fulfillment period for subscription plans (default: 1.day)
+  # In development/test, you can set this to a shorter period for faster testing:
+  #
+  # config.min_fulfillment_period = 2.seconds if Rails.env.development?
+  #
+  #
+  #
   # Define your credit-consuming operations below
   #
   # Example:
@@ -85,7 +92,7 @@ UsageCredits.configure do |config|
   # During this time, old credits from the previous period will erroneously count as available balance.
   # But if we set this to 0 or nil, user balance will show up as zero some time until the next fulfillment cycle hits.
   # A good default is to match the frequency of your UsageCredits::FulfillmentJob
-  # fulfillment_grace_period = 5.minutes
+  # config.fulfillment_grace_period = 5.minutes
   #
   #
   #

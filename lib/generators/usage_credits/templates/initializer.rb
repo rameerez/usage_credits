@@ -62,6 +62,9 @@ UsageCredits.configure do |config|
   #   gives 1000.credits.every(:month)
   #   signup_bonus 100.credits
   #   unused_credits :expire  # Credits reset each month
+  #
+  #   # Single price (backward compatible)
+  #   stripe_price "price_basic_monthly"
   # end
   #
   # subscription_plan :pro do
@@ -69,6 +72,13 @@ UsageCredits.configure do |config|
   #   signup_bonus 1_000.credits
   #   trial_includes 500.credits
   #   unused_credits :expire  # Credits expire at the end of the fulfillment period (use :rollover to roll over to next period)
+  #
+  #   # Multi-period pricing (monthly + yearly)
+  #   stripe_price month: "price_pro_monthly", year: "price_pro_yearly"
+  #
+  #   # When creating checkout sessions with multi-period plans, specify the period:
+  #   # plan.create_checkout_session(user, success_url: "/success", cancel_url: "/cancel", period: :month)
+  #   # plan.create_checkout_session(user, success_url: "/success", cancel_url: "/cancel", period: :year)
   # end
   #
   #

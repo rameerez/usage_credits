@@ -26,6 +26,7 @@ module UsageCredits
       "subscription_credits",           # Generic subscription credits
       "subscription_trial",             # Trial period credits
       "subscription_signup_bonus",      # Bonus for subscribing
+      "subscription_upgrade",           # Plan upgrade credits
 
       # One-time purchases
       "credit_pack",                    # Generic credit pack

@@ -56,7 +56,7 @@ module UsageCredits
       # This ensures smooth transition between fulfillment periods.
       # For this amount of time, old, already expired credits will be erroneously counted as available in the user's balance.
       # Keep it short enough that users don't notice they have the last period's credits still available, but
-      # long enough that there's a smooth transition and users never get zero credits in between fullfillment periods
+      # long enough that there's a smooth transition and users never get zero credits in between fulfillment periods
       # A good setting is to match the frequency of your UsageCredits::FulfillmentJob runs
       @fulfillment_grace_period = 5.minutes # If you run your fulfillment job every 5 minutes, this should be enough
 

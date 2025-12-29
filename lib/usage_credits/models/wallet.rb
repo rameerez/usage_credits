@@ -94,9 +94,10 @@ module UsageCredits
       raise InsufficientCredits, "Insufficient credits (#{credits} < #{cost})" unless has_enough_credits_to?(operation_name, **params)
 
       # Create audit trail
-      audit_data = operation.to_audit_hash(params)
+      # Stringify keys from audit_data to avoid duplicate key warnings in JSON
+      audit_data = operation.to_audit_hash(params).deep_stringify_keys
       deduct_params = {
-        metadata: audit_data.merge(operation.metadata).merge(
+        metadata: audit_data.merge(operation.metadata.deep_stringify_keys).merge(
           "executed_at" => Time.current,
           "gem_version" => UsageCredits::VERSION
         ),

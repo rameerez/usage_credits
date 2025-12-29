@@ -112,15 +112,16 @@ module UsageCredits
     end
 
     def fulfillment_metadata
+      # Use string keys consistently to avoid duplicates after JSON serialization
       base_metadata = {
-        last_fulfilled_at: Time.current,
-        reason: "fulfillment_cycle",
-        fulfillment_period: @fulfillment.fulfillment_period,
-        fulfillment_id: @fulfillment.id
+        "last_fulfilled_at" => Time.current,
+        "reason" => "fulfillment_cycle",
+        "fulfillment_period" => @fulfillment.fulfillment_period,
+        "fulfillment_id" => @fulfillment.id
       }
 
       if @fulfillment.source.is_a?(Pay::Subscription)
-        base_metadata[:subscription_id] = @fulfillment.source.id
+        base_metadata["subscription_id"] = @fulfillment.source.id
       end
 
       @fulfillment.metadata.merge(base_metadata)

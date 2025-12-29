@@ -107,6 +107,10 @@ module UsageCredits
       plan = CreditSubscriptionPlan.new(name)
       plan.instance_eval(&block)
       plan.validate!
+
+      # Warn if fulfillment period is shorter than grace period (grace will be auto-capped)
+      warn_if_grace_period_exceeds_fulfillment(plan)
+
       @credit_subscription_plans[name] = plan
     end
 
@@ -221,6 +225,26 @@ module UsageCredits
     def validate_rounding_strategy!
       unless VALID_ROUNDING_STRATEGIES.include?(@rounding_strategy)
         raise ArgumentError, "Invalid rounding strategy. Must be one of: #{VALID_ROUNDING_STRATEGIES.join(', ')}"
+      end
+    end
+
+    # Warn developers when grace period exceeds fulfillment period
+    # In this case, the grace period will be automatically capped to the fulfillment period
+    # to prevent balance accumulation (credits piling up because they don't expire fast enough)
+    def warn_if_grace_period_exceeds_fulfillment(plan)
+      return unless plan.fulfillment_period.present?
+      return if plan.rollover_enabled  # Grace period only matters for expiring credits
+
+      fulfillment_duration = plan.parsed_fulfillment_period
+
+      if @fulfillment_grace_period > fulfillment_duration
+        Rails.logger.warn(
+          "[UsageCredits] Subscription plan '#{plan.name}' has a fulfillment period " \
+          "(#{plan.fulfillment_period}) shorter than the configured grace period " \
+          "(#{@fulfillment_grace_period.inspect}). The grace period will be automatically " \
+          "capped to #{fulfillment_duration.inspect} for this plan to prevent balance accumulation. " \
+          "Consider adjusting config.fulfillment_grace_period if this is not intended."
+        )
       end
     end
   end

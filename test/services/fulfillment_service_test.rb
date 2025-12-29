@@ -571,5 +571,115 @@ module UsageCredits
       latest_tx = wallet.transactions.order(:created_at).last
       assert_equal fulfillment.id, latest_tx.fulfillment_id
     end
+
+    # ========================================
+    # BUG FIX: Balance accumulation with short fulfillment periods
+    # ========================================
+    # When fulfillment_period is much shorter than fulfillment_grace_period,
+    # the balance keeps growing because credits don't expire fast enough.
+    # The fix: cap the effective grace period to the fulfillment period.
+
+    test "credits expire at appropriate time when fulfillment period is shorter than grace period" do
+      # Configure a plan with very short fulfillment period
+      UsageCredits.configure do |config|
+        config.min_fulfillment_period = 1.second
+
+        config.subscription_plan :rapid_test do
+          processor_plan(:fake_processor, "rapid_plan_id")
+          gives 100.credits.every(5.seconds)
+          unused_credits :expire
+        end
+      end
+
+      wallet = usage_credits_wallets(:rich_wallet)
+
+      # Create a fulfillment with 5-second period
+      fulfillment = Fulfillment.create!(
+        wallet: wallet,
+        fulfillment_type: "subscription",
+        credits_last_fulfillment: 100,
+        fulfillment_period: "5.seconds",
+        last_fulfilled_at: 6.seconds.ago,
+        next_fulfillment_at: 1.day.from_now,
+        metadata: { plan: "rapid_plan_id" }
+      )
+      fulfillment.update_columns(next_fulfillment_at: 1.second.ago)
+
+      # Default grace period is 5 minutes (300 seconds)
+      # With 5-second fulfillment period, credits should expire within ~10 seconds (period + capped grace)
+      # NOT in 305 seconds (period + full grace)
+      service = FulfillmentService.new(fulfillment)
+      service.process
+
+      latest_tx = wallet.transactions.where(category: "subscription_credits").order(:created_at).last
+
+      # The expiration should be capped: credits should expire in roughly:
+      # next_fulfillment_at + min(grace_period, fulfillment_period)
+      # NOT next_fulfillment_at + full_grace_period
+
+      fulfillment.reload
+      fulfillment_period = 5.seconds
+      expected_max_expiration = fulfillment.next_fulfillment_at + fulfillment_period
+
+      # Credits should expire no later than 2x the fulfillment period after next_fulfillment_at
+      # (i.e., grace period should be capped to fulfillment_period)
+      assert latest_tx.expires_at <= expected_max_expiration,
+        "Credits expire at #{latest_tx.expires_at}, but should expire by #{expected_max_expiration}. " \
+        "Grace period should be capped to fulfillment period to prevent balance accumulation."
+    end
+
+    test "balance does not accumulate indefinitely with rapid fulfillments" do
+      # This test simulates the actual bug: with short fulfillment periods,
+      # balance keeps growing because credits don't expire fast enough
+
+      UsageCredits.configure do |config|
+        config.min_fulfillment_period = 1.second
+
+        config.subscription_plan :rapid_accumulation_test do
+          processor_plan(:fake_processor, "rapid_accumulation_plan")
+          gives 100.credits.every(2.seconds)
+          unused_credits :expire
+        end
+      end
+
+      wallet = usage_credits_wallets(:empty_wallet)
+
+      # Create fulfillment
+      fulfillment = Fulfillment.create!(
+        wallet: wallet,
+        fulfillment_type: "subscription",
+        credits_last_fulfillment: 100,
+        fulfillment_period: "2.seconds",
+        last_fulfilled_at: nil,
+        next_fulfillment_at: 1.day.from_now,
+        metadata: { plan: "rapid_accumulation_plan" }
+      )
+
+      # Simulate multiple fulfillment cycles
+      # Each cycle adds 100 credits. With proper expiration, old credits should expire
+      # before too many accumulate.
+
+      5.times do |i|
+        # Make fulfillment due
+        fulfillment.update_columns(next_fulfillment_at: 1.second.ago)
+
+        service = FulfillmentService.new(fulfillment.reload)
+        service.process
+      end
+
+      # After 5 cycles of 100 credits each with 2-second periods:
+      # - If grace is capped to fulfillment period (2 sec), max ~200 credits at a time
+      # - If grace is full 5 minutes, we'd have all 500 credits still valid
+
+      # Calculate expected max balance:
+      # With capped grace period = fulfillment period, credits last for 2 periods max
+      # So maximum should be around 2 * 100 = 200 credits
+      max_expected_balance = 200
+
+      # Give some tolerance for timing
+      assert wallet.reload.credits <= max_expected_balance + 100,
+        "Balance is #{wallet.credits}, but should not exceed #{max_expected_balance + 100}. " \
+        "Credits are accumulating because grace period is not capped to fulfillment period."
+    end
   end
 end

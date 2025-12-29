@@ -413,4 +413,74 @@ class UsageCredits::ConfigurationTest < ActiveSupport::TestCase
 
     assert_nil found
   end
+
+  # ========================================
+  # GRACE PERIOD CAPPING WARNING
+  # ========================================
+
+  test "logs warning when fulfillment period is shorter than grace period" do
+    @config.fulfillment_grace_period = 5.minutes
+    @config.min_fulfillment_period = 1.second
+
+    # Capture Rails.logger.warn calls
+    warnings = []
+    original_logger = Rails.logger
+    mock_logger = Minitest::Mock.new
+    mock_logger.expect(:warn, nil) do |message|
+      warnings << message
+      true
+    end
+    Rails.logger = mock_logger
+
+    @config.subscription_plan(:rapid_test) do
+      gives 100.credits.every(10.seconds)
+      unused_credits :expire
+    end
+
+    Rails.logger = original_logger
+
+    assert_equal 1, warnings.length
+    assert_includes warnings.first, "rapid_test"
+    assert_includes warnings.first, "shorter than the configured grace period"
+    assert_includes warnings.first, "automatically capped"
+  end
+
+  test "does not log warning when fulfillment period is longer than grace period" do
+    @config.fulfillment_grace_period = 5.minutes
+
+    warnings = []
+    original_logger = Rails.logger
+    mock_logger = Minitest::Mock.new
+    Rails.logger = mock_logger
+
+    @config.subscription_plan(:monthly_test) do
+      gives 100.credits.every(:month)
+      unused_credits :expire
+    end
+
+    Rails.logger = original_logger
+
+    # Should not have called warn
+    assert_equal 0, warnings.length
+  end
+
+  test "does not log warning for rollover plans even with short periods" do
+    @config.fulfillment_grace_period = 5.minutes
+    @config.min_fulfillment_period = 1.second
+
+    warnings = []
+    original_logger = Rails.logger
+    mock_logger = Minitest::Mock.new
+    Rails.logger = mock_logger
+
+    @config.subscription_plan(:rollover_rapid) do
+      gives 100.credits.every(10.seconds)
+      unused_credits :rollover  # Rollover - grace period doesn't matter
+    end
+
+    Rails.logger = original_logger
+
+    # Should not have called warn for rollover plans
+    assert_equal 0, warnings.length
+  end
 end

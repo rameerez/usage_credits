@@ -124,7 +124,7 @@ module UsageCredits
     # =========================================
 
     # Create a Stripe Checkout session for this pack
-    def create_checkout_session(user)
+    def create_checkout_session(user, **options)
       raise ArgumentError, "User must have a payment processor" unless user.respond_to?(:payment_processor) && user.payment_processor
 
       user.payment_processor.checkout(
@@ -141,7 +141,8 @@ module UsageCredits
           quantity: 1
         }],
         payment_intent_data: { metadata: base_metadata },
-        metadata: base_metadata
+        metadata: base_metadata,
+        **options
       )
     end
 

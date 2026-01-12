@@ -34,7 +34,8 @@ jobs:
       RAILS_VERSION: ${{ matrix.rails_version }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Set up Ruby ${{ matrix.ruby_version }}
         uses: ruby/setup-ruby@v1
@@ -49,6 +50,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-${{ matrix.ruby_version }}-${{ matrix.rails_version }}
+          name: test-results-ruby-${{ matrix.ruby_version }}-${{ matrix.gemfile }}
           path: test/reports/
           retention-days: 7

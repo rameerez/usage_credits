@@ -1,6 +1,9 @@
 # 💳✨ `usage_credits` - Add usage-based credits to your Rails app 
 
-[![Gem Version](https://badge.fury.io/rb/usage_credits.svg?v=0.1)](https://badge.fury.io/rb/usage_credits?v=0.1)
+[![Gem Version](https://badge.fury.io/rb/usage_credits.svg)](https://badge.fury.io/rb/usage_credits)
+
+> [!TIP]
+> **🚀 Ship your next Rails app 10x faster!** I've built **[RailsFast](https://railsfast.com)**, a production-ready Rails boilerplate template that comes with everything you need to launch a software business in days, not weeks.
 
 Allow your users to have in-app credits / tokens they can use to perform operations.
 

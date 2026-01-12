@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-class CreateUsageCreditsTables < ActiveRecord::Migration[8.0]
+class CreateUsageCreditsTables < ActiveRecord::Migration[7.2]
   def change
     primary_key_type, foreign_key_type = primary_and_foreign_key_types
 
@@ -85,4 +85,4 @@ class CreateUsageCreditsTables < ActiveRecord::Migration[8.0]
     return :jsonb if connection.adapter_name.downcase.include?('postgresql')
     :json
   end
-end 
+end

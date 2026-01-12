@@ -1,12 +1,16 @@
-name: Ruby
+name: Tests
 
 on:
   pull_request:
     paths-ignore:
-      - "README.md"
+      - "*.md"
+      - "LICENSE.txt"
   push:
+    branches:
+      - main
     paths-ignore:
-      - "README.md"
+      - "*.md"
+      - "LICENSE.txt"
 
 jobs:
   test:
@@ -15,8 +19,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rails_version: ["7.1.6", "7.2.3", "8.0.4", "8.1.1"]
-        ruby_version: ["3.2", "3.3", "3.4"]
+        ruby_version: ["3.3", "3.4", "4.0"]
+        rails_version: ["7.2.3", "8.1.2"]
         gemfile:
           - Gemfile
           - gemfiles/pay_8.3.gemfile
@@ -27,17 +31,24 @@ jobs:
     env:
       RAILS_ENV: test
       BUNDLE_GEMFILE: ${{ github.workspace }}/${{ matrix.gemfile }}
+      RAILS_VERSION: ${{ matrix.rails_version }}
 
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Ruby
+
+      - name: Set up Ruby ${{ matrix.ruby_version }}
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ matrix.ruby_version }}
           bundler-cache: true
-        env:
-          RAILS_VERSION: ${{ matrix.rails_version }}
+
       - name: Run tests
         run: bundle exec rake test
-        env:
-          RAILS_VERSION: "${{ matrix.rails_version }}"
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.ruby_version }}-${{ matrix.rails_version }}
+          path: test/reports/
+          retention-days: 7

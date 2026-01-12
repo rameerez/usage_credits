@@ -3,9 +3,9 @@
 source "https://rubygems.org"
 
 gem "rake", "~> 13.0"
-gem "pay", "~> 9.0.0"
-gem "stripe", "~> 13.0"
-gem "rails", "~> 8.1.0"
+gem "rails", "~> 7.2.0"
+gem "pay", "~> 11.0"
+gem "stripe", "~> 18.0"
 
 group :development do
   gem "appraisal"

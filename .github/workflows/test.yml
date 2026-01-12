@@ -20,9 +20,10 @@ jobs:
       fail-fast: false
       matrix:
         ruby_version: ["3.3", "3.4", "4.0"]
-        rails_version: ["7.2.3", "8.1.2"]
         gemfile:
           - Gemfile
+          - gemfiles/rails_7.2.gemfile
+          - gemfiles/rails_8.1.gemfile
           - gemfiles/pay_8.3.gemfile
           - gemfiles/pay_9.0.gemfile
           - gemfiles/pay_10.0.gemfile
@@ -31,7 +32,6 @@ jobs:
     env:
       RAILS_ENV: test
       BUNDLE_GEMFILE: ${{ github.workspace }}/${{ matrix.gemfile }}
-      RAILS_VERSION: ${{ matrix.rails_version }}
 
     steps:
       - name: Checkout code

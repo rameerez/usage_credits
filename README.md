@@ -5,7 +5,7 @@
 > [!TIP]
 > **🚀 Ship your next Rails app 10x faster!** I've built **[RailsFast](https://railsfast.com)**, a production-ready Rails boilerplate template that comes with everything you need to launch a software business in days, not weeks.
 
-Allow your users to have in-app credits / tokens they can use to perform operations.
+`usage_credits` allows your users to have in-app credits / tokens they can use to perform operations.
 
 ✨ Perfect for SaaS, AI apps, games, and API products that want to implement usage-based pricing.
 

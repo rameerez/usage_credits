@@ -2,42 +2,52 @@
 
 source "https://rubygems.org"
 
-# Specify your gem's dependencies in usagecredits.gemspec
+# Runtime dependencies are specified in usage_credits.gemspec
 gemspec
 
-# Declare any dependencies that are still in development here instead of in
-# your gemspec. These might include edge Rails or gems from your path or
-# Git. Remember to move these dependencies to your gemspec before releasing
-# your gem to rubygems.org.
+# Build & release tools
+gem "rake", "~> 13.0"
 
-gem "appraisal"
-gem "mocha"
-gem "simplecov", require: false
-gem "standard"
-gem "vcr"
-gem "webmock"
+group :development do
+  gem "appraisal"
+  gem "web-console"
 
-gem "braintree", ">= 2.92.0"
-gem "lemonsqueezy", "~> 1.0"
-gem "paddle", "~> 2.6"
-gem "stripe", "~> 18.0"
+  # Code quality
+  gem "standard"
+  gem "rubocop", "~> 1.0"
+  gem "rubocop-minitest", "~> 0.35"
+  gem "rubocop-performance", "~> 1.0"
+end
 
-gem "prawn"
-gem "receipts"
+group :test do
+  gem "minitest", "~> 5.0"
+  gem "mocha"
+  gem "simplecov", require: false
+  gem "vcr"
+  gem "webmock"
 
-# Test against different databases
-gem "sqlite3"
-gem "pg"
+  # Payment processors (for testing Pay integration)
+  # Note: stripe version is specified in Appraisals per Pay version
+  gem "braintree", ">= 2.92.0"
+  gem "lemonsqueezy", "~> 1.0"
+  gem "paddle", "~> 2.6"
 
-# Used for the dummy Rails app integration
-gem "bootsnap", require: false
-gem "puma"
-gem "web-console", group: :development
+  # Receipts
+  gem "prawn"
+  gem "receipts"
 
-gem "importmap-rails"
-gem "sprockets-rails"
-gem "stimulus-rails"
-gem "turbo-rails"
+  # Database adapters
+  gem "sqlite3"
+  gem "pg"
 
-# Fix RDoc version conflict (Ruby 3.4.2 ships with 7.0.3, force using it)
-gem "rdoc", ">= 7.0"
+  # Dummy Rails app
+  gem "bootsnap", require: false
+  gem "puma"
+  gem "importmap-rails"
+  gem "sprockets-rails"
+  gem "stimulus-rails"
+  gem "turbo-rails"
+
+  # Fix RDoc version conflict (Ruby 3.4+ ships with 7.0.3)
+  gem "rdoc", ">= 7.0"
+end

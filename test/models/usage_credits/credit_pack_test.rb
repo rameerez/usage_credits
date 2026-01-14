@@ -543,4 +543,510 @@ class UsageCredits::CreditPackTest < ActiveSupport::TestCase
 
     mock_payment_processor.verify
   end
+
+  # ========================================
+  # CUSTOM CHECKOUT OPTIONS
+  # ========================================
+
+  test "create_checkout_session passes through success_url and cancel_url" do
+    pack = UsageCredits::CreditPack.new(:starter)
+    pack.gives(1000)
+    pack.costs(49.dollars)
+
+    user = users(:rich_user)
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      assert_equal "https://example.com/success", args[:success_url]
+      assert_equal "https://example.com/cancel", args[:cancel_url]
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      pack.create_checkout_session(user,
+        success_url: "https://example.com/success",
+        cancel_url: "https://example.com/cancel"
+      )
+    end
+
+    mock_payment_processor.verify
+  end
+
+  test "create_checkout_session passes through allow_promotion_codes" do
+    pack = UsageCredits::CreditPack.new(:starter)
+    pack.gives(1000)
+    pack.costs(49.dollars)
+
+    user = users(:rich_user)
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      assert_equal true, args[:allow_promotion_codes]
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      pack.create_checkout_session(user, allow_promotion_codes: true)
+    end
+
+    mock_payment_processor.verify
+  end
+
+  test "create_checkout_session passes through locale" do
+    pack = UsageCredits::CreditPack.new(:starter)
+    pack.gives(1000)
+    pack.costs(49.dollars)
+
+    user = users(:rich_user)
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      assert_equal "es", args[:locale]
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      pack.create_checkout_session(user, locale: "es")
+    end
+
+    mock_payment_processor.verify
+  end
+
+  test "create_checkout_session passes through customer_email" do
+    pack = UsageCredits::CreditPack.new(:starter)
+    pack.gives(1000)
+    pack.costs(49.dollars)
+
+    user = users(:rich_user)
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      assert_equal "customer@example.com", args[:customer_email]
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      pack.create_checkout_session(user, customer_email: "customer@example.com")
+    end
+
+    mock_payment_processor.verify
+  end
+
+  test "create_checkout_session passes through multiple options at once" do
+    pack = UsageCredits::CreditPack.new(:starter)
+    pack.gives(1000)
+    pack.costs(49.dollars)
+
+    user = users(:rich_user)
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      assert_equal "https://example.com/success", args[:success_url]
+      assert_equal "https://example.com/cancel", args[:cancel_url]
+      assert_equal true, args[:allow_promotion_codes]
+      assert_equal "fr", args[:locale]
+      assert_equal "required", args[:billing_address_collection]
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      pack.create_checkout_session(user,
+        success_url: "https://example.com/success",
+        cancel_url: "https://example.com/cancel",
+        allow_promotion_codes: true,
+        locale: "fr",
+        billing_address_collection: "required"
+      )
+    end
+
+    mock_payment_processor.verify
+  end
+
+  # ========================================
+  # METADATA MERGING (CRITICAL FOR FULFILLMENT)
+  # ========================================
+
+  test "create_checkout_session merges custom metadata with base_metadata" do
+    pack = UsageCredits::CreditPack.new(:starter)
+    pack.gives(1000)
+    pack.costs(49.dollars)
+
+    user = users(:rich_user)
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      metadata = args[:metadata]
+
+      # Custom metadata should be present
+      assert_equal "custom_value", metadata[:custom_key]
+      assert_equal "org_123", metadata[:organization_id]
+
+      # Base metadata must still be present (critical for fulfillment)
+      assert_equal "credit_pack", metadata[:purchase_type]
+      assert_equal :starter, metadata[:pack_name]
+      assert_equal 1000, metadata[:credits]
+      assert_equal 0, metadata[:bonus_credits]
+      assert_equal 4900, metadata[:price_cents]
+      assert_equal "USD", metadata[:price_currency]
+
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      pack.create_checkout_session(user,
+        metadata: { custom_key: "custom_value", organization_id: "org_123" }
+      )
+    end
+
+    mock_payment_processor.verify
+  end
+
+  test "create_checkout_session base_metadata takes precedence over custom metadata for critical fields" do
+    pack = UsageCredits::CreditPack.new(:starter)
+    pack.gives(1000)
+    pack.costs(49.dollars)
+
+    user = users(:rich_user)
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      metadata = args[:metadata]
+
+      # Attempting to override critical fields should fail - base_metadata wins
+      assert_equal "credit_pack", metadata[:purchase_type], "purchase_type should not be overridable"
+      assert_equal :starter, metadata[:pack_name], "pack_name should not be overridable"
+      assert_equal 1000, metadata[:credits], "credits should not be overridable"
+
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      # Try to override critical metadata fields (malicious or accidental)
+      pack.create_checkout_session(user,
+        metadata: {
+          purchase_type: "something_else",
+          pack_name: "hacked",
+          credits: 999999
+        }
+      )
+    end
+
+    mock_payment_processor.verify
+  end
+
+  test "create_checkout_session merges payment_intent_data metadata correctly" do
+    pack = UsageCredits::CreditPack.new(:pro)
+    pack.gives(5000)
+    pack.bonus(500)
+    pack.costs(99.dollars)
+
+    user = users(:rich_user)
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      pi_metadata = args[:payment_intent_data][:metadata]
+
+      # Custom metadata should be present
+      assert_equal "ref_123", pi_metadata[:internal_ref]
+
+      # Base metadata must still be present
+      assert_equal "credit_pack", pi_metadata[:purchase_type]
+      assert_equal :pro, pi_metadata[:pack_name]
+      assert_equal 5000, pi_metadata[:credits]
+      assert_equal 500, pi_metadata[:bonus_credits]
+
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      pack.create_checkout_session(user,
+        payment_intent_data: { metadata: { internal_ref: "ref_123" } }
+      )
+    end
+
+    mock_payment_processor.verify
+  end
+
+  test "create_checkout_session passes through other payment_intent_data options" do
+    pack = UsageCredits::CreditPack.new(:starter)
+    pack.gives(1000)
+    pack.costs(49.dollars)
+
+    user = users(:rich_user)
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      pi_data = args[:payment_intent_data]
+
+      # Other payment_intent_data options should pass through
+      assert_equal "customer@example.com", pi_data[:receipt_email]
+      assert_equal "Thank you!", pi_data[:description]
+
+      # Metadata should still have base fields
+      assert_equal "credit_pack", pi_data[:metadata][:purchase_type]
+
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      pack.create_checkout_session(user,
+        payment_intent_data: {
+          receipt_email: "customer@example.com",
+          description: "Thank you!"
+        }
+      )
+    end
+
+    mock_payment_processor.verify
+  end
+
+  # ========================================
+  # PROTECTED PARAMETERS (SECURITY)
+  # ========================================
+
+  test "create_checkout_session cannot override mode parameter" do
+    pack = UsageCredits::CreditPack.new(:starter)
+    pack.gives(1000)
+    pack.costs(49.dollars)
+
+    user = users(:rich_user)
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      # Mode must always be "payment" for credit packs, not "subscription"
+      assert_equal "payment", args[:mode], "mode parameter should not be overridable"
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      # Try to override mode (should be ignored)
+      pack.create_checkout_session(user, mode: "subscription")
+    end
+
+    mock_payment_processor.verify
+  end
+
+  test "create_checkout_session cannot override line_items parameter" do
+    pack = UsageCredits::CreditPack.new(:starter)
+    pack.gives(1000)
+    pack.costs(49.dollars)
+
+    user = users(:rich_user)
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      # line_items should be the pack's configured items, not the malicious ones
+      line_item = args[:line_items].first
+      assert_equal 4900, line_item[:price_data][:unit_amount], "line_items should not be overridable"
+      assert_equal 1, line_item[:quantity]
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      # Try to override line_items (should be ignored)
+      pack.create_checkout_session(user,
+        line_items: [{ price: "price_malicious", quantity: 1 }]
+      )
+    end
+
+    mock_payment_processor.verify
+  end
+
+  # ========================================
+  # BACKWARD COMPATIBILITY
+  # ========================================
+
+  test "create_checkout_session works without any options (backward compatible)" do
+    pack = UsageCredits::CreditPack.new(:starter)
+    pack.gives(1000)
+    pack.costs(49.dollars)
+
+    user = users(:rich_user)
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      assert_equal "payment", args[:mode]
+      assert args[:line_items].present?
+      assert args[:metadata].present?
+      assert args[:payment_intent_data].present?
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      # Call without any options - should work exactly as before
+      pack.create_checkout_session(user)
+    end
+
+    mock_payment_processor.verify
+  end
+
+  # ========================================
+  # EDGE CASES
+  # ========================================
+
+  test "create_checkout_session handles empty options hash" do
+    pack = UsageCredits::CreditPack.new(:starter)
+    pack.gives(1000)
+    pack.costs(49.dollars)
+
+    user = users(:rich_user)
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      assert_equal "payment", args[:mode]
+      assert_equal "credit_pack", args[:metadata][:purchase_type]
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      pack.create_checkout_session(user, **{})
+    end
+
+    mock_payment_processor.verify
+  end
+
+  test "create_checkout_session handles nil metadata gracefully" do
+    pack = UsageCredits::CreditPack.new(:starter)
+    pack.gives(1000)
+    pack.costs(49.dollars)
+
+    user = users(:rich_user)
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      # Base metadata should still be present
+      assert_equal "credit_pack", args[:metadata][:purchase_type]
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      pack.create_checkout_session(user, metadata: nil)
+    end
+
+    mock_payment_processor.verify
+  end
+
+  test "create_checkout_session handles nil payment_intent_data gracefully" do
+    pack = UsageCredits::CreditPack.new(:starter)
+    pack.gives(1000)
+    pack.costs(49.dollars)
+
+    user = users(:rich_user)
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) do |args|
+      # Base metadata should still be present in payment_intent_data
+      assert_equal "credit_pack", args[:payment_intent_data][:metadata][:purchase_type]
+      true
+    end
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      pack.create_checkout_session(user, payment_intent_data: nil)
+    end
+
+    mock_payment_processor.verify
+  end
+
+  # ========================================
+  # NON-MUTATION OF CALLER'S DATA
+  # ========================================
+
+  test "create_checkout_session does not mutate caller's payment_intent_data hash" do
+    pack = UsageCredits::CreditPack.new(:starter)
+    pack.gives(1000)
+    pack.costs(49.dollars)
+
+    user = users(:rich_user)
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) { true }
+
+    # Create a hash that the caller might want to reuse
+    caller_payment_intent_data = {
+      receipt_email: "customer@example.com",
+      metadata: { internal_ref: "ref_123", tracking_id: "track_456" }
+    }
+
+    # Store the original state for comparison
+    original_metadata = caller_payment_intent_data[:metadata].dup
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      pack.create_checkout_session(user, payment_intent_data: caller_payment_intent_data)
+    end
+
+    # The caller's hash should NOT have been mutated
+    assert_equal original_metadata, caller_payment_intent_data[:metadata],
+      "The caller's payment_intent_data[:metadata] should not be deleted or modified"
+    assert_equal "customer@example.com", caller_payment_intent_data[:receipt_email],
+      "Other keys in payment_intent_data should remain intact"
+
+    mock_payment_processor.verify
+  end
+
+  test "create_checkout_session allows reusing payment_intent_data hash for multiple calls" do
+    pack = UsageCredits::CreditPack.new(:starter)
+    pack.gives(1000)
+    pack.costs(49.dollars)
+
+    user = users(:rich_user)
+
+    # A reusable hash that a caller might use for multiple checkout sessions
+    reusable_options = {
+      receipt_email: "customer@example.com",
+      metadata: { campaign: "summer_sale" }
+    }
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    # Expect two calls
+    mock_payment_processor.expect(:checkout, mock_checkout_session) { true }
+    mock_payment_processor.expect(:checkout, mock_checkout_session) { true }
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      # First call
+      pack.create_checkout_session(user, payment_intent_data: reusable_options)
+
+      # Second call should work identically (hash not mutated)
+      pack.create_checkout_session(user, payment_intent_data: reusable_options)
+    end
+
+    # The hash should still have its metadata after both calls
+    assert_equal({ campaign: "summer_sale" }, reusable_options[:metadata],
+      "Metadata should still be present after multiple checkout calls")
+
+    mock_payment_processor.verify
+  end
 end

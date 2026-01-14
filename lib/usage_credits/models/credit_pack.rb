@@ -123,9 +123,55 @@ module UsageCredits
     # Payment Integration
     # =========================================
 
-    # Create a Stripe Checkout session for this pack
-    def create_checkout_session(user)
+    # Create a Stripe Checkout session for this pack.
+    #
+    # Accepts optional checkout options that are passed through to the payment processor.
+    # Common options include:
+    #   - success_url: URL to redirect after successful payment
+    #   - cancel_url: URL to redirect if customer cancels
+    #   - allow_promotion_codes: Enable promotion code input (true/false)
+    #   - locale: Checkout page locale (e.g., "en", "es", "fr")
+    #   - customer_email: Pre-fill the customer's email
+    #
+    # Note: The following parameters are protected and cannot be overridden:
+    #   - mode: Always "payment" for credit packs
+    #   - line_items: Always the configured credit pack
+    #
+    # Custom metadata passed in options will be merged with (not replace) the
+    # base pack metadata required for credit fulfillment.
+    #
+    # @param user [Object] A user with a payment processor (via Pay gem)
+    # @param options [Hash] Additional checkout options passed to the payment processor
+    # @return [Object] The checkout session object
+    #
+    # @example Basic usage
+    #   pack.create_checkout_session(current_user)
+    #
+    # @example With custom options
+    #   pack.create_checkout_session(current_user,
+    #     success_url: credits_url,
+    #     cancel_url: pricing_url,
+    #     allow_promotion_codes: true
+    #   )
+    #
+    def create_checkout_session(user, **options)
       raise ArgumentError, "User must have a payment processor" unless user.respond_to?(:payment_processor) && user.payment_processor
+
+      # Merge custom metadata with base_metadata (base_metadata takes precedence for critical fields)
+      custom_metadata = options.delete(:metadata) || {}
+      merged_metadata = custom_metadata.merge(base_metadata)
+
+      # Handle payment_intent_data specially to preserve metadata
+      # We dup to avoid mutating the caller's original hash
+      custom_payment_intent_data = (options.delete(:payment_intent_data) || {}).dup
+      custom_pi_metadata = custom_payment_intent_data.delete(:metadata) || {}
+      merged_payment_intent_data = custom_payment_intent_data.merge(
+        metadata: custom_pi_metadata.merge(base_metadata)
+      )
+
+      # Remove protected parameters that could break credit fulfillment
+      options.delete(:mode)
+      options.delete(:line_items)
 
       user.payment_processor.checkout(
         mode: "payment",
@@ -140,8 +186,9 @@ module UsageCredits
           },
           quantity: 1
         }],
-        payment_intent_data: { metadata: base_metadata },
-        metadata: base_metadata
+        payment_intent_data: merged_payment_intent_data,
+        metadata: merged_metadata,
+        **options
       )
     end
 

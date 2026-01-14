@@ -162,7 +162,8 @@ module UsageCredits
       merged_metadata = custom_metadata.merge(base_metadata)
 
       # Handle payment_intent_data specially to preserve metadata
-      custom_payment_intent_data = options.delete(:payment_intent_data) || {}
+      # We dup to avoid mutating the caller's original hash
+      custom_payment_intent_data = (options.delete(:payment_intent_data) || {}).dup
       custom_pi_metadata = custom_payment_intent_data.delete(:metadata) || {}
       merged_payment_intent_data = custom_payment_intent_data.merge(
         metadata: custom_pi_metadata.merge(base_metadata)

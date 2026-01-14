@@ -976,4 +976,77 @@ class UsageCredits::CreditPackTest < ActiveSupport::TestCase
 
     mock_payment_processor.verify
   end
+
+  # ========================================
+  # NON-MUTATION OF CALLER'S DATA
+  # ========================================
+
+  test "create_checkout_session does not mutate caller's payment_intent_data hash" do
+    pack = UsageCredits::CreditPack.new(:starter)
+    pack.gives(1000)
+    pack.costs(49.dollars)
+
+    user = users(:rich_user)
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    mock_payment_processor.expect(:checkout, mock_checkout_session) { true }
+
+    # Create a hash that the caller might want to reuse
+    caller_payment_intent_data = {
+      receipt_email: "customer@example.com",
+      metadata: { internal_ref: "ref_123", tracking_id: "track_456" }
+    }
+
+    # Store the original state for comparison
+    original_metadata = caller_payment_intent_data[:metadata].dup
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      pack.create_checkout_session(user, payment_intent_data: caller_payment_intent_data)
+    end
+
+    # The caller's hash should NOT have been mutated
+    assert_equal original_metadata, caller_payment_intent_data[:metadata],
+      "The caller's payment_intent_data[:metadata] should not be deleted or modified"
+    assert_equal "customer@example.com", caller_payment_intent_data[:receipt_email],
+      "Other keys in payment_intent_data should remain intact"
+
+    mock_payment_processor.verify
+  end
+
+  test "create_checkout_session allows reusing payment_intent_data hash for multiple calls" do
+    pack = UsageCredits::CreditPack.new(:starter)
+    pack.gives(1000)
+    pack.costs(49.dollars)
+
+    user = users(:rich_user)
+
+    # A reusable hash that a caller might use for multiple checkout sessions
+    reusable_options = {
+      receipt_email: "customer@example.com",
+      metadata: { campaign: "summer_sale" }
+    }
+
+    mock_payment_processor = Minitest::Mock.new
+    mock_checkout_session = OpenStruct.new(url: "https://checkout.stripe.com/test")
+
+    # Expect two calls
+    mock_payment_processor.expect(:checkout, mock_checkout_session) { true }
+    mock_payment_processor.expect(:checkout, mock_checkout_session) { true }
+
+    user.stub(:payment_processor, mock_payment_processor) do
+      # First call
+      pack.create_checkout_session(user, payment_intent_data: reusable_options)
+
+      # Second call should work identically (hash not mutated)
+      pack.create_checkout_session(user, payment_intent_data: reusable_options)
+    end
+
+    # The hash should still have its metadata after both calls
+    assert_equal({ campaign: "summer_sale" }, reusable_options[:metadata],
+      "Metadata should still be present after multiple checkout calls")
+
+    mock_payment_processor.verify
+  end
 end

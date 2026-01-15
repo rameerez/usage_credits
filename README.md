@@ -265,43 +265,48 @@ process_image(params)  # If this fails, credits are already spent!
 > If validation fails (e.g., file too large), both methods will raise `InvalidOperation`.
 > Perform your operation inside the `spend_credits_on` block OR make the credit spend conditional to the actual operation, so users are not charged if the operation fails.
 
-## Low balance alerts (deprecated)
+## Low balance alerts & other lifecycle callbacks
 
-> [!WARNING]
-> Use lifecycle callbacks (below) instead of this old deprecated approach.
+`usage_credits` makes it easy to add callbacks for important events. You configure callbacks in your `usage_credits.rb` initializer file.
 
-You can hook on to our low balance event to notify users when they are running low on credits (useful to upsell them a credit pack):
+You can hook into credit events, for example, to upsell credit packs to users when they reach a low balance:
 
 ```ruby
-UsageCredits.configure do |config|
-  # Alert when balance drops below 100 credits
-  # Set to nil to disable low balance alerts
-  config.low_balance_threshold = 100.credits
-  
-  # Handle low credit balance alerts
-  config.on_low_balance do |user|
-    # Send notification to user
-    UserMailer.low_credits_alert(user).deliver_later
-    
-    # Or trigger any other business logic
-    SlackNotifier.notify("User #{user.id} is running low on credits!")
-  end
+config.on_low_balance_reached do |ctx|
+  # Sell your users credits here
+  # Example: LowCreditsMailer.buy_more(ctx.owner, remaining: ctx.new_balance).deliver_later
 end
 ```
 
-## Lifecycle callbacks
+> [!TIP]
+> For `on_low_balance_reached`, define what a low balance is by setting the `low_balance_threshold` like: `config.low_balance_threshold = 100.credits`
 
-You can hook into credit events for analytics, audit logging, notifications, or custom business logic:
+Here are all the available callbacks you can hook into:
+
+- `on_credits_added`: After credits are added to a wallet
+- `on_credits_deducted`: After credits are deducted from a wallet
+- `on_low_balance_reached`: When balance drops below threshold (fires once per crossing)
+- `on_balance_depleted`: When balance reaches exactly zero
+- `on_insufficient_credits`: When an operation fails due to insufficient credits
+- `on_credit_pack_purchased`: After a credit pack purchase is fulfilled
+- `on_subscription_credits_awarded`: After subscription credits are awarded
+
+They're useful for analytics, audit logging, notifications, or custom business logic.
+
+Callbacks are isolated, so errors in callbacks won't break credit operations.
+
+> [!IMPORTANT]
+> Callbacks get executed every single time the action happens (duh) so you don't want to do heavy operations there, or else your app could become extremely slow. Keep callbacks fast: one good option is using the callback to enqueue background jobs (`deliver_later`, `perform_later`) to avoid blocking credit operations.
+
+### The `ctx` object in callbacks
+
+All callbacks receive a context object (`ctx`). The `ctx` objects contains useful fields like `ctx.owner`, `ctx.amount`, etc. Some examples:
 
 ```ruby
 UsageCredits.configure do |config|
-  # Prompt user to buy more when running low on credits (useful to upsell them a credit pack)
-  config.on_low_balance_reached do |ctx|
-    LowCreditsMailer.buy_more(ctx.owner, remaining: ctx.new_balance).deliver_later
-  end
-
-  # Prompt again when they run out
+  # Prompt users to buy more credits when they run out
   config.on_balance_depleted do |ctx|
+    # Send a mail here like "You've ran out of credits! Purchase more here!"
     OutOfCreditsMailer.buy_more(ctx.owner).deliver_later
   end
 
@@ -313,51 +318,27 @@ UsageCredits.configure do |config|
   # Track purchases in your analytics (Mixpanel, Amplitude, Segment, etc.)
   config.on_credit_pack_purchased do |ctx|
     # Replace with your analytics service
-    Rails.logger.info "[Credits] User #{ctx.owner.id} purchased #{ctx.amount} credits"
-  end
-
-  # Audit trail for credit changes
-  config.on_credits_deducted do |ctx|
-    Rails.logger.info "[Credits] User #{ctx.owner.id} spent #{ctx.amount}, balance: #{ctx.new_balance}"
+    # Log something like: "User #{ctx.owner.id} purchased #{ctx.amount} credits"
   end
 end
 ```
 
-> [!IMPORTANT]
-> Callbacks get executed every single time the action happens (duh) so you don't want to do heavy operations there, or else your app could become extremely slow. Keep callbacks fast: one good option is using the callback to enqueue background jobs (`deliver_later`, `perform_later`) to avoid blocking credit operations.
+Available `ctx` fields vary by event:
 
-Available callbacks:
-- `on_credits_added`: After credits are added to a wallet
-- `on_credits_deducted`: After credits are deducted from a wallet
-- `on_low_balance_reached`: When balance drops below threshold (fires once per crossing)
-- `on_balance_depleted`: When balance reaches exactly zero
-- `on_insufficient_credits`: When an operation fails due to insufficient credits
-- `on_credit_pack_purchased`: After a credit pack purchase is fulfilled
-- `on_subscription_credits_awarded`: After subscription credits are awarded
+- `credits_added`: `ctx.owner`, `ctx.wallet`, `ctx.amount`, `ctx.previous_balance`, `ctx.new_balance`, `ctx.transaction`, `ctx.category`, `ctx.metadata`
+- `credits_deducted`: `ctx.owner`, `ctx.wallet`, `ctx.amount`, `ctx.previous_balance`, `ctx.new_balance`, `ctx.transaction`, `ctx.category`, `ctx.metadata`
+- `low_balance_reached`: `ctx.owner`, `ctx.wallet`, `ctx.previous_balance`, `ctx.new_balance`, `ctx.threshold`
+- `balance_depleted`: `ctx.owner`, `ctx.wallet`, `ctx.previous_balance`, `ctx.new_balance`
+- `insufficient_credits`: `ctx.owner`, `ctx.wallet`, `ctx.amount`, `ctx.operation_name`, `ctx.metadata`
+- `credit_pack_purchased`: `ctx.owner`, `ctx.wallet`, `ctx.amount`, `ctx.transaction`, `ctx.metadata`
+- `subscription_credits_awarded`: `ctx.owner`, `ctx.wallet`, `ctx.amount`, `ctx.transaction`, `ctx.metadata`
 
-All callbacks receive a context object (`ctx`). Available fields vary by event:
-
-| Field | `credits_added` | `credits_deducted` | `low_balance_reached` | `balance_depleted` | `insufficient_credits` | `credit_pack_purchased` | `subscription_credits_awarded` |
-|-------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| `owner` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `wallet` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `amount` | ✓ | ✓ | | | ✓ | ✓ | ✓ |
-| `previous_balance` | ✓ | ✓ | ✓ | ✓ | | | |
-| `new_balance` | ✓ | ✓ | ✓ | ✓ | | | |
-| `transaction` | ✓ | ✓ | | | | ✓ | ✓ |
-| `category` | ✓ | ✓ | | | | | |
-| `threshold` | | | ✓ | | | | |
-| `operation_name` | | | | | ✓ | | |
-| `metadata` | ✓ | ✓ | | | ✓ | ✓ | ✓ |
+All contexts support `ctx.to_h` to convert to a hash (excludes nil values).
 
 **Metadata contents:**
 - `insufficient_credits`: `{ available:, required:, params: }`
 - `credit_pack_purchased`: `{ credit_pack_name:, credit_pack:, pay_charge:, price_cents: }`
 - `subscription_credits_awarded`: `{ subscription_plan_name:, subscription:, pay_subscription:, fulfillment_period: }`
-
-All contexts support `ctx.to_h` to convert to a hash (excludes nil values).
-
-Callbacks are isolated, so errors in callbacks won't break credit operations.
 
 ## Award bonus credits
 

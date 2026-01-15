@@ -92,8 +92,13 @@ module UsageCredits
 
     # Sync in-place modifications to the cached metadata back to the attribute
     # This ensures changes like `metadata["key"] = "value"` are persisted on save
+    # Also ensures metadata is never null for MySQL compatibility (JSON columns can't have defaults)
     def sync_metadata_cache
-      write_attribute(:metadata, @indifferent_metadata.to_h) if @indifferent_metadata
+      if @indifferent_metadata
+        write_attribute(:metadata, @indifferent_metadata.to_h)
+      elsif read_attribute(:metadata).nil?
+        write_attribute(:metadata, {})
+      end
     end
 
     def valid_fulfillment_period_format

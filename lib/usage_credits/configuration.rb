@@ -45,6 +45,18 @@ module UsageCredits
 
     attr_reader :low_balance_callback
 
+    # =========================================
+    # Lifecycle Callbacks
+    # =========================================
+
+    attr_reader :on_credits_added_callback,
+                :on_credits_deducted_callback,
+                :on_low_balance_reached_callback,
+                :on_balance_depleted_callback,
+                :on_insufficient_credits_callback,
+                :on_subscription_credits_awarded_callback,
+                :on_credit_pack_purchased_callback
+
     def initialize
       # Initialize empty data stores
       @operations = {}                  # Credit-consuming operations (e.g., "send_email: 1 credit")
@@ -71,6 +83,15 @@ module UsageCredits
       @allow_negative_balance = false
       @low_balance_threshold = nil
       @low_balance_callback = nil # Called when user hits low_balance_threshold
+
+      # Lifecycle callbacks (all nil by default)
+      @on_credits_added_callback = nil
+      @on_credits_deducted_callback = nil
+      @on_low_balance_reached_callback = nil
+      @on_balance_depleted_callback = nil
+      @on_insufficient_credits_callback = nil
+      @on_subscription_credits_awarded_callback = nil
+      @on_credit_pack_purchased_callback = nil
     end
 
     # =========================================
@@ -189,10 +210,55 @@ module UsageCredits
       @credit_formatter = block
     end
 
-    # Set what happens when credits are low
+    # =========================================
+    # Lifecycle Callback DSL Methods
+    # =========================================
+    # All methods allow nil block to clear the callback (useful for testing)
+
+    # Called after credits are added to a wallet
+    def on_credits_added(&block)
+      @on_credits_added_callback = block
+    end
+
+    # Called after credits are deducted from a wallet
+    def on_credits_deducted(&block)
+      @on_credits_deducted_callback = block
+    end
+
+    # Called when balance crosses below the low_balance_threshold
+    # Receives CallbackContext with full event data
+    def on_low_balance_reached(&block)
+      @on_low_balance_reached_callback = block
+    end
+
+    # Called when balance reaches exactly zero
+    def on_balance_depleted(&block)
+      @on_balance_depleted_callback = block
+    end
+
+    # Called when an operation fails due to insufficient credits
+    def on_insufficient_credits(&block)
+      @on_insufficient_credits_callback = block
+    end
+
+    # Called after subscription credits are awarded
+    def on_subscription_credits_awarded(&block)
+      @on_subscription_credits_awarded_callback = block
+    end
+
+    # Called after a credit pack is purchased
+    def on_credit_pack_purchased(&block)
+      @on_credit_pack_purchased_callback = block
+    end
+
+    # BACKWARD COMPATIBILITY: Legacy method that receives owner, not context
+    # Existing users' code: config.on_low_balance { |owner| ... }
     def on_low_balance(&block)
       raise ArgumentError, "Block is required for low balance callback" unless block_given?
+      # Store legacy callback as before (for backward compat with direct calls)
       @low_balance_callback = block
+      # Also create a wrapper for new callback system that extracts owner from context
+      @on_low_balance_reached_callback = ->(ctx) { block.call(ctx.owner) }
     end
 
     # =========================================

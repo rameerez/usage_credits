@@ -136,11 +136,13 @@ module UsageCredits
       end
 
       begin
+        credit_transaction = nil
+
         # Wrap in transaction to ensure atomicity - if Fulfillment.create! fails,
         # the credits should NOT be added. This is critical for money handling.
         ActiveRecord::Base.transaction do
           # Add credits to the user's wallet
-          credit_wallet.add_credits(
+          credit_transaction = credit_wallet.add_credits(
             pack.total_credits,
             category: "credit_pack_purchase",
             metadata: {
@@ -168,6 +170,20 @@ module UsageCredits
             }
           )
         end
+
+        # Dispatch credit_pack_purchased callback after successful fulfillment
+        # Note: credits_added callback was already fired by add_credits
+        UsageCredits::Callbacks.dispatch(:credit_pack_purchased,
+          wallet: credit_wallet,
+          amount: pack.total_credits,
+          transaction: credit_transaction,
+          metadata: {
+            credit_pack_name: pack_name,
+            credit_pack: pack,
+            pay_charge: self,
+            price_cents: pack.price_cents
+          }
+        )
 
         Rails.logger.info "Successfully fulfilled credit pack #{pack_name} for charge #{id}"
       rescue StandardError => e

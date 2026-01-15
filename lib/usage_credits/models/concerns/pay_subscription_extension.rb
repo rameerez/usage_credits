@@ -276,6 +276,22 @@ module UsageCredits
         # Link created transactions to the fulfillment object for traceability
         UsageCredits::Transaction.where(id: transaction_ids).update_all(fulfillment_id: fulfillment.id)
 
+        # Dispatch subscription_credits_awarded callback if credits were actually awarded
+        if total_credits_awarded > 0
+          UsageCredits::Callbacks.dispatch(:subscription_credits_awarded,
+            wallet: wallet,
+            amount: total_credits_awarded,
+            metadata: {
+              subscription_plan_name: plan.name,
+              subscription: plan,
+              pay_subscription: self,
+              fulfillment_period: plan.fulfillment_period_display,
+              is_reactivation: is_reactivation,
+              status: status
+            }
+          )
+        end
+
       rescue => e
         Rails.logger.error "Failed to fulfill initial credits for subscription #{id}: #{e.message}"
         raise ActiveRecord::Rollback
@@ -435,7 +451,7 @@ module UsageCredits
 
       # Grant full new plan credits immediately
       # Use string keys consistently to avoid duplicates after JSON serialization
-      wallet.add_credits(
+      upgrade_transaction = wallet.add_credits(
         new_plan.credits_per_period,
         category: "subscription_upgrade",
         expires_at: credits_expire_at,
@@ -444,6 +460,20 @@ module UsageCredits
           "plan" => processor_plan,
           "reason" => "plan_upgrade",
           "fulfilled_at" => Time.current
+        }
+      )
+
+      # Dispatch subscription_credits_awarded callback for the upgrade
+      UsageCredits::Callbacks.dispatch(:subscription_credits_awarded,
+        wallet: wallet,
+        amount: new_plan.credits_per_period,
+        transaction: upgrade_transaction,
+        metadata: {
+          subscription_plan_name: new_plan.name,
+          subscription: new_plan,
+          pay_subscription: self,
+          fulfillment_period: new_plan.fulfillment_period_display,
+          reason: "plan_upgrade"
         }
       )
 

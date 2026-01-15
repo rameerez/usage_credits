@@ -91,9 +91,58 @@ UsageCredits.configure do |config|
   #
   # Handle low credit balance alerts – Useful to sell booster credit packs, for example
   #
-  # config.on_low_balance do |user|
-    # Send notification to user when their balance drops below the threshold
-    # UserMailer.low_credits_alert(user).deliver_later
+  # config.on_low_balance do |owner|
+  #   # Send notification to user when their balance drops below the threshold
+  #   UserMailer.low_credits_alert(owner).deliver_later
+  # end
+  #
+  #
+  # === Lifecycle Callbacks ===
+  #
+  # Hook into credit events for analytics, notifications, and custom logic.
+  # All callbacks receive a context object with event-specific data.
+  #
+  # Available callbacks:
+  #   on_credits_added           - After credits are added to a wallet
+  #   on_credits_deducted        - After credits are deducted from a wallet
+  #   on_low_balance_reached     - When balance drops below threshold (fires once per crossing)
+  #   on_balance_depleted        - When balance reaches exactly zero
+  #   on_insufficient_credits    - When an operation fails due to insufficient credits
+  #   on_credit_pack_purchased   - After a credit pack purchase is fulfilled
+  #   on_subscription_credits_awarded - After subscription credits are awarded
+  #
+  # Context object properties (available depending on event):
+  #   ctx.event            # Symbol - the event name
+  #   ctx.owner            # The wallet owner (User, Team, etc.)
+  #   ctx.wallet           # The UsageCredits::Wallet instance
+  #   ctx.amount           # Credits involved
+  #   ctx.previous_balance # Balance before the operation
+  #   ctx.new_balance      # Balance after the operation
+  #   ctx.transaction      # The UsageCredits::Transaction record
+  #   ctx.category         # Transaction category (:manual_adjustment, :operation_charge, etc.)
+  #   ctx.threshold        # Low balance threshold (for low_balance_reached)
+  #   ctx.operation_name   # Operation name (for insufficient_credits)
+  #   ctx.metadata         # Additional context-specific data
+  #   ctx.to_h             # Convert to hash (excludes nil values)
+  #
+  # Example: Send Slack alert on low balance
+  # config.on_low_balance_reached do |ctx|
+  #   SlackNotifier.post("#billing", "#{ctx.owner.email} has #{ctx.new_balance} credits left")
+  # end
+  #
+  # Example: Track purchases in your analytics
+  # config.on_credit_pack_purchased do |ctx|
+  #   Analytics.track(ctx.owner, "Purchased Credits", amount: ctx.amount)
+  # end
+  #
+  # Example: Trigger upsell when balance is depleted
+  # config.on_balance_depleted do |ctx|
+  #   CreditUpsellMailer.out_of_credits(ctx.owner).deliver_later
+  # end
+  #
+  # Example: Log failed operations for debugging
+  # config.on_insufficient_credits do |ctx|
+  #   Rails.logger.warn "[Credits] #{ctx.owner.email} tried #{ctx.operation_name}, needs #{ctx.amount}, has #{ctx.metadata[:available]}"
   # end
   #
   #

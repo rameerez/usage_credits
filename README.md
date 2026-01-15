@@ -286,6 +286,59 @@ UsageCredits.configure do |config|
 end
 ```
 
+## Lifecycle callbacks
+
+Hook into credit events for analytics, audit logging, notifications, or custom business logic:
+
+```ruby
+UsageCredits.configure do |config|
+  # Fired after any credits are added
+  config.on_credits_added do |ctx|
+    Analytics.track(ctx.owner, "credits_added", amount: ctx.amount)
+  end
+
+  # Fired after any credits are deducted
+  config.on_credits_deducted do |ctx|
+    AuditLog.record(user: ctx.owner, event: "credits_spent", data: ctx.to_h)
+  end
+
+  # Fired once when balance crosses below the threshold
+  config.on_low_balance_reached do |ctx|
+    SlackNotifier.alert("#{ctx.owner.email} is low on credits: #{ctx.new_balance}")
+  end
+
+  # Fired when balance reaches exactly zero
+  config.on_balance_depleted do |ctx|
+    CreditUpsellMailer.out_of_credits(ctx.owner).deliver_later
+  end
+
+  # Fired before raising InsufficientCredits error
+  config.on_insufficient_credits do |ctx|
+    Rails.logger.info "#{ctx.owner.email} tried #{ctx.operation_name}, needs #{ctx.amount}"
+  end
+
+  # Fired after credit pack purchase is fulfilled
+  config.on_credit_pack_purchased do |ctx|
+    Analytics.track(ctx.owner, "credit_pack_purchased", credits: ctx.amount)
+  end
+
+  # Fired after subscription credits are awarded
+  config.on_subscription_credits_awarded do |ctx|
+    Analytics.track(ctx.owner, "subscription_credits", credits: ctx.amount)
+  end
+end
+```
+
+All callbacks receive a context object with:
+- `ctx.owner` - The wallet owner (User, Team, etc.)
+- `ctx.wallet` - The wallet instance
+- `ctx.amount` - Credits involved
+- `ctx.previous_balance` / `ctx.new_balance` - Balance before/after
+- `ctx.transaction` - The transaction record (when applicable)
+- `ctx.to_h` - Convert to hash for logging
+
+Callbacks are isolated - errors in callbacks won't break credit operations.
+
 ## Award bonus credits
 
 You might want to award bonus credits to your users for arbitrary actions at any point, like referring a friend, completing signup, or any other reason.

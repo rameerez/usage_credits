@@ -125,24 +125,27 @@ UsageCredits.configure do |config|
   #   ctx.metadata         # Additional context-specific data
   #   ctx.to_h             # Convert to hash (excludes nil values)
   #
-  # Example: Send Slack alert on low balance
+  # IMPORTANT: Keep callbacks fast! Use background jobs (deliver_later, perform_later) to avoid blocking credit operations.
+  #
+  # Example: Prompt user to buy more credits when running low:
   # config.on_low_balance_reached do |ctx|
-  #   SlackNotifier.post("#billing", "#{ctx.owner.email} has #{ctx.new_balance} credits left")
+  #   LowCreditsMailer.buy_more(ctx.owner, remaining: ctx.new_balance).deliver_later
   # end
   #
-  # Example: Track purchases in your analytics
-  # config.on_credit_pack_purchased do |ctx|
-  #   Analytics.track(ctx.owner, "Purchased Credits", amount: ctx.amount)
-  # end
-  #
-  # Example: Trigger upsell when balance is depleted
+  # Example: Prompt user to buy credits when they run out:
   # config.on_balance_depleted do |ctx|
-  #   CreditUpsellMailer.out_of_credits(ctx.owner).deliver_later
+  #   OutOfCreditsMailer.buy_more(ctx.owner).deliver_later
   # end
   #
-  # Example: Log failed operations for debugging
+  # Example: Log when users hit credit limits (useful for debugging)
   # config.on_insufficient_credits do |ctx|
-  #   Rails.logger.warn "[Credits] #{ctx.owner.email} tried #{ctx.operation_name}, needs #{ctx.amount}, has #{ctx.metadata[:available]}"
+  #   Rails.logger.info "[Credits] User #{ctx.owner.id} needs #{ctx.amount}, has #{ctx.metadata[:available]}"
+  # end
+  #
+  # Example: Track credit purchases (replace with your analytics service)
+  # config.on_credit_pack_purchased do |ctx|
+  #   # e.g., Mixpanel, Amplitude, Segment, PostHog, etc.
+  #   YourAnalyticsService.track(ctx.owner.id, "credits_purchased", amount: ctx.amount)
   # end
   #
   #

@@ -29,6 +29,8 @@ require "usage_credits/models/concerns/pay_charge_extension"
 # 4. Core functionality
 require "usage_credits/version"
 require "usage_credits/configuration"  # Single source of truth for all configuration in this gem
+require "usage_credits/callback_context"  # Struct for callback event data
+require "usage_credits/callbacks"         # Callback dispatch module
 
 # 5. Shim Rails classes so requires don't break
 module UsageCredits
@@ -76,6 +78,7 @@ module UsageCredits
     # Reset configuration to defaults (mainly for testing)
     def reset!
       @configuration = nil
+      @deprecation_warnings = {}
     end
 
     # DSL methods - all delegate to configuration
@@ -128,16 +131,30 @@ module UsageCredits
     end
     alias_method :find_plan_by_id, :find_subscription_plan_by_processor_id
 
-    # Event handling for low balance notifications
+    # DEPRECATED: Event handling for low balance notifications
+    # Use on_low_balance_reached callback instead
+    # This method shows a deprecation warning only once to avoid log spam
     def notify_low_balance(owner)
+      @deprecation_warnings ||= {}
+      unless @deprecation_warnings[:notify_low_balance]
+        warn "[DEPRECATION] UsageCredits.notify_low_balance is deprecated. Use on_low_balance_reached callback instead."
+        @deprecation_warnings[:notify_low_balance] = true
+      end
       return unless configuration.low_balance_callback
       configuration.low_balance_callback.call(owner)
     end
 
+    # DEPRECATED: Events are now dispatched through Callbacks module
+    # This method shows a deprecation warning only once to avoid log spam
     def handle_event(event, **params)
+      @deprecation_warnings ||= {}
+      unless @deprecation_warnings[:handle_event]
+        warn "[DEPRECATION] UsageCredits.handle_event is deprecated. Events are now dispatched through the Callbacks module."
+        @deprecation_warnings[:handle_event] = true
+      end
       case event
       when :low_balance_reached
-        notify_low_balance(params[:wallet].owner)
+        notify_low_balance(params[:wallet]&.owner)
       end
     end
 

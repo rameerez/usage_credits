@@ -35,6 +35,11 @@ class ActiveSupport::TestCase
   include ActionMailer::TestHelper
   include ActiveJob::TestHelper
 
+  # Reset UsageCredits configuration between tests to prevent callback pollution
+  teardown do
+    UsageCredits.reset!
+  end
+
   def json_fixture(name)
     JSON.parse File.read(file_fixture(name + ".json"))
   end

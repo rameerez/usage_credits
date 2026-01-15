@@ -162,17 +162,20 @@ module UsageCredits
       Rails.logger.info "  Status: #{status}"
       Rails.logger.info "  Plan: #{plan}"
 
-      # Transaction for atomic awarding + fulfillment creation/reactivation
-      ActiveRecord::Base.transaction do
+      # Variables to track for callback dispatch after transaction commits
+      total_credits_awarded = 0
+      last_credit_transaction = nil
 
-        total_credits_awarded = 0
+      # Transaction for atomic awarding + fulfillment creation/reactivation
+      # Callback is dispatched AFTER this block to ensure credits are persisted
+      ActiveRecord::Base.transaction do
         transaction_ids = []
 
         # 1) If this is a trial and not an active subscription: award trial credits, if any
         if status == "trialing" && plan.trial_credits.positive?
 
           # Immediate awarding of trial credits
-          transaction = wallet.add_credits(plan.trial_credits,
+          last_credit_transaction = wallet.add_credits(plan.trial_credits,
             category: "subscription_trial",
             expires_at: trial_ends_at,
             metadata: {
@@ -182,14 +185,14 @@ module UsageCredits
               fulfilled_at: Time.current
             }
           )
-          transaction_ids << transaction.id
+          transaction_ids << last_credit_transaction.id
           total_credits_awarded += plan.trial_credits
 
         elsif status == "active"
 
           # Awarding of signup bonus, if any (only on initial setup, not reactivation)
           if plan.signup_bonus_credits.positive? && !is_reactivation
-            transaction = wallet.add_credits(plan.signup_bonus_credits,
+            bonus_transaction = wallet.add_credits(plan.signup_bonus_credits,
               category: "subscription_signup_bonus",
               metadata: {
                 subscription_id: id,
@@ -198,13 +201,14 @@ module UsageCredits
                 fulfilled_at: Time.current
               }
             )
-            transaction_ids << transaction.id
+            transaction_ids << bonus_transaction.id
             total_credits_awarded += plan.signup_bonus_credits
+            last_credit_transaction = bonus_transaction
           end
 
           # Actual awarding of the subscription credits
           if plan.credits_per_period.positive?
-            transaction = wallet.add_credits(plan.credits_per_period,
+            credits_transaction = wallet.add_credits(plan.credits_per_period,
               category: "subscription_credits",
               expires_at: credits_expire_at,  # This will be nil if credit rollover is enabled
               metadata: {
@@ -214,8 +218,9 @@ module UsageCredits
                 fulfilled_at: Time.current
               }
             )
-            transaction_ids << transaction.id
+            transaction_ids << credits_transaction.id
             total_credits_awarded += plan.credits_per_period
+            last_credit_transaction = credits_transaction
           end
         end
 
@@ -249,13 +254,12 @@ module UsageCredits
                 "reactivated_at" => Time.current
               )
           )
-          fulfillment = existing_reactivatable_fulfillment
 
-          Rails.logger.info "Reactivated fulfillment #{fulfillment.id} for subscription #{id}"
+          Rails.logger.info "Reactivated fulfillment #{existing_reactivatable_fulfillment.id} for subscription #{id}"
         else
           # Create new fulfillment
           # Use string keys consistently to avoid duplicates after JSON serialization
-          fulfillment = UsageCredits::Fulfillment.create!(
+          UsageCredits::Fulfillment.create!(
             wallet: wallet,
             source: self,
             fulfillment_type: "subscription",
@@ -270,16 +274,34 @@ module UsageCredits
             }
           )
 
-          Rails.logger.info "Initial fulfillment for subscription #{id} finished. Created fulfillment #{fulfillment.id}"
+          Rails.logger.info "Initial fulfillment for subscription #{id} finished"
         end
 
         # Link created transactions to the fulfillment object for traceability
-        UsageCredits::Transaction.where(id: transaction_ids).update_all(fulfillment_id: fulfillment.id)
-
-      rescue => e
-        Rails.logger.error "Failed to fulfill initial credits for subscription #{id}: #{e.message}"
-        raise ActiveRecord::Rollback
+        fulfillment_record = UsageCredits::Fulfillment.find_by(source: self)
+        UsageCredits::Transaction.where(id: transaction_ids).update_all(fulfillment_id: fulfillment_record&.id) if transaction_ids.any?
       end
+
+      # Dispatch callback AFTER transaction commits - ensures credits are persisted
+      if total_credits_awarded > 0
+        UsageCredits::Callbacks.dispatch(:subscription_credits_awarded,
+          wallet: wallet,
+          amount: total_credits_awarded,
+          transaction: last_credit_transaction,
+          metadata: {
+            subscription_plan_name: plan.name,
+            subscription: plan,
+            pay_subscription: self,
+            fulfillment_period: plan.fulfillment_period_display,
+            is_reactivation: is_reactivation,
+            status: status
+          }
+        )
+      end
+
+    rescue => e
+      Rails.logger.error "Failed to fulfill initial credits for subscription #{id}: #{e.message}"
+      raise
     end
 
     # Handle subscription renewal (we received a new payment for another billing period)
@@ -433,45 +455,64 @@ module UsageCredits
 
       Rails.logger.info "    [UPGRADE] Credits expire at: #{credits_expire_at || 'never (rollover enabled)'}"
 
-      # Grant full new plan credits immediately
-      # Use string keys consistently to avoid duplicates after JSON serialization
-      wallet.add_credits(
-        new_plan.credits_per_period,
-        category: "subscription_upgrade",
-        expires_at: credits_expire_at,
+      # Calculate next fulfillment time based on the NEW plan's period
+      # This ensures the fulfillment schedule matches the new plan's cadence
+      next_fulfillment_at = Time.current + new_plan.parsed_fulfillment_period
+
+      # Wrap all database operations in a transaction to ensure atomicity
+      # The callback should only fire after ALL operations succeed
+      upgrade_transaction = nil
+
+      ActiveRecord::Base.transaction do
+        # Grant full new plan credits immediately
+        # Use string keys consistently to avoid duplicates after JSON serialization
+        upgrade_transaction = wallet.add_credits(
+          new_plan.credits_per_period,
+          category: "subscription_upgrade",
+          expires_at: credits_expire_at,
+          metadata: {
+            "subscription_id" => id,
+            "plan" => processor_plan,
+            "reason" => "plan_upgrade",
+            "fulfilled_at" => Time.current
+          }
+        )
+
+        Rails.logger.info "    [UPGRADE] Updating fulfillment record"
+        Rails.logger.info "    [UPGRADE] Old fulfillment_period: #{fulfillment.fulfillment_period}"
+        Rails.logger.info "    [UPGRADE] New fulfillment_period: #{new_plan.fulfillment_period_display}"
+        Rails.logger.info "    [UPGRADE] Old next_fulfillment_at: #{fulfillment.next_fulfillment_at}"
+        Rails.logger.info "    [UPGRADE] New next_fulfillment_at: #{next_fulfillment_at}"
+
+        # Update fulfillment with ALL new plan properties
+        # This includes the period display string and the next fulfillment time
+        # to ensure future fulfillments happen on the correct schedule
+        # Use string keys consistently to avoid duplicates after JSON serialization
+        fulfillment.update!(
+          fulfillment_period: new_plan.fulfillment_period_display,
+          next_fulfillment_at: next_fulfillment_at,
+          metadata: fulfillment.metadata
+            .except("pending_plan_change", "plan_change_at")
+            .merge("plan" => processor_plan)
+        )
+      end
+
+      # Dispatch callback AFTER transaction commits - ensures credits are persisted
+      UsageCredits::Callbacks.dispatch(:subscription_credits_awarded,
+        wallet: wallet,
+        amount: new_plan.credits_per_period,
+        transaction: upgrade_transaction,
         metadata: {
-          "subscription_id" => id,
-          "plan" => processor_plan,
-          "reason" => "plan_upgrade",
-          "fulfilled_at" => Time.current
+          subscription_plan_name: new_plan.name,
+          subscription: new_plan,
+          pay_subscription: self,
+          fulfillment_period: new_plan.fulfillment_period_display,
+          reason: "plan_upgrade"
         }
       )
 
       Rails.logger.info "    [UPGRADE] Credits awarded successfully"
       Rails.logger.info "    [UPGRADE] New balance: #{wallet.reload.balance}"
-
-      # Calculate next fulfillment time based on the NEW plan's period
-      # This ensures the fulfillment schedule matches the new plan's cadence
-      next_fulfillment_at = Time.current + new_plan.parsed_fulfillment_period
-
-      Rails.logger.info "    [UPGRADE] Updating fulfillment record"
-      Rails.logger.info "    [UPGRADE] Old fulfillment_period: #{fulfillment.fulfillment_period}"
-      Rails.logger.info "    [UPGRADE] New fulfillment_period: #{new_plan.fulfillment_period_display}"
-      Rails.logger.info "    [UPGRADE] Old next_fulfillment_at: #{fulfillment.next_fulfillment_at}"
-      Rails.logger.info "    [UPGRADE] New next_fulfillment_at: #{next_fulfillment_at}"
-
-      # Update fulfillment with ALL new plan properties
-      # This includes the period display string and the next fulfillment time
-      # to ensure future fulfillments happen on the correct schedule
-      # Use string keys consistently to avoid duplicates after JSON serialization
-      fulfillment.update!(
-        fulfillment_period: new_plan.fulfillment_period_display,
-        next_fulfillment_at: next_fulfillment_at,
-        metadata: fulfillment.metadata
-          .except("pending_plan_change", "plan_change_at")
-          .merge("plan" => processor_plan)
-      )
-
       Rails.logger.info "    [UPGRADE] Fulfillment updated successfully"
       Rails.logger.info "Subscription #{id} upgraded to #{processor_plan}, granted #{new_plan.credits_per_period} credits"
       Rails.logger.info "  Fulfillment period updated to: #{new_plan.fulfillment_period_display}"

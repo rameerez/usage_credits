@@ -91,9 +91,61 @@ UsageCredits.configure do |config|
   #
   # Handle low credit balance alerts – Useful to sell booster credit packs, for example
   #
-  # config.on_low_balance do |user|
-    # Send notification to user when their balance drops below the threshold
-    # UserMailer.low_credits_alert(user).deliver_later
+  # config.on_low_balance do |owner|
+  #   # Send notification to user when their balance drops below the threshold
+  #   UserMailer.low_credits_alert(owner).deliver_later
+  # end
+  #
+  #
+  # === Lifecycle Callbacks ===
+  #
+  # Hook into credit events for analytics, notifications, and custom logic.
+  # All callbacks receive a context object with event-specific data.
+  #
+  # Available callbacks:
+  #   on_credits_added           - After credits are added to a wallet
+  #   on_credits_deducted        - After credits are deducted from a wallet
+  #   on_low_balance_reached     - When balance drops below threshold (fires once per crossing)
+  #   on_balance_depleted        - When balance reaches exactly zero
+  #   on_insufficient_credits    - When an operation fails due to insufficient credits
+  #   on_credit_pack_purchased   - After a credit pack purchase is fulfilled
+  #   on_subscription_credits_awarded - After subscription credits are awarded
+  #
+  # Context object properties (available depending on event):
+  #   ctx.event            # Symbol - the event name
+  #   ctx.owner            # The wallet owner (User, Team, etc.)
+  #   ctx.wallet           # The UsageCredits::Wallet instance
+  #   ctx.amount           # Credits involved
+  #   ctx.previous_balance # Balance before the operation
+  #   ctx.new_balance      # Balance after the operation
+  #   ctx.transaction      # The UsageCredits::Transaction record
+  #   ctx.category         # Transaction category (:manual_adjustment, :operation_charge, etc.)
+  #   ctx.threshold        # Low balance threshold (for low_balance_reached)
+  #   ctx.operation_name   # Operation name (for insufficient_credits)
+  #   ctx.metadata         # Additional context-specific data
+  #   ctx.to_h             # Convert to hash (excludes nil values)
+  #
+  # IMPORTANT: Keep callbacks fast! Use background jobs (deliver_later, perform_later) to avoid blocking credit operations.
+  #
+  # Example: Prompt user to buy more credits when running low:
+  # config.on_low_balance_reached do |ctx|
+  #   LowCreditsMailer.buy_more(ctx.owner, remaining: ctx.new_balance).deliver_later
+  # end
+  #
+  # Example: Prompt user to buy credits when they run out:
+  # config.on_balance_depleted do |ctx|
+  #   OutOfCreditsMailer.buy_more(ctx.owner).deliver_later
+  # end
+  #
+  # Example: Log when users hit credit limits (useful for debugging)
+  # config.on_insufficient_credits do |ctx|
+  #   Rails.logger.info "[Credits] User #{ctx.owner.id} needs #{ctx.amount}, has #{ctx.metadata[:available]}"
+  # end
+  #
+  # Example: Track credit purchases (replace with your analytics service)
+  # config.on_credit_pack_purchased do |ctx|
+  #   # e.g., Mixpanel, Amplitude, Segment, PostHog, etc.
+  #   YourAnalyticsService.track(ctx.owner.id, "credits_purchased", amount: ctx.amount)
   # end
   #
   #

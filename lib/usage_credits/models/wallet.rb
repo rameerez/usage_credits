@@ -91,7 +91,20 @@ module UsageCredits
       cost = operation.calculate_cost(params)
 
       # Check if user has enough credits
-      raise InsufficientCredits, "Insufficient credits (#{credits} < #{cost})" unless has_enough_credits_to?(operation_name, **params)
+      unless has_enough_credits_to?(operation_name, **params)
+        # Fire insufficient_credits callback before raising
+        UsageCredits::Callbacks.dispatch(:insufficient_credits,
+          wallet: self,
+          amount: cost,
+          operation_name: operation_name,
+          metadata: {
+            available: credits,
+            required: cost,
+            params: params
+          }
+        )
+        raise InsufficientCredits, "Insufficient credits (#{credits} < #{cost})"
+      end
 
       # Create audit trail
       # Stringify keys from audit_data to avoid duplicate key warnings in JSON
@@ -156,6 +169,8 @@ module UsageCredits
         amount = amount.to_i
         raise ArgumentError, "Cannot add non-positive credits" if amount <= 0
 
+        previous_balance = credits  # Capture BEFORE creating transaction
+
         transaction = transactions.create!(
           amount: amount,
           category: category,
@@ -168,7 +183,16 @@ module UsageCredits
         self.balance = credits
         save!
 
-        notify_balance_change(:credits_added, amount)
+        # Dispatch callback with full context
+        UsageCredits::Callbacks.dispatch(:credits_added,
+          wallet: self,
+          amount: amount,
+          category: category,
+          transaction: transaction,
+          previous_balance: previous_balance,
+          new_balance: balance,
+          metadata: metadata
+        )
 
         # To finish, let's return the transaction that has been just created so we can reference it in parts of the code
         # Useful, for example, to update the transaction's `fulfillment` reference in the subscription extension
@@ -253,11 +277,35 @@ module UsageCredits
       self.balance = credits
       save!
 
-      # Fire your existing notifications
-      notify_balance_change(:credits_deducted, amount)
+      # Dispatch credits_deducted callback
+      UsageCredits::Callbacks.dispatch(:credits_deducted,
+        wallet: self,
+        amount: amount,
+        category: category,
+        transaction: spend_tx,
+        previous_balance: previous_balance,
+        new_balance: balance,
+        metadata: metadata
+      )
 
-      # Check if we crossed the low balance threshold
-      check_low_balance if !was_low_balance?(previous_balance) && low_balance?
+      # Check for low balance threshold crossing
+      if !was_low_balance?(previous_balance) && low_balance?
+        UsageCredits::Callbacks.dispatch(:low_balance_reached,
+          wallet: self,
+          threshold: UsageCredits.configuration.low_balance_threshold,
+          previous_balance: previous_balance,
+          new_balance: balance
+        )
+      end
+
+      # Check for balance depletion (balance reaches exactly zero)
+      if previous_balance > 0 && balance == 0
+        UsageCredits::Callbacks.dispatch(:balance_depleted,
+          wallet: self,
+          previous_balance: previous_balance,
+          new_balance: 0
+        )
+      end
 
       spend_tx
       end
@@ -291,22 +339,8 @@ module UsageCredits
     end
 
     # =========================================
-    # Balance Change Notifications
+    # Balance Threshold Helpers
     # =========================================
-
-    def notify_balance_change(event, amount)
-      UsageCredits.handle_event(
-        event,
-        wallet: self,
-        amount: amount,
-        balance: credits
-      )
-    end
-
-    def check_low_balance
-      return unless low_balance?
-      UsageCredits.handle_event(:low_balance_reached, wallet: self)
-    end
 
     def low_balance?
       threshold = UsageCredits.configuration.low_balance_threshold

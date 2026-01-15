@@ -162,17 +162,20 @@ module UsageCredits
       Rails.logger.info "  Status: #{status}"
       Rails.logger.info "  Plan: #{plan}"
 
-      # Transaction for atomic awarding + fulfillment creation/reactivation
-      ActiveRecord::Base.transaction do
+      # Variables to track for callback dispatch after transaction commits
+      total_credits_awarded = 0
+      last_credit_transaction = nil
 
-        total_credits_awarded = 0
+      # Transaction for atomic awarding + fulfillment creation/reactivation
+      # Callback is dispatched AFTER this block to ensure credits are persisted
+      ActiveRecord::Base.transaction do
         transaction_ids = []
 
         # 1) If this is a trial and not an active subscription: award trial credits, if any
         if status == "trialing" && plan.trial_credits.positive?
 
           # Immediate awarding of trial credits
-          transaction = wallet.add_credits(plan.trial_credits,
+          last_credit_transaction = wallet.add_credits(plan.trial_credits,
             category: "subscription_trial",
             expires_at: trial_ends_at,
             metadata: {
@@ -182,14 +185,14 @@ module UsageCredits
               fulfilled_at: Time.current
             }
           )
-          transaction_ids << transaction.id
+          transaction_ids << last_credit_transaction.id
           total_credits_awarded += plan.trial_credits
 
         elsif status == "active"
 
           # Awarding of signup bonus, if any (only on initial setup, not reactivation)
           if plan.signup_bonus_credits.positive? && !is_reactivation
-            transaction = wallet.add_credits(plan.signup_bonus_credits,
+            bonus_transaction = wallet.add_credits(plan.signup_bonus_credits,
               category: "subscription_signup_bonus",
               metadata: {
                 subscription_id: id,
@@ -198,13 +201,14 @@ module UsageCredits
                 fulfilled_at: Time.current
               }
             )
-            transaction_ids << transaction.id
+            transaction_ids << bonus_transaction.id
             total_credits_awarded += plan.signup_bonus_credits
+            last_credit_transaction = bonus_transaction
           end
 
           # Actual awarding of the subscription credits
           if plan.credits_per_period.positive?
-            transaction = wallet.add_credits(plan.credits_per_period,
+            credits_transaction = wallet.add_credits(plan.credits_per_period,
               category: "subscription_credits",
               expires_at: credits_expire_at,  # This will be nil if credit rollover is enabled
               metadata: {
@@ -214,8 +218,9 @@ module UsageCredits
                 fulfilled_at: Time.current
               }
             )
-            transaction_ids << transaction.id
+            transaction_ids << credits_transaction.id
             total_credits_awarded += plan.credits_per_period
+            last_credit_transaction = credits_transaction
           end
         end
 
@@ -249,13 +254,12 @@ module UsageCredits
                 "reactivated_at" => Time.current
               )
           )
-          fulfillment = existing_reactivatable_fulfillment
 
-          Rails.logger.info "Reactivated fulfillment #{fulfillment.id} for subscription #{id}"
+          Rails.logger.info "Reactivated fulfillment #{existing_reactivatable_fulfillment.id} for subscription #{id}"
         else
           # Create new fulfillment
           # Use string keys consistently to avoid duplicates after JSON serialization
-          fulfillment = UsageCredits::Fulfillment.create!(
+          UsageCredits::Fulfillment.create!(
             wallet: wallet,
             source: self,
             fulfillment_type: "subscription",
@@ -270,32 +274,34 @@ module UsageCredits
             }
           )
 
-          Rails.logger.info "Initial fulfillment for subscription #{id} finished. Created fulfillment #{fulfillment.id}"
+          Rails.logger.info "Initial fulfillment for subscription #{id} finished"
         end
 
         # Link created transactions to the fulfillment object for traceability
-        UsageCredits::Transaction.where(id: transaction_ids).update_all(fulfillment_id: fulfillment.id)
-
-        # Dispatch subscription_credits_awarded callback if credits were actually awarded
-        if total_credits_awarded > 0
-          UsageCredits::Callbacks.dispatch(:subscription_credits_awarded,
-            wallet: wallet,
-            amount: total_credits_awarded,
-            metadata: {
-              subscription_plan_name: plan.name,
-              subscription: plan,
-              pay_subscription: self,
-              fulfillment_period: plan.fulfillment_period_display,
-              is_reactivation: is_reactivation,
-              status: status
-            }
-          )
-        end
-
-      rescue => e
-        Rails.logger.error "Failed to fulfill initial credits for subscription #{id}: #{e.message}"
-        raise ActiveRecord::Rollback
+        fulfillment_record = UsageCredits::Fulfillment.find_by(source: self)
+        UsageCredits::Transaction.where(id: transaction_ids).update_all(fulfillment_id: fulfillment_record&.id) if transaction_ids.any?
       end
+
+      # Dispatch callback AFTER transaction commits - ensures credits are persisted
+      if total_credits_awarded > 0
+        UsageCredits::Callbacks.dispatch(:subscription_credits_awarded,
+          wallet: wallet,
+          amount: total_credits_awarded,
+          transaction: last_credit_transaction,
+          metadata: {
+            subscription_plan_name: plan.name,
+            subscription: plan,
+            pay_subscription: self,
+            fulfillment_period: plan.fulfillment_period_display,
+            is_reactivation: is_reactivation,
+            status: status
+          }
+        )
+      end
+
+    rescue => e
+      Rails.logger.error "Failed to fulfill initial credits for subscription #{id}: #{e.message}"
+      raise
     end
 
     # Handle subscription renewal (we received a new payment for another billing period)

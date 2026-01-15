@@ -23,20 +23,41 @@ module UsageCredits
     def succeeded?
       case type
       when "Pay::Stripe::Charge"
-        status = data["status"] || data[:status]
+        # Pay 10+ stores the full Stripe charge object in `object` column
+        # Older Pay versions stored charge details in `data` column
+        # We check both for backward compatibility
+        stripe_object = charge_object_data
+        status = stripe_object["status"]
+
         # Explicitly check for failure states
         return false if status == "failed"
         return false if status == "pending"
         return false if status == "canceled"
         return true if status == "succeeded"
+
         # Fallback: check if amount was actually captured
-        return data["amount_captured"].to_i == amount.to_i && amount.to_i.positive?
+        amount_captured = stripe_object["amount_captured"].to_i
+        return amount_captured == amount.to_i && amount.to_i.positive?
       end
 
       # For non-Stripe charges, we assume Pay only creates charges after successful payment
       # This is a reasonable assumption based on Pay gem's behavior
       # TODO: Implement for more payment processors if needed
       true
+    end
+
+    # Returns the Stripe charge object data, checking both `object` (Pay 10+)
+    # and `data` (older Pay versions) for backward compatibility
+    def charge_object_data
+      # Pay 10+ stores full Stripe object in `object` column
+      if respond_to?(:object) && object.is_a?(Hash) && object.any?
+        object.with_indifferent_access
+      # Older Pay versions stored charge details in `data` column
+      elsif data.is_a?(Hash) && data.any?
+        data.with_indifferent_access
+      else
+        {}.with_indifferent_access
+      end
     end
 
     def refunded?

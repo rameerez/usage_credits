@@ -64,14 +64,60 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
     assert_kind_of Hash, charge.data
   end
 
-  test "succeeded? returns true for succeeded Stripe charge" do
+  test "succeeded? returns true for succeeded Stripe charge with status in data (legacy Pay)" do
     charge = pay_charges(:completed_charge)
     charge.type = "Pay::Stripe::Charge"
 
     assert charge.succeeded?
   end
 
-  test "succeeded? returns true when amount_captured matches amount" do
+  test "succeeded? returns true when status is in object column (Pay 10+)" do
+    charge = Pay::Charge.new(
+      type: "Pay::Stripe::Charge",
+      amount: 4900,
+      object: { "status" => "succeeded", "amount_captured" => 4900 },
+      data: {}  # Empty data to simulate Pay 10+ behavior
+    )
+
+    assert charge.succeeded?
+  end
+
+  test "succeeded? returns false when status is failed in object column (Pay 10+)" do
+    charge = Pay::Charge.new(
+      type: "Pay::Stripe::Charge",
+      amount: 4900,
+      object: { "status" => "failed", "amount_captured" => 0 },
+      data: {}
+    )
+
+    assert_not charge.succeeded?
+  end
+
+  test "succeeded? falls back to data column when object is empty (legacy Pay)" do
+    charge = Pay::Charge.new(
+      type: "Pay::Stripe::Charge",
+      amount: 4900,
+      object: {},  # Empty object
+      data: { "status" => "succeeded", "amount_captured" => 4900 }
+    )
+
+    assert charge.succeeded?
+  end
+
+  test "succeeded? prefers object over data when both have values (Pay 10+)" do
+    # In Pay 10+, object should be authoritative
+    charge = Pay::Charge.new(
+      type: "Pay::Stripe::Charge",
+      amount: 4900,
+      object: { "status" => "failed", "amount_captured" => 0 },
+      data: { "status" => "succeeded", "amount_captured" => 4900 }  # Legacy data should be ignored
+    )
+
+    # Should use object (failed), not data (succeeded)
+    assert_not charge.succeeded?
+  end
+
+  test "succeeded? returns true when amount_captured matches amount (legacy Pay)" do
     charge = Pay::Charge.new(
       type: "Pay::Stripe::Charge",
       amount: 4900,
@@ -86,6 +132,222 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
     charge = Pay::Charge.new(type: "Pay::Charge")
 
     assert charge.succeeded?
+  end
+
+  test "charge_object_data returns object when present (Pay 10+)" do
+    charge = Pay::Charge.new(
+      object: { "status" => "succeeded", "id" => "ch_123" },
+      data: { "status" => "failed" }
+    )
+
+    result = charge.send(:charge_object_data)
+    assert_equal "succeeded", result["status"]
+    assert_equal "ch_123", result["id"]
+  end
+
+  test "charge_object_data returns data when object is empty (legacy Pay)" do
+    charge = Pay::Charge.new(
+      object: {},
+      data: { "status" => "succeeded", "id" => "ch_456" }
+    )
+
+    result = charge.send(:charge_object_data)
+    assert_equal "succeeded", result["status"]
+    assert_equal "ch_456", result["id"]
+  end
+
+  test "charge_object_data returns empty hash when both are empty" do
+    charge = Pay::Charge.new(object: {}, data: {})
+
+    result = charge.send(:charge_object_data)
+    assert_equal({}, result.to_h)
+  end
+
+  test "charge_object_data returns data when object is nil (not just empty)" do
+    # Some older Pay versions might have nil instead of empty hash
+    charge = Pay::Charge.new(
+      object: nil,
+      data: { "status" => "succeeded", "id" => "ch_nil_object" }
+    )
+
+    result = charge.send(:charge_object_data)
+    assert_equal "succeeded", result["status"]
+    assert_equal "ch_nil_object", result["id"]
+  end
+
+  # ========================================
+  # SUCCEEDED? - ALL STATUS VALUES
+  # ========================================
+  # GitHub Issue #1: https://github.com/rameerez/usage_credits/issues/1
+  # These tests cover all Stripe charge status values
+
+  test "succeeded? returns false for status pending in object (Pay 10+)" do
+    charge = Pay::Charge.new(
+      type: "Pay::Stripe::Charge",
+      amount: 4900,
+      object: { "status" => "pending", "amount_captured" => 0 },
+      data: {}
+    )
+
+    assert_not charge.succeeded?
+  end
+
+  test "succeeded? returns false for status canceled in object (Pay 10+)" do
+    charge = Pay::Charge.new(
+      type: "Pay::Stripe::Charge",
+      amount: 4900,
+      object: { "status" => "canceled", "amount_captured" => 0 },
+      data: {}
+    )
+
+    assert_not charge.succeeded?
+  end
+
+  test "succeeded? returns false for status pending in data (legacy Pay)" do
+    charge = Pay::Charge.new(
+      type: "Pay::Stripe::Charge",
+      amount: 4900,
+      object: {},
+      data: { "status" => "pending", "amount_captured" => 0 }
+    )
+
+    assert_not charge.succeeded?
+  end
+
+  test "succeeded? returns true when status is nil but amount_captured matches (fallback)" do
+    # Edge case: status not present but amount_captured equals amount
+    charge = Pay::Charge.new(
+      type: "Pay::Stripe::Charge",
+      amount: 4900,
+      object: { "amount_captured" => 4900 },  # No status field
+      data: {}
+    )
+
+    assert charge.succeeded?
+  end
+
+  test "succeeded? returns false when status is nil and amount_captured is zero" do
+    charge = Pay::Charge.new(
+      type: "Pay::Stripe::Charge",
+      amount: 4900,
+      object: { "amount_captured" => 0 },  # No status, no capture
+      data: {}
+    )
+
+    assert_not charge.succeeded?
+  end
+
+  test "succeeded? returns false when status is nil and amount_captured differs from amount" do
+    # Partial capture scenario
+    charge = Pay::Charge.new(
+      type: "Pay::Stripe::Charge",
+      amount: 4900,
+      object: { "amount_captured" => 2000 },  # Only partially captured
+      data: {}
+    )
+
+    assert_not charge.succeeded?
+  end
+
+  # ========================================
+  # PAY 10+ INTEGRATION - ISSUE #1 EXACT SCENARIO
+  # ========================================
+  # This test replicates the exact scenario reported in GitHub Issue #1:
+  # - User @onurozer reported Pay::Charge.last.data["status"] returns nil
+  # - But charge.object["status"] returns "succeeded"
+  # - Credits were not being fulfilled because code checked data["status"]
+
+  test "Pay 10+ integration: credits ARE fulfilled when status is in object column (Issue #1 fix)" do
+    # This is the EXACT scenario from Issue #1:
+    # - charge.data["status"] returns nil
+    # - charge.object["status"] returns "succeeded"
+
+    user = User.create!(email: "pay10_integration@example.com", name: "Pay 10+ User")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_pay10_integration"
+    )
+
+    # Simulate Pay 10+ behavior: full Stripe object in `object`, empty `data`
+    charge = Pay::Charge.create!(
+      customer: customer,
+      type: "Pay::Stripe::Charge",  # Use Stripe charge type
+      processor_id: "ch_pay10_integration",
+      amount: 4900,
+      currency: "usd",
+      amount_refunded: 0,
+      metadata: {
+        purchase_type: "credit_pack",
+        pack_name: "starter",
+        credits: 1000,
+        price_cents: 4900
+      },
+      # Pay 10+ stores full Stripe charge object here
+      object: {
+        "id" => "ch_pay10_integration",
+        "status" => "succeeded",
+        "amount" => 4900,
+        "amount_captured" => 4900,
+        "paid" => true,
+        "captured" => true
+      },
+      # In Pay 10+, data only contains store_accessor fields, NOT status
+      data: {
+        # NO "status" key here - this is the root cause of Issue #1
+        "stripe_receipt_url" => "https://example.com/receipt"
+      }
+    )
+
+    # Verify the exact scenario from Issue #1
+    assert_nil charge.data["status"], "data['status'] should be nil (as reported in Issue #1)"
+    assert_equal "succeeded", charge.object["status"], "object['status'] should be 'succeeded'"
+
+    # The fix ensures succeeded? now checks object column
+    assert charge.succeeded?, "succeeded? should return true when object['status'] is 'succeeded'"
+
+    # Credits MUST be fulfilled
+    assert_equal 1000, wallet.reload.credits, "Credits should be fulfilled when object['status'] is 'succeeded'"
+  end
+
+  test "Pay 10+ integration: credits NOT fulfilled when status is failed in object column" do
+    user = User.create!(email: "pay10_failed@example.com", name: "Pay 10+ Failed User")
+    wallet = user.credit_wallet
+
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_pay10_failed"
+    )
+
+    # Simulate Pay 10+ behavior with failed charge
+    Pay::Charge.create!(
+      customer: customer,
+      type: "Pay::Stripe::Charge",
+      processor_id: "ch_pay10_failed",
+      amount: 4900,
+      currency: "usd",
+      amount_refunded: 0,
+      metadata: {
+        purchase_type: "credit_pack",
+        pack_name: "starter",
+        credits: 1000
+      },
+      object: {
+        "id" => "ch_pay10_failed",
+        "status" => "failed",
+        "amount" => 4900,
+        "amount_captured" => 0,
+        "paid" => false,
+        "failure_message" => "Card declined"
+      },
+      data: {}
+    )
+
+    # Credits should NOT be added for failed charges
+    assert_equal 0, wallet.reload.credits, "Credits should NOT be fulfilled for failed charges"
   end
 
   test "refunded? returns true when amount_refunded is positive" do

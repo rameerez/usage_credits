@@ -1,3 +1,8 @@
+## [0.3.0] - 2026-01-15
+
+- Add lifecycle callbacks by @rameerez in https://github.com/rameerez/usage_credits/pull/25
+- Fix credit pack fulfillment not working with Pay 10+ (Stripe data in `object` vs `data` in `Pay::Charge`) by @rameerez in https://github.com/rameerez/usage_credits/pull/26
+
 ## [0.2.1] - 2026-01-15
 
 - Add custom `create_checkout_session` options (like `success_url`) to credit pack purchases by @yshmarov in https://github.com/rameerez/usage_credits/pull/5

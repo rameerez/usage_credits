@@ -183,6 +183,12 @@ module UsageCredits
         self.balance = credits
         save!
 
+        # Store balance information in transaction metadata for audit trail
+        transaction.update!(metadata: transaction.metadata.merge(
+          balance_before: previous_balance,
+          balance_after: balance
+        ))
+
         # Dispatch callback with full context
         UsageCredits::Callbacks.dispatch(:credits_added,
           wallet: self,
@@ -276,6 +282,12 @@ module UsageCredits
       # Keep the `balance` column in sync
       self.balance = credits
       save!
+
+      # Store balance information in transaction metadata for audit trail
+      spend_tx.update!(metadata: spend_tx.metadata.merge(
+        balance_before: previous_balance,
+        balance_after: balance
+      ))
 
       # Dispatch credits_deducted callback
       UsageCredits::Callbacks.dispatch(:credits_deducted,

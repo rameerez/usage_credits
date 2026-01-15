@@ -82,21 +82,6 @@ UsageCredits.configure do |config|
   # end
   #
   #
-  #
-  # Alert when balance drops below this threshold (default: 100 credits)
-  # Set to nil to disable low balance alerts
-  #
-  # config.low_balance_threshold = 100.credits
-  #
-  #
-  # Handle low credit balance alerts – Useful to sell booster credit packs, for example
-  #
-  # config.on_low_balance do |owner|
-  #   # Send notification to user when their balance drops below the threshold
-  #   UserMailer.low_credits_alert(owner).deliver_later
-  # end
-  #
-  #
   # === Lifecycle Callbacks ===
   #
   # Hook into credit events for analytics, notifications, and custom logic.
@@ -127,7 +112,10 @@ UsageCredits.configure do |config|
   #
   # IMPORTANT: Keep callbacks fast! Use background jobs (deliver_later, perform_later) to avoid blocking credit operations.
   #
-  # Example: Prompt user to buy more credits when running low:
+  # Example: Prompt user to buy more credits when running low
+  #
+  # config.low_balance_threshold = 100.credits  # Set to nil to disable (default: 100)
+  #
   # config.on_low_balance_reached do |ctx|
   #   LowCreditsMailer.buy_more(ctx.owner, remaining: ctx.new_balance).deliver_later
   # end

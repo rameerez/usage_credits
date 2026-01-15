@@ -183,7 +183,11 @@ module UsageCredits
         self.balance = credits
         save!
 
-        # Store balance information in transaction metadata for audit trail
+        # Store balance information in transaction metadata for audit trail.
+        # Note: This update! is in the same DB transaction as the create! above (via with_lock),
+        # so if this fails, the entire transaction rolls back - no orphaned records possible.
+        # We intentionally overwrite any user-supplied balance_before/balance_after keys
+        # to ensure system-set values are authoritative.
         transaction.update!(metadata: transaction.metadata.merge(
           balance_before: previous_balance,
           balance_after: balance
@@ -283,7 +287,11 @@ module UsageCredits
       self.balance = credits
       save!
 
-      # Store balance information in transaction metadata for audit trail
+      # Store balance information in transaction metadata for audit trail.
+      # Note: This update! is in the same DB transaction as the create! above (via with_lock),
+      # so if this fails, the entire transaction rolls back - no orphaned records possible.
+      # We intentionally overwrite any user-supplied balance_before/balance_after keys
+      # to ensure system-set values are authoritative.
       spend_tx.update!(metadata: spend_tx.metadata.merge(
         balance_before: previous_balance,
         balance_after: balance

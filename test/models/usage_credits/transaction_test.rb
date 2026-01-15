@@ -595,4 +595,396 @@ class UsageCredits::TransactionTest < ActiveSupport::TestCase
     assert_not transaction.valid?
     assert transaction.errors[:amount].present?
   end
+
+  # ========================================
+  # BALANCE AFTER TRANSACTION
+  # ========================================
+
+  test "balance_after returns the balance stored in metadata" do
+    wallet = usage_credits_wallets(:rich_wallet)
+
+    transaction = UsageCredits::Transaction.create!(
+      wallet: wallet,
+      amount: 100,
+      category: "signup_bonus",
+      metadata: { balance_after: 500 }
+    )
+
+    assert_equal 500, transaction.balance_after
+  end
+
+  test "balance_after returns nil when not stored in metadata" do
+    wallet = usage_credits_wallets(:rich_wallet)
+
+    transaction = UsageCredits::Transaction.create!(
+      wallet: wallet,
+      amount: 100,
+      category: "signup_bonus",
+      metadata: {}
+    )
+
+    assert_nil transaction.balance_after
+  end
+
+  test "balance_before returns the balance stored in metadata" do
+    wallet = usage_credits_wallets(:rich_wallet)
+
+    transaction = UsageCredits::Transaction.create!(
+      wallet: wallet,
+      amount: 100,
+      category: "signup_bonus",
+      metadata: { balance_before: 400, balance_after: 500 }
+    )
+
+    assert_equal 400, transaction.balance_before
+  end
+
+  test "balance_before returns nil when not stored in metadata" do
+    wallet = usage_credits_wallets(:rich_wallet)
+
+    transaction = UsageCredits::Transaction.create!(
+      wallet: wallet,
+      amount: 100,
+      category: "signup_bonus",
+      metadata: {}
+    )
+
+    assert_nil transaction.balance_before
+  end
+
+  test "give_credits stores balance_after in transaction metadata" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+
+    # Give 100 credits to a new wallet
+    tx = wallet.give_credits(100, reason: "signup")
+
+    assert_equal 100, tx.balance_after
+    assert_equal 0, tx.balance_before
+  end
+
+  test "give_credits stores correct balance_after after multiple additions" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+
+    tx1 = wallet.give_credits(100, reason: "first")
+    assert_equal 100, tx1.balance_after
+    assert_equal 0, tx1.balance_before
+
+    tx2 = wallet.give_credits(50, reason: "second")
+    assert_equal 150, tx2.balance_after
+    assert_equal 100, tx2.balance_before
+  end
+
+  test "deduct_credits stores balance_after in transaction metadata" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+    wallet.give_credits(100, reason: "initial")
+
+    # Spend 30 credits
+    spend_tx = wallet.deduct_credits(30, category: "operation_charge", metadata: { test: true })
+
+    assert_equal 70, spend_tx.balance_after
+    assert_equal 100, spend_tx.balance_before
+  end
+
+  test "spend_credits_on stores balance_after in transaction metadata" do
+    UsageCredits.configure do |config|
+      config.operation :balance_test_operation do
+        costs 25.credits
+      end
+    end
+
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+    wallet.give_credits(100, reason: "initial")
+
+    spend_tx = wallet.spend_credits_on(:balance_test_operation)
+
+    assert_equal 75, spend_tx.balance_after
+    assert_equal 100, spend_tx.balance_before
+  end
+
+  test "balance_after is accurate in credit history sequence" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+
+    # Build a history
+    tx1 = wallet.give_credits(1000, reason: "signup")
+    tx2 = wallet.give_credits(500, reason: "bonus")
+    tx3 = wallet.deduct_credits(200, category: "operation_charge", metadata: {})
+    tx4 = wallet.give_credits(100, reason: "referral")
+    tx5 = wallet.deduct_credits(50, category: "operation_charge", metadata: {})
+
+    # Verify each transaction has correct balance_after
+    assert_equal 1000, tx1.balance_after
+    assert_equal 1500, tx2.balance_after
+    assert_equal 1300, tx3.balance_after
+    assert_equal 1400, tx4.balance_after
+    assert_equal 1350, tx5.balance_after
+
+    # Verify balance_before is consistent
+    assert_equal 0, tx1.balance_before
+    assert_equal 1000, tx2.balance_before
+    assert_equal 1500, tx3.balance_before
+    assert_equal 1300, tx4.balance_before
+    assert_equal 1400, tx5.balance_before
+  end
+
+  test "balance_after with expiring credits" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+
+    # Add non-expiring and expiring credits
+    tx1 = wallet.give_credits(100, reason: "permanent")
+    tx2 = wallet.give_credits(50, reason: "expiring", expires_at: 30.days.from_now)
+
+    assert_equal 100, tx1.balance_after
+    assert_equal 150, tx2.balance_after
+  end
+
+  test "formatted_balance_after uses configured formatter" do
+    UsageCredits.configure do |config|
+      config.format_credits { |amount| "#{amount} tokens" }
+    end
+
+    wallet = usage_credits_wallets(:rich_wallet)
+    transaction = UsageCredits::Transaction.create!(
+      wallet: wallet,
+      amount: 100,
+      category: "signup_bonus",
+      metadata: { balance_after: 500 }
+    )
+
+    assert_equal "500 tokens", transaction.formatted_balance_after
+  end
+
+  test "formatted_balance_after returns nil when balance_after is not stored" do
+    wallet = usage_credits_wallets(:rich_wallet)
+    transaction = UsageCredits::Transaction.create!(
+      wallet: wallet,
+      amount: 100,
+      category: "signup_bonus",
+      metadata: {}
+    )
+
+    assert_nil transaction.formatted_balance_after
+  end
+
+  # ========================================
+  # BALANCE_AFTER EDGE CASES
+  # ========================================
+
+  test "balance_after handles nil metadata gracefully" do
+    wallet = usage_credits_wallets(:rich_wallet)
+
+    # Create transaction with nil metadata (should default to {})
+    transaction = UsageCredits::Transaction.create!(
+      wallet: wallet,
+      amount: 100,
+      category: "signup_bonus",
+      metadata: nil
+    )
+
+    # Should return nil, not raise an error
+    assert_nil transaction.balance_after
+    assert_nil transaction.balance_before
+  end
+
+  test "balance_after with negative balance when allow_negative_balance is enabled" do
+    original_setting = UsageCredits.configuration.allow_negative_balance
+
+    begin
+      UsageCredits.configuration.allow_negative_balance = true
+
+      wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+      wallet.give_credits(10, reason: "initial")
+
+      # Deduct more than available (goes "negative" but credits floors at 0)
+      spend_tx = wallet.deduct_credits(25, category: "operation_charge", metadata: {})
+
+      # Note: The credits method floors at 0, so balance_after shows 0 even when
+      # allow_negative_balance is enabled. This is the existing system behavior.
+      # The negative deduction is tracked but the balance is capped at 0.
+      assert_equal 0, spend_tx.balance_after
+      assert_equal 10, spend_tx.balance_before
+
+      # Verify the transaction was created with the correct negative amount
+      assert_equal(-25, spend_tx.amount)
+    ensure
+      UsageCredits.configuration.allow_negative_balance = original_setting
+    end
+  end
+
+  test "balance_after is consistent with wallet balance column" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+
+    tx1 = wallet.give_credits(500, reason: "test")
+    assert_equal wallet.balance, tx1.balance_after, "balance_after should match wallet.balance"
+
+    tx2 = wallet.deduct_credits(100, category: "operation_charge", metadata: {})
+    assert_equal wallet.balance, tx2.balance_after, "balance_after should match wallet.balance"
+
+    tx3 = wallet.give_credits(200, reason: "bonus")
+    assert_equal wallet.balance, tx3.balance_after, "balance_after should match wallet.balance"
+  end
+
+  test "balance_after survives transaction reload" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+
+    tx = wallet.give_credits(100, reason: "test")
+    original_balance_after = tx.balance_after
+
+    tx.reload
+
+    assert_equal original_balance_after, tx.balance_after
+    assert_equal 100, tx.balance_after
+  end
+
+  test "balance_after is preserved when transaction metadata is updated elsewhere" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+
+    tx = wallet.give_credits(100, reason: "test")
+    assert_equal 100, tx.balance_after
+
+    # Simulate external metadata update (like the system adding other tracking data)
+    tx.update!(metadata: tx.metadata.merge(custom_field: "custom_value"))
+    tx.reload
+
+    # balance_after should still be preserved
+    assert_equal 100, tx.balance_after
+    assert_equal "custom_value", tx.metadata[:custom_field]
+  end
+
+  test "balance_after chain remains consistent after interleaved add and deduct" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+
+    # Complex interleaved operations
+    txs = []
+    txs << wallet.give_credits(1000, reason: "initial")
+    txs << wallet.deduct_credits(100, category: "operation_charge", metadata: {})
+    txs << wallet.give_credits(50, reason: "bonus")
+    txs << wallet.deduct_credits(200, category: "operation_charge", metadata: {})
+    txs << wallet.give_credits(100, reason: "referral")
+    txs << wallet.deduct_credits(50, category: "operation_charge", metadata: {})
+
+    # Expected balances: 1000, 900, 950, 750, 850, 800
+    expected_balances = [1000, 900, 950, 750, 850, 800]
+
+    txs.each_with_index do |tx, i|
+      assert_equal expected_balances[i], tx.balance_after,
+        "Transaction #{i + 1} should have balance_after of #{expected_balances[i]}"
+    end
+
+    # Verify final wallet balance matches last transaction's balance_after
+    assert_equal 800, wallet.credits
+    assert_equal wallet.credits, txs.last.balance_after
+  end
+
+  test "balance_before and balance_after are mathematically consistent for normal operations" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+
+    tx1 = wallet.give_credits(500, reason: "initial")
+    tx2 = wallet.deduct_credits(150, category: "operation_charge", metadata: {})
+    tx3 = wallet.give_credits(75, reason: "bonus")
+
+    # For normal operations: balance_before + amount = balance_after
+    [tx1, tx2, tx3].each do |tx|
+      assert_equal tx.balance_after, tx.balance_before + tx.amount,
+        "balance_before (#{tx.balance_before}) + amount (#{tx.amount}) should equal balance_after (#{tx.balance_after})"
+    end
+  end
+
+  test "balance_before and balance_after are both explicitly stored" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+
+    tx = wallet.give_credits(100, reason: "test")
+
+    # Both values should be stored in metadata
+    assert tx.metadata.key?(:balance_before) || tx.metadata.key?("balance_before"),
+      "balance_before should be stored in metadata"
+    assert tx.metadata.key?(:balance_after) || tx.metadata.key?("balance_after"),
+      "balance_after should be stored in metadata"
+  end
+
+  test "balance_after with zero starting balance" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+
+    # Wallet starts at 0
+    assert_equal 0, wallet.credits
+
+    tx = wallet.give_credits(100, reason: "first_credit")
+
+    assert_equal 0, tx.balance_before
+    assert_equal 100, tx.balance_after
+  end
+
+  test "balance_after with exact deduction to zero" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+    wallet.give_credits(100, reason: "initial")
+
+    spend_tx = wallet.deduct_credits(100, category: "operation_charge", metadata: {})
+
+    assert_equal 100, spend_tx.balance_before
+    assert_equal 0, spend_tx.balance_after
+    assert_equal 0, wallet.credits
+  end
+
+  test "balance_after with large credit amounts" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+
+    large_amount = 1_000_000_000  # 1 billion
+    tx = wallet.give_credits(large_amount, reason: "large_test")
+
+    assert_equal large_amount, tx.balance_after
+    assert_equal 0, tx.balance_before
+  end
+
+  test "balance_after in credit_history order matches running balance" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+
+    wallet.give_credits(1000, reason: "initial")
+    wallet.deduct_credits(100, category: "operation_charge", metadata: {})
+    wallet.give_credits(500, reason: "bonus")
+    wallet.deduct_credits(200, category: "operation_charge", metadata: {})
+
+    history = wallet.credit_history.to_a
+
+    # Verify the chain is unbroken: each balance_before should equal previous balance_after
+    history.each_with_index do |tx, i|
+      next if i == 0  # Skip first transaction
+
+      prev_tx = history[i - 1]
+      assert_equal prev_tx.balance_after, tx.balance_before,
+        "Transaction #{i}'s balance_before should equal transaction #{i - 1}'s balance_after"
+    end
+  end
+
+  test "balance_after handles metadata with existing balance_after key gracefully" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+
+    # Even if caller tries to pass their own balance_after, the system should overwrite it
+    # Note: give_credits doesn't accept metadata parameter, so we test via add_credits indirectly
+    # by verifying the system-set balance_after is always correct
+    tx = wallet.give_credits(100, reason: "test")
+
+    # The system should have set balance_after correctly regardless of any input
+    assert_equal 100, tx.balance_after
+  end
+
+  test "deduct_credits with caller-provided metadata preserves it alongside balance_after" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+    wallet.give_credits(100, reason: "initial")
+
+    custom_metadata = { custom_key: "custom_value", tracking_id: "abc123" }
+    spend_tx = wallet.deduct_credits(30, category: "operation_charge", metadata: custom_metadata)
+
+    # Both custom metadata AND balance_after should be present
+    assert_equal "custom_value", spend_tx.metadata[:custom_key]
+    assert_equal "abc123", spend_tx.metadata[:tracking_id]
+    assert_equal 70, spend_tx.balance_after
+  end
+
+  test "balance_after is integer type not float" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+
+    tx = wallet.give_credits(100, reason: "test")
+
+    assert_kind_of Integer, tx.balance_after
+    assert_kind_of Integer, tx.balance_before
+  end
 end

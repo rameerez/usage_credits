@@ -578,6 +578,35 @@ This makes it easy to:
 - Generate detailed invoices
 - Monitor usage patterns
 
+### Running balance (balance after each transaction)
+
+Every transaction automatically tracks the wallet balance before and after it was applied, like you would find in a bank statement:
+
+```ruby
+user.credit_history.each do |tx|
+  puts "#{tx.created_at.strftime('%Y-%m-%d')}: #{tx.formatted_amount}"
+  puts "  Balance: #{tx.balance_before} → #{tx.balance_after}"
+end
+
+# Output:
+# 2024-12-16: +1000 credits
+#   Balance: 0 → 1000
+# 2024-12-26: +500 credits
+#   Balance: 1000 → 1500
+# 2025-01-14: -50 credits
+#   Balance: 1500 → 1450
+```
+
+This is useful for building transaction history UIs, generating statements, or debugging balance issues. Each transaction provides:
+
+```ruby
+transaction.balance_before            # Balance before this transaction
+transaction.balance_after             # Balance after this transaction
+transaction.formatted_balance_after   # Formatted (e.g., "1450 credits")
+```
+
+`balance_before` and `balance_after` return `nil` if no balance is found (for transactions created before this feature was added)
+
 ### Custom credit formatting
 
 A minor thing, but if you want to use the `@transaction.formatted_amount` helper, you can specify the format:

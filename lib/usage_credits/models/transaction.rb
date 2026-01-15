@@ -117,6 +117,23 @@ module UsageCredits
     end
 
     # =========================================
+    # Balance After Transaction
+    # =========================================
+
+    # Get the balance after this transaction was applied
+    # Returns nil for transactions created before this feature was added
+    def balance_after
+      metadata[:balance_after]
+    end
+
+    # Get the balance before this transaction was applied
+    # Returns the stored value if available, otherwise nil
+    # Note: For transactions created before this feature, returns nil
+    def balance_before
+      metadata[:balance_before]
+    end
+
+    # =========================================
     # Display Formatting
     # =========================================
 
@@ -124,6 +141,13 @@ module UsageCredits
     def formatted_amount
       prefix = amount.positive? ? "+" : ""
       "#{prefix}#{UsageCredits.configuration.credit_formatter.call(amount)}"
+    end
+
+    # Format the balance after for display (e.g., "500 credits")
+    # Returns nil if balance_after is not stored
+    def formatted_balance_after
+      return nil unless balance_after
+      UsageCredits.configuration.credit_formatter.call(balance_after)
     end
 
     # Get a human-readable description of what this transaction represents

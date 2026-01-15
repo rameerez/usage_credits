@@ -30,6 +30,7 @@ test/coverage/*
 
 .cursor/
 .claude/
+.aux/
 
 /Gemfile.lock
 /gemfiles/*.gemfile.lock

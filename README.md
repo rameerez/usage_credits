@@ -267,7 +267,7 @@ process_image(params)  # If this fails, credits are already spent!
 
 ## Low balance alerts & other lifecycle callbacks
 
-`usage_credits` makes it easy to add callbacks for important events. You configure callbacks in your `usage_credits.rb` initializer file.
+`usage_credits` makes it easy to add callbacks for important events.
 
 You can hook into credit events, for example, to upsell credit packs to users when they reach a low balance:
 
@@ -280,6 +280,8 @@ end
 
 > [!TIP]
 > For `on_low_balance_reached`, define what a low balance is by setting the `low_balance_threshold` like: `config.low_balance_threshold = 100.credits`
+
+You configure callbacks in your `usage_credits.rb` initializer file.
 
 Here are all the available callbacks you can hook into:
 

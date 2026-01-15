@@ -1,3 +1,7 @@
+## [0.2.1] - 2026-01-15
+
+- Add custom `create_checkout_session` options (like `success_url`) to credit pack purchases by @yshmarov in https://github.com/rameerez/usage_credits/pull/5
+
 ## [0.2.0] - 2025-12-29
 
 - Add Claude Code GitHub Workflow by @rameerez in https://github.com/rameerez/usage_credits/pull/14

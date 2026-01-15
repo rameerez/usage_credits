@@ -13,6 +13,7 @@ test/dummy/tmp/
 test/dummy/public/packs/
 test/dummy/public/packs-test/
 test/dummy/node_modules/
+test/dummy/Gemfile.lock
 test/dummy/config/master.key
 test/dummy/storage/*.sqlite3*
 .DS_Store

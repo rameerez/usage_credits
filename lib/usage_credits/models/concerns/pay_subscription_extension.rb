@@ -449,21 +449,49 @@ module UsageCredits
 
       Rails.logger.info "    [UPGRADE] Credits expire at: #{credits_expire_at || 'never (rollover enabled)'}"
 
-      # Grant full new plan credits immediately
-      # Use string keys consistently to avoid duplicates after JSON serialization
-      upgrade_transaction = wallet.add_credits(
-        new_plan.credits_per_period,
-        category: "subscription_upgrade",
-        expires_at: credits_expire_at,
-        metadata: {
-          "subscription_id" => id,
-          "plan" => processor_plan,
-          "reason" => "plan_upgrade",
-          "fulfilled_at" => Time.current
-        }
-      )
+      # Calculate next fulfillment time based on the NEW plan's period
+      # This ensures the fulfillment schedule matches the new plan's cadence
+      next_fulfillment_at = Time.current + new_plan.parsed_fulfillment_period
 
-      # Dispatch subscription_credits_awarded callback for the upgrade
+      # Wrap all database operations in a transaction to ensure atomicity
+      # The callback should only fire after ALL operations succeed
+      upgrade_transaction = nil
+
+      ActiveRecord::Base.transaction do
+        # Grant full new plan credits immediately
+        # Use string keys consistently to avoid duplicates after JSON serialization
+        upgrade_transaction = wallet.add_credits(
+          new_plan.credits_per_period,
+          category: "subscription_upgrade",
+          expires_at: credits_expire_at,
+          metadata: {
+            "subscription_id" => id,
+            "plan" => processor_plan,
+            "reason" => "plan_upgrade",
+            "fulfilled_at" => Time.current
+          }
+        )
+
+        Rails.logger.info "    [UPGRADE] Updating fulfillment record"
+        Rails.logger.info "    [UPGRADE] Old fulfillment_period: #{fulfillment.fulfillment_period}"
+        Rails.logger.info "    [UPGRADE] New fulfillment_period: #{new_plan.fulfillment_period_display}"
+        Rails.logger.info "    [UPGRADE] Old next_fulfillment_at: #{fulfillment.next_fulfillment_at}"
+        Rails.logger.info "    [UPGRADE] New next_fulfillment_at: #{next_fulfillment_at}"
+
+        # Update fulfillment with ALL new plan properties
+        # This includes the period display string and the next fulfillment time
+        # to ensure future fulfillments happen on the correct schedule
+        # Use string keys consistently to avoid duplicates after JSON serialization
+        fulfillment.update!(
+          fulfillment_period: new_plan.fulfillment_period_display,
+          next_fulfillment_at: next_fulfillment_at,
+          metadata: fulfillment.metadata
+            .except("pending_plan_change", "plan_change_at")
+            .merge("plan" => processor_plan)
+        )
+      end
+
+      # Dispatch callback AFTER transaction commits - ensures credits are persisted
       UsageCredits::Callbacks.dispatch(:subscription_credits_awarded,
         wallet: wallet,
         amount: new_plan.credits_per_period,
@@ -479,29 +507,6 @@ module UsageCredits
 
       Rails.logger.info "    [UPGRADE] Credits awarded successfully"
       Rails.logger.info "    [UPGRADE] New balance: #{wallet.reload.balance}"
-
-      # Calculate next fulfillment time based on the NEW plan's period
-      # This ensures the fulfillment schedule matches the new plan's cadence
-      next_fulfillment_at = Time.current + new_plan.parsed_fulfillment_period
-
-      Rails.logger.info "    [UPGRADE] Updating fulfillment record"
-      Rails.logger.info "    [UPGRADE] Old fulfillment_period: #{fulfillment.fulfillment_period}"
-      Rails.logger.info "    [UPGRADE] New fulfillment_period: #{new_plan.fulfillment_period_display}"
-      Rails.logger.info "    [UPGRADE] Old next_fulfillment_at: #{fulfillment.next_fulfillment_at}"
-      Rails.logger.info "    [UPGRADE] New next_fulfillment_at: #{next_fulfillment_at}"
-
-      # Update fulfillment with ALL new plan properties
-      # This includes the period display string and the next fulfillment time
-      # to ensure future fulfillments happen on the correct schedule
-      # Use string keys consistently to avoid duplicates after JSON serialization
-      fulfillment.update!(
-        fulfillment_period: new_plan.fulfillment_period_display,
-        next_fulfillment_at: next_fulfillment_at,
-        metadata: fulfillment.metadata
-          .except("pending_plan_change", "plan_change_at")
-          .merge("plan" => processor_plan)
-      )
-
       Rails.logger.info "    [UPGRADE] Fulfillment updated successfully"
       Rails.logger.info "Subscription #{id} upgraded to #{processor_plan}, granted #{new_plan.credits_per_period} credits"
       Rails.logger.info "  Fulfillment period updated to: #{new_plan.fulfillment_period_display}"

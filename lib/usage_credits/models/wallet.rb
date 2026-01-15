@@ -26,6 +26,31 @@ module UsageCredits
     validates :balance, numericality: { greater_than_or_equal_to: 0 }, unless: :allow_negative_balance?
 
     # =========================================
+    # Metadata Handling
+    # =========================================
+
+    # Sync in-place modifications to metadata before saving
+    before_save :sync_metadata_cache
+
+    # Get metadata with indifferent access (string/symbol keys)
+    # Returns empty hash if nil (for MySQL compatibility where JSON columns can't have defaults)
+    def metadata
+      @indifferent_metadata ||= ActiveSupport::HashWithIndifferentAccess.new(super || {})
+    end
+
+    # Set metadata, ensuring consistent storage format
+    def metadata=(hash)
+      @indifferent_metadata = nil  # Clear cache
+      super(hash.is_a?(Hash) ? hash.to_h : {})
+    end
+
+    # Clear metadata cache on reload to ensure fresh data from database
+    def reload(*)
+      @indifferent_metadata = nil
+      super
+    end
+
+    # =========================================
     # Credit Balance & History
     # =========================================
 
@@ -333,6 +358,12 @@ module UsageCredits
 
 
     private
+
+    # Sync in-place modifications to the cached metadata back to the attribute
+    # This ensures changes like `metadata["key"] = "value"` are persisted on save
+    def sync_metadata_cache
+      write_attribute(:metadata, @indifferent_metadata.to_h) if @indifferent_metadata
+    end
 
     # =========================================
     # Helper Methods

@@ -1,9 +1,14 @@
-# SQLite. Versions 3.8.0 and up are supported.
-#   gem install sqlite3
+# Database configuration for multi-database testing.
 #
-#   Ensure the SQLite 3 gem is defined in your Gemfile
-#   gem "sqlite3"
+# By default, uses SQLite for simplicity.
+# Set DATABASE_URL environment variable to switch to PostgreSQL or MySQL:
 #
+#   DATABASE_URL=postgres://localhost/usage_credits_test bundle exec rake test
+#   DATABASE_URL=mysql2://root:@localhost/usage_credits_test bundle exec rake test
+#
+# For CI, DATABASE_URL is set automatically based on the matrix configuration.
+# Rails automatically uses DATABASE_URL when present, overriding these defaults.
+
 default: &default
   adapter: sqlite3
   pool: <%= ENV.fetch("RAILS_MAX_THREADS") { 5 } %>
@@ -13,28 +18,10 @@ development:
   <<: *default
   database: storage/development.sqlite3
 
-# Warning: The database defined as "test" will be erased and
-# re-generated from your development database when you run "rake".
-# Do not set this db to the same as development or production.
 test:
   <<: *default
   database: storage/test.sqlite3
 
-# Store production database in the storage/ directory, which by default
-# is mounted as a persistent Docker volume in config/deploy.yml.
 production:
-  primary:
-    <<: *default
-    database: storage/production.sqlite3
-  cache:
-    <<: *default
-    database: storage/production_cache.sqlite3
-    migrations_paths: db/cache_migrate
-  queue:
-    <<: *default
-    database: storage/production_queue.sqlite3
-    migrations_paths: db/queue_migrate
-  cable:
-    <<: *default
-    database: storage/production_cable.sqlite3
-    migrations_paths: db/cable_migrate
+  <<: *default
+  database: storage/production.sqlite3

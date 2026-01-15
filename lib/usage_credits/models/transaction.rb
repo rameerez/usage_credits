@@ -166,7 +166,11 @@ module UsageCredits
     # Metadata Handling
     # =========================================
 
+    # Sync in-place modifications to metadata before saving
+    before_save :sync_metadata_cache
+
     # Get metadata with indifferent access (string/symbol keys)
+    # Returns empty hash if nil (for MySQL compatibility where JSON columns can't have defaults)
     def metadata
       @indifferent_metadata ||= ActiveSupport::HashWithIndifferentAccess.new(super || {})
     end
@@ -177,7 +181,19 @@ module UsageCredits
       super(hash.is_a?(Hash) ? hash.to_h : {})
     end
 
+    # Clear metadata cache on reload to ensure fresh data from database
+    def reload(*)
+      @indifferent_metadata = nil
+      super
+    end
+
     private
+
+    # Sync in-place modifications to the cached metadata back to the attribute
+    # This ensures changes like `metadata["key"] = "value"` are persisted on save
+    def sync_metadata_cache
+      write_attribute(:metadata, @indifferent_metadata.to_h) if @indifferent_metadata
+    end
 
     # Format operation charge descriptions (e.g., "Process Video (-10 credits)")
     def operation_description

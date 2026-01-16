@@ -16,22 +16,21 @@ test/dummy/node_modules/
 test/dummy/Gemfile.lock
 test/dummy/config/master.key
 test/dummy/storage/*.sqlite3*
-.DS_Store
-
-/dist/
-
-TODO
-pay.md
-
-**/.kamal/
-deploy.yml
-
 test/dummy/log/*
 test/coverage/*
+**/.kamal/
+deploy.yml
+.DS_Store
+
+/Gemfile.lock
+/gemfiles/*.gemfile.lock
+
+/dist/
+*.gem
 
 .cursor/
 .claude/
 .aux/
 
-/Gemfile.lock
-/gemfiles/*.gemfile.lock
+TODO
+pay.md

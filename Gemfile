@@ -36,9 +36,10 @@ group :test do
   gem "prawn"
   gem "receipts"
 
-  # Database adapters
+  # Database adapters (for multi-database testing)
   gem "sqlite3"
   gem "pg"
+  gem "mysql2"
 
   # Dummy Rails app
   gem "bootsnap", require: false

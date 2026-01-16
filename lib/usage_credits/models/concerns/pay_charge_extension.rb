@@ -110,9 +110,15 @@ module UsageCredits
         if adapter.include?("postgres")
           # PostgreSQL supports the @> JSON containment operator.
           transactions.exists?(['metadata @> ?', { purchase_charge_id: id, credits_fulfilled: true }.to_json])
+        elsif adapter.include?("mysql")
+          # MySQL: JSON_EXTRACT returns JSON values, use CAST for proper comparison
+          transactions.exists?([
+            "JSON_EXTRACT(metadata, '$.purchase_charge_id') = CAST(? AS JSON) AND JSON_EXTRACT(metadata, '$.credits_fulfilled') = CAST('true' AS JSON)",
+            id
+          ])
         else
-          # For other adapters (e.g. SQLite, MySQL), try using JSON_EXTRACT.
-          transactions.exists?(["json_extract(metadata, '$.purchase_charge_id') = ? AND json_extract(metadata, '$.credits_fulfilled') = ?", id, true])
+          # SQLite: json_extract returns SQL values (true becomes 1)
+          transactions.exists?(["json_extract(metadata, '$.purchase_charge_id') = ? AND json_extract(metadata, '$.credits_fulfilled') = ?", id, 1])
         end
       rescue ActiveRecord::StatementInvalid
         # If the SQL query fails (for example, if JSON_EXTRACT isn’t supported),
@@ -229,11 +235,18 @@ module UsageCredits
             { refunded_purchase_charge_id: id, credits_refunded: true }.to_json
           )
           return filtered.sum { |tx| -tx.amount }
+        elsif adapter.include?("mysql")
+          # MySQL: JSON_EXTRACT returns JSON values, use CAST for proper comparison
+          filtered = transactions.where(
+            "JSON_EXTRACT(metadata, '$.refunded_purchase_charge_id') = CAST(? AS JSON) AND JSON_EXTRACT(metadata, '$.credits_refunded') = CAST('true' AS JSON)",
+            id
+          )
+          return filtered.sum { |tx| -tx.amount }
         else
-          # SQLite/MySQL with JSON_EXTRACT
+          # SQLite: json_extract returns SQL values (true becomes 1)
           filtered = transactions.where(
             "json_extract(metadata, '$.refunded_purchase_charge_id') = ? AND json_extract(metadata, '$.credits_refunded') = ?",
-            id, true
+            id, 1
           )
           return filtered.sum { |tx| -tx.amount }
         end

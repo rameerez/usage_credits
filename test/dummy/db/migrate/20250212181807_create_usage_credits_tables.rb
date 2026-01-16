@@ -7,7 +7,7 @@ class CreateUsageCreditsTables < ActiveRecord::Migration[7.2]
     create_table :usage_credits_wallets, id: primary_key_type do |t|
       t.references :owner, polymorphic: true, null: false, type: foreign_key_type
       t.integer :balance, null: false, default: 0
-      t.send(json_column_type, :metadata, null: false, default: {})
+      t.send(json_column_type, :metadata, null: false, default: json_column_default)
 
       t.timestamps
     end
@@ -18,7 +18,7 @@ class CreateUsageCreditsTables < ActiveRecord::Migration[7.2]
       t.string :category, null: false
       t.datetime :expires_at
       t.references :fulfillment, type: foreign_key_type
-      t.send(json_column_type, :metadata, null: false, default: {})
+      t.send(json_column_type, :metadata, null: false, default: json_column_default)
 
       t.timestamps
     end
@@ -32,7 +32,7 @@ class CreateUsageCreditsTables < ActiveRecord::Migration[7.2]
       t.datetime :next_fulfillment_at                     # When to fulfill next (nil if stopped/completed)
       t.string :fulfillment_period                        # "2.months", "15.days", etc. (nil for one-time)
       t.datetime :stops_at                                # When to stop performing fulfillments
-      t.send(json_column_type, :metadata, null: false, default: {})
+      t.send(json_column_type, :metadata, null: false, default: json_column_default)
 
       t.timestamps
     end
@@ -84,5 +84,13 @@ class CreateUsageCreditsTables < ActiveRecord::Migration[7.2]
   def json_column_type
     return :jsonb if connection.adapter_name.downcase.include?('postgresql')
     :json
+  end
+
+  # MySQL 8+ doesn't allow default values on JSON columns.
+  # Returns an empty hash default for SQLite/PostgreSQL, nil for MySQL.
+  # Models handle nil metadata gracefully by defaulting to {} in their accessors.
+  def json_column_default
+    return nil if connection.adapter_name.downcase.include?('mysql')
+    {}
   end
 end

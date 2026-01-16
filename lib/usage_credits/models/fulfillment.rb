@@ -18,6 +18,31 @@ module UsageCredits
     validates :next_fulfillment_at, comparison: { greater_than: :last_fulfilled_at },
       if: -> { recurring? && last_fulfilled_at.present? && next_fulfillment_at.present? }
 
+    # =========================================
+    # Metadata Handling
+    # =========================================
+
+    # Sync in-place modifications to metadata before saving
+    before_save :sync_metadata_cache
+
+    # Get metadata with indifferent access (string/symbol keys)
+    # Returns empty hash if nil (for MySQL compatibility where JSON columns can't have defaults)
+    def metadata
+      @indifferent_metadata ||= ActiveSupport::HashWithIndifferentAccess.new(super || {})
+    end
+
+    # Set metadata, ensuring consistent storage format
+    def metadata=(hash)
+      @indifferent_metadata = nil  # Clear cache
+      super(hash.is_a?(Hash) ? hash.to_h : {})
+    end
+
+    # Clear metadata cache on reload to ensure fresh data from database
+    def reload(*)
+      @indifferent_metadata = nil
+      super
+    end
+
     # Only get fulfillments that are due AND not stopped
     scope :due_for_fulfillment, -> {
       where("next_fulfillment_at <= ?", Time.current)
@@ -64,6 +89,17 @@ module UsageCredits
     end
 
     private
+
+    # Sync in-place modifications to the cached metadata back to the attribute
+    # This ensures changes like `metadata["key"] = "value"` are persisted on save
+    # Also ensures metadata is never null for MySQL compatibility (JSON columns can't have defaults)
+    def sync_metadata_cache
+      if @indifferent_metadata
+        write_attribute(:metadata, @indifferent_metadata.to_h)
+      elsif read_attribute(:metadata).nil?
+        write_attribute(:metadata, {})
+      end
+    end
 
     def valid_fulfillment_period_format
       unless UsageCredits::PeriodParser.valid_period_format?(fulfillment_period)

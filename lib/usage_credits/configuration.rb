@@ -30,6 +30,9 @@ module UsageCredits
 
     attr_reader :fulfillment_grace_period
 
+    # Custom transaction categories that extend the default set
+    attr_reader :additional_categories
+
     # Minimum allowed fulfillment period for subscription plans.
     # Defaults to 1.day to prevent accidental 1-second refill loops in production.
     # Can be set to shorter periods (e.g., 2.seconds) in development/test for faster iteration.
@@ -79,6 +82,9 @@ module UsageCredits
 
       # Minimum fulfillment period - prevents accidental 1-second refill loops in production
       @min_fulfillment_period = 1.day
+
+      # Custom transaction categories (empty by default, apps can extend)
+      @additional_categories = []
 
       @allow_negative_balance = false
       @low_balance_threshold = nil
@@ -199,6 +205,15 @@ module UsageCredits
       end
 
       @min_fulfillment_period = value
+    end
+
+    # Set additional transaction categories with validation
+    # These extend the default categories defined in Transaction::DEFAULT_CATEGORIES
+    # @param categories [Array<String, Symbol>] Array of category names
+    def additional_categories=(categories)
+      raise ArgumentError, "Additional categories must be an array" unless categories.is_a?(Array)
+
+      @additional_categories = categories.map(&:to_s)
     end
 
     # =========================================

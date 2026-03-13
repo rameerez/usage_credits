@@ -15,8 +15,8 @@ module UsageCredits
     # Transaction Categories
     # =========================================
 
-    # All possible transaction types, grouped by purpose:
-    CATEGORIES = [
+    # Default transaction types, grouped by purpose:
+    DEFAULT_CATEGORIES = [
       # Bonus credits
       "signup_bonus",                   # Initial signup bonus
       "referral_bonus",                 # Referral reward bonus
@@ -40,6 +40,16 @@ module UsageCredits
       "credit_deducted"                 # Generic deduction
     ].freeze
 
+    # All valid categories: defaults + any custom categories added via config
+    # @return [Array<String>] Combined list of valid category names
+    def self.categories
+      DEFAULT_CATEGORIES + UsageCredits.configuration.additional_categories
+    end
+
+    # Backwards compatibility: CATEGORIES constant still works
+    # but prefer using Transaction.categories for dynamic lookup
+    CATEGORIES = DEFAULT_CATEGORIES
+
     # =========================================
     # Associations & Validations
     # =========================================
@@ -59,7 +69,7 @@ module UsageCredits
               dependent: :destroy
 
     validates :amount, presence: true, numericality: { only_integer: true }
-    validates :category, presence: true, inclusion: { in: CATEGORIES }
+    validates :category, presence: true, inclusion: { in: ->(record) { Transaction.categories } }
 
     validate :remaining_amount_cannot_be_negative
 

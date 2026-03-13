@@ -7,7 +7,9 @@
 
 `usage_credits` allows your users to have in-app credits / tokens they can use to perform operations.
 
-✨ Perfect for SaaS, AI apps, games, and API products that want to implement usage-based pricing.
+✨ Perfect for SaaS, AI apps, games, API products, and **marketplace wallets** that want to implement usage-based pricing or track money-like balances.
+
+> **Not just for credits!** While the gem is called "usage_credits", it's built on a production-grade double-entry ledger with row-level locking, FIFO allocation, and full audit trails. You can use it for marketplace seller balances, in-app wallets, reward points, or any system that needs to track money-like assets with proper accounting. [See the "Beyond credits" section](#beyond-credits-using-this-gem-for-money-like-wallets-and-payouts) for examples.
 
 [ 🟢 [Live interactive demo website](https://usagecredits.com/) ] [ 🎥 [Quick video overview](https://x.com/rameerez/status/1890419563189195260) ]
 
@@ -626,6 +628,145 @@ Which will get you:
 ```
 
 It's useful if you want to name your credits something else (tokens, virtual currency, tasks, in-app gems, whatever) and you want the name to be consistent.
+
+## Beyond credits: using this gem for money-like wallets and payouts
+
+While this gem is called `usage_credits`, the underlying architecture is a **production-grade double-entry ledger** with row-level locking, FIFO allocation, and full audit trails. This makes it suitable for more than just API credits — you can use it as a wallet system for **money-like assets**, **marketplace payouts**, **in-app balances**, and more.
+
+### Custom transaction categories
+
+By default, the gem includes categories like `signup_bonus`, `operation_charge`, `subscription_credits`, etc. But you can extend these with your own categories for your specific use case:
+
+```ruby
+# config/initializers/usage_credits.rb
+UsageCredits.configure do |config|
+  # Add custom categories for your business logic
+  config.additional_categories = %w[
+    payment_received
+    payment_sent
+    payout_requested
+    platform_fee
+    refund
+    tip
+    cashback
+  ]
+end
+```
+
+These custom categories work exactly like the built-in ones — they're validated, tracked in transaction history, and available for filtering/querying.
+
+### Example: Marketplace with seller payouts
+
+Imagine you're building a marketplace where sellers earn money and can withdraw their balance. Here's how you'd implement it with `usage_credits`:
+
+```ruby
+# app/models/user.rb
+class User < ApplicationRecord
+  has_credits  # Each user gets a wallet
+
+  def request_payout(amount_cents)
+    raise "Insufficient balance" if credits < amount_cents
+
+    wallet.deduct_credits(
+      amount_cents,
+      category: :payout_requested,
+      metadata: {
+        requested_at: Time.current,
+        payout_method: stripe_account_id
+      }
+    )
+
+    PayoutJob.perform_later(self, amount_cents)
+  end
+end
+
+# app/services/order_payment_service.rb
+class OrderPaymentService
+  def initialize(order)
+    @order = order
+    @buyer = order.buyer
+    @seller = order.seller
+  end
+
+  def process!
+    platform_fee = (@order.total_cents * 0.10).to_i  # 10% fee
+    seller_amount = @order.total_cents - platform_fee
+
+    ActiveRecord::Base.transaction do
+      # Credit the seller (net of platform fee)
+      @seller.wallet.add_credits(
+        seller_amount,
+        category: :payment_received,
+        metadata: {
+          order_id: @order.id,
+          gross_amount: @order.total_cents,
+          platform_fee: platform_fee,
+          buyer_id: @buyer.id
+        }
+      )
+
+      @order.update!(paid: true)
+    end
+  end
+end
+```
+
+Now you have:
+- **Full audit trail**: Every transaction is logged with metadata
+- **Balance tracking**: `@seller.credits` returns current balance in cents
+- **Transaction history**: `@seller.credit_history.by_category(:payment_received)`
+- **Concurrency safety**: Row-level locks prevent double-spending
+- **Running balance**: Each transaction stores `balance_before` and `balance_after`
+
+```ruby
+# Show transaction history with running balance
+@seller.credit_history.recent.each do |tx|
+  puts "#{tx.created_at.strftime('%Y-%m-%d')}: #{tx.category}"
+  puts "  Amount: #{tx.amount} cents"
+  puts "  Balance: #{tx.balance_before} → #{tx.balance_after}"
+  puts "  Order: ##{tx.metadata['order_id']}" if tx.metadata['order_id']
+end
+```
+
+### Why this works for money
+
+The gem's architecture gives you everything you'd need for a money-handling system:
+
+| Feature | How it helps |
+|---------|--------------|
+| Double-entry ledger | Every credit has a corresponding debit source tracked via allocations |
+| Immutable transactions | Append-only — no edits, only new entries (required for financial audit) |
+| Row-level locking | Prevents race conditions and double-spending |
+| FIFO allocation | When spending, oldest credits are used first (important for expiring balances) |
+| Balance snapshots | Each transaction records balance before/after for reconciliation |
+| Rich metadata | Store order IDs, user IDs, payment references — whatever you need for audit |
+
+### A note on multi-currency
+
+Currently, the gem uses a single currency per installation (configured via `config.default_currency`). All amounts are stored as integers (cents) to avoid floating-point issues.
+
+If you need multi-currency support, you could:
+1. Store amounts in the smallest unit of each currency (cents, pence, etc.)
+2. Use metadata to track the currency per transaction
+3. Handle conversion at the application layer
+
+Multi-currency wallets (one wallet per currency per user) is on the roadmap for a future version. For now, if you need this, you'd run separate wallet instances or handle it at the application level.
+
+### Naming your "credits"
+
+Remember you can customize how credits are displayed:
+
+```ruby
+UsageCredits.configure do |config|
+  config.format_credits do |amount|
+    # Display as money
+    "$#{(amount / 100.0).round(2)}"
+  end
+end
+
+@user.credit_history.last.formatted_amount
+# => "+$25.00"
+```
 
 ## Demo Rails app
 

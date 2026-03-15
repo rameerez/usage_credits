@@ -665,6 +665,7 @@ class User < ApplicationRecord
   has_credits  # Each user gets a wallet
 
   def request_payout(amount_cents)
+    # In production, wrap in wallet.with_lock { } to prevent race conditions
     raise "Insufficient balance" if credits < amount_cents
 
     wallet.deduct_credits(

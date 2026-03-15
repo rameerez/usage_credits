@@ -159,6 +159,44 @@ class UsageCredits::TransactionTest < ActiveSupport::TestCase
     end
   end
 
+  test "custom categories are invalid without additional_categories config" do
+    # Without configuring additional_categories, custom categories should be rejected
+    transaction = UsageCredits::Transaction.new(
+      wallet: usage_credits_wallets(:rich_wallet),
+      amount: 100,
+      category: "payment_received"
+    )
+
+    assert_not transaction.valid?
+    assert_includes transaction.errors[:category], "is not included in the list"
+  end
+
+  test "additional_categories filters out blank values" do
+    UsageCredits.configure do |config|
+      config.additional_categories = ["valid_category", "", nil, "  ", "another_valid"]
+    end
+
+    categories = UsageCredits::Transaction.categories
+
+    assert_includes categories, "valid_category"
+    assert_includes categories, "another_valid"
+    assert_not_includes categories, ""
+    assert_not_includes categories, "  "
+  end
+
+  test "duplicate categories are deduplicated" do
+    UsageCredits.configure do |config|
+      config.additional_categories = ["signup_bonus", "custom_category"]
+    end
+
+    categories = UsageCredits::Transaction.categories
+
+    # signup_bonus appears in DEFAULT_CATEGORIES and additional_categories
+    # but should only appear once
+    assert_equal 1, categories.count("signup_bonus")
+    assert_includes categories, "custom_category"
+  end
+
   test "DEFAULT_CATEGORIES constant is unchanged for backwards compatibility" do
     # Should contain the original default categories
     assert_includes UsageCredits::Transaction::DEFAULT_CATEGORIES, "signup_bonus"

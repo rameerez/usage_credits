@@ -213,7 +213,10 @@ module UsageCredits
     def additional_categories=(categories)
       raise ArgumentError, "Additional categories must be an array" unless categories.is_a?(Array)
 
-      @additional_categories = categories.map(&:to_s)
+      # Convert to strings and filter out blank values
+      validated = categories.map { |cat| cat.to_s.strip }.reject(&:blank?)
+
+      @additional_categories = validated
     end
 
     # =========================================

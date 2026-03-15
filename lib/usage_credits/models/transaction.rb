@@ -43,7 +43,7 @@ module UsageCredits
     # All valid categories: defaults + any custom categories added via config
     # @return [Array<String>] Combined list of valid category names
     def self.categories
-      DEFAULT_CATEGORIES + UsageCredits.configuration.additional_categories
+      (DEFAULT_CATEGORIES + UsageCredits.configuration.additional_categories).uniq
     end
 
     # Backwards compatibility: CATEGORIES constant still works

@@ -97,6 +97,118 @@ class UsageCredits::TransactionTest < ActiveSupport::TestCase
   end
 
   # ========================================
+  # ADDITIONAL CATEGORIES
+  # ========================================
+
+  test "allows custom categories configured via additional_categories" do
+    UsageCredits.configure do |config|
+      config.additional_categories = %w[payment_received payment_sent payout_requested]
+    end
+
+    wallet = usage_credits_wallets(:rich_wallet)
+
+    # Custom categories should now be valid
+    %w[payment_received payment_sent payout_requested].each do |category|
+      transaction = UsageCredits::Transaction.new(
+        wallet: wallet,
+        amount: 100,
+        category: category
+      )
+
+      assert transaction.valid?, "Custom category '#{category}' should be valid"
+    end
+  end
+
+  test "Transaction.categories includes both default and additional categories" do
+    UsageCredits.configure do |config|
+      config.additional_categories = %w[custom_category_1 custom_category_2]
+    end
+
+    categories = UsageCredits::Transaction.categories
+
+    # Should include default categories
+    assert_includes categories, "signup_bonus"
+    assert_includes categories, "operation_charge"
+
+    # Should include custom categories
+    assert_includes categories, "custom_category_1"
+    assert_includes categories, "custom_category_2"
+  end
+
+  test "additional_categories defaults to empty array" do
+    # After reset, additional_categories should be empty
+    assert_equal [], UsageCredits.configuration.additional_categories
+  end
+
+  test "additional_categories accepts symbols and converts to strings" do
+    UsageCredits.configure do |config|
+      config.additional_categories = [:symbol_category, "string_category"]
+    end
+
+    categories = UsageCredits::Transaction.categories
+
+    assert_includes categories, "symbol_category"
+    assert_includes categories, "string_category"
+  end
+
+  test "additional_categories raises error for non-array input" do
+    assert_raises ArgumentError do
+      UsageCredits.configure do |config|
+        config.additional_categories = "not_an_array"
+      end
+    end
+  end
+
+  test "custom categories are invalid without additional_categories config" do
+    # Without configuring additional_categories, custom categories should be rejected
+    transaction = UsageCredits::Transaction.new(
+      wallet: usage_credits_wallets(:rich_wallet),
+      amount: 100,
+      category: "payment_received"
+    )
+
+    assert_not transaction.valid?
+    assert_includes transaction.errors[:category], "is not included in the list"
+  end
+
+  test "additional_categories filters out blank values" do
+    UsageCredits.configure do |config|
+      config.additional_categories = ["valid_category", "", nil, "  ", "another_valid"]
+    end
+
+    categories = UsageCredits::Transaction.categories
+
+    assert_includes categories, "valid_category"
+    assert_includes categories, "another_valid"
+    assert_not_includes categories, ""
+    assert_not_includes categories, "  "
+  end
+
+  test "duplicate categories are deduplicated" do
+    UsageCredits.configure do |config|
+      config.additional_categories = ["signup_bonus", "custom_category"]
+    end
+
+    categories = UsageCredits::Transaction.categories
+
+    # signup_bonus appears in DEFAULT_CATEGORIES and additional_categories
+    # but should only appear once
+    assert_equal 1, categories.count("signup_bonus")
+    assert_includes categories, "custom_category"
+  end
+
+  test "DEFAULT_CATEGORIES constant is unchanged for backwards compatibility" do
+    # Should contain the original default categories
+    assert_includes UsageCredits::Transaction::DEFAULT_CATEGORIES, "signup_bonus"
+    assert_includes UsageCredits::Transaction::DEFAULT_CATEGORIES, "operation_charge"
+    assert_includes UsageCredits::Transaction::DEFAULT_CATEGORIES, "manual_adjustment"
+  end
+
+  test "CATEGORIES constant equals DEFAULT_CATEGORIES for backwards compatibility" do
+    assert_equal UsageCredits::Transaction::DEFAULT_CATEGORIES, UsageCredits::Transaction::CATEGORIES
+  end
+
+  # ========================================
   # CREDIT VS DEBIT
   # ========================================
 

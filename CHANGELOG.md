@@ -1,3 +1,7 @@
+## [0.5.0] - 2026-03-15
+
+- Add configurable transaction categories via `config.additional_categories` for money-like wallet use cases (marketplaces, fintech) by @rameerez in https://github.com/rameerez/usage_credits/pull/29
+
 ## [0.4.0] - 2026-01-16
 
 - Add `balance_before` and `balance_after` to transactions by @rameerez (h/t @yshmarov) in https://github.com/rameerez/usage_credits/pull/27

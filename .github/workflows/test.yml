@@ -44,8 +44,10 @@ jobs:
           ruby-version: ${{ matrix.ruby_version }}
           bundler-cache: true
 
-      - name: Run tests
-        run: bundle exec rake test
+      - name: Prepare database and run tests
+        # Exercise the real migration path in SQLite too so dummy/test schema
+        # drift is caught before release, not only in adapter-specific jobs.
+        run: bundle exec rake db:migrate:reset test
 
       - name: Upload test results
         if: failure()

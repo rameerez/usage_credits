@@ -61,3 +61,11 @@ refund_user:
   name: Refund User
   created_at: <%= 20.days.ago %>
   updated_at: <%= 1.day.ago %>
+
+# User truly without any wallet (for wallet creation tests)
+walletless_user:
+  id: 9
+  email: walletless@example.com
+  name: Walletless User
+  created_at: <%= 1.day.ago %>
+  updated_at: <%= 1.day.ago %>

@@ -1,0 +1,56 @@
+# frozen_string_literal: true
+
+class UpgradeUsageCreditsToWalletsCore < ActiveRecord::Migration<%= migration_version %>
+  def up
+    primary_key_type, foreign_key_type = primary_and_foreign_key_types
+
+    # Add asset_code to wallets (default to "credits" for backwards compatibility)
+    add_column :usage_credits_wallets, :asset_code, :string, null: false, default: "credits"
+    add_index :usage_credits_wallets, [:owner_type, :owner_id, :asset_code], unique: true, name: "index_usage_credits_wallets_on_owner_and_asset"
+
+    # Change integer columns to bigint for larger balance support
+    # Note: This is a potentially slow operation on large tables
+    change_column :usage_credits_wallets, :balance, :bigint, null: false, default: 0
+    change_column :usage_credits_transactions, :amount, :bigint, null: false
+    change_column :usage_credits_allocations, :amount, :bigint, null: false
+    change_column :usage_credits_fulfillments, :credits_last_fulfillment, :bigint, null: false
+
+    # Create transfers table for wallet-to-wallet transfers
+    create_table :usage_credits_transfers, id: primary_key_type do |t|
+      t.references :from_wallet, null: false, type: foreign_key_type, foreign_key: { to_table: :usage_credits_wallets }
+      t.references :to_wallet, null: false, type: foreign_key_type, foreign_key: { to_table: :usage_credits_wallets }
+      t.string :asset_code, null: false, default: "credits"
+      t.bigint :amount, null: false
+      t.string :category, null: false, default: "transfer"
+      t.string :expiration_policy, null: false, default: "preserve"
+      t.send(json_column_type, :metadata, null: false, default: json_column_default)
+
+      t.timestamps
+    end
+
+    add_index :usage_credits_transfers, [:from_wallet_id, :to_wallet_id, :asset_code], name: "index_usage_credits_transfers_on_wallets_and_asset"
+
+    # Add transfer reference to transactions
+    add_reference :usage_credits_transactions, :transfer, type: foreign_key_type, foreign_key: { to_table: :usage_credits_transfers }
+  end
+
+  private
+
+  def primary_and_foreign_key_types
+    config = Rails.configuration.generators
+    setting = config.options[config.orm][:primary_key_type]
+    primary_key_type = setting || :primary_key
+    foreign_key_type = setting || :bigint
+    [primary_key_type, foreign_key_type]
+  end
+
+  def json_column_type
+    return :jsonb if connection.adapter_name.downcase.include?("postgresql")
+    :json
+  end
+
+  def json_column_default
+    return nil if connection.adapter_name.downcase.include?("mysql")
+    {}
+  end
+end

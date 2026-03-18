@@ -33,6 +33,12 @@ module UsageCredits
     # Custom transaction categories that extend the default set
     attr_reader :additional_categories
 
+    # Table prefix for usage_credits tables (for wallets gem compatibility)
+    # Note: usage_credits uses fixed table names, so this is always "usage_credits_"
+    def table_prefix
+      "usage_credits_"
+    end
+
     # Minimum allowed fulfillment period for subscription plans.
     # Defaults to 1.day to prevent accidental 1-second refill loops in production.
     # Can be set to shorter periods (e.g., 2.seconds) in development/test for faster iteration.

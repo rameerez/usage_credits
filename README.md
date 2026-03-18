@@ -7,9 +7,9 @@
 
 `usage_credits` allows your users to have in-app credits / tokens they can use to perform operations.
 
-✨ Perfect for SaaS, AI apps, games, API products, and **marketplace wallets** that want to implement usage-based pricing or track money-like balances.
+✨ Perfect for SaaS, AI apps, games, API products, and **single-asset credit systems** that want to implement usage-based pricing or track money-like balances.
 
-> **Not just for credits!** While the gem is called "usage_credits", it's built on a production-grade double-entry ledger with row-level locking, FIFO allocation, and full audit trails. You can use it for marketplace seller balances, in-app wallets, reward points, or any system that needs to track money-like assets with proper accounting. [See the "Beyond credits" section](#beyond-credits-using-this-gem-for-money-like-wallets-and-payouts) for examples.
+> **Built on top of [`wallets`](https://github.com/rameerez/wallets).** As of `usage_credits` 1.0, `usage_credits` uses `wallets` as its ledger core underneath. If your main problem is multi-asset wallets, transfers, in-game resources, or general balances, use `wallets` directly. Use `usage_credits` when you want the opinionated DX for credits, operations, subscriptions, packs, and payments.
 
 [ 🟢 [Live interactive demo website](https://usagecredits.com/) ] [ 🎥 [Quick video overview](https://x.com/rameerez/status/1890419563189195260) ]
 
@@ -94,6 +94,12 @@ Then run:
 ```bash
 bundle install
 rails generate usage_credits:install
+rails db:migrate
+```
+
+If you're upgrading an existing app from pre-1.0 `usage_credits`, run:
+```bash
+rails generate usage_credits:upgrade
 rails db:migrate
 ```
 
@@ -629,9 +635,17 @@ Which will get you:
 
 It's useful if you want to name your credits something else (tokens, virtual currency, tasks, in-app gems, whatever) and you want the name to be consistent.
 
-## Beyond credits: using this gem for money-like wallets and payouts
+## Beyond credits: wallet-like balances on top of a credits product layer
 
-While this gem is called `usage_credits`, the underlying architecture is a **production-grade double-entry ledger** with row-level locking, FIFO allocation, and full audit trails. This makes it suitable for more than just API credits — you can use it as a wallet system for **money-like assets**, **marketplace payouts**, **in-app balances**, and more.
+While this gem is called `usage_credits`, the underlying architecture is still a **production-grade append-only ledger** with row-level locking, FIFO allocation, and full audit trails. That means you can use it for more than just API credits when the product still fits a **single-asset credits model**.
+
+Good fits here:
+- marketplace seller balances in cents
+- internal store credit
+- cashback / reward points
+- telecom-style balances where acquisition/refill matters more than multi-asset modeling
+
+If the real problem is **multi-asset wallets**, **player inventories**, or **wallet-to-wallet transfers as a primary feature**, use [`wallets`](https://github.com/rameerez/wallets) directly instead.
 
 ### Custom transaction categories
 
@@ -729,9 +743,43 @@ Now you have:
 end
 ```
 
-### Why this works for money
+### Wallet-level transfers
 
-The gem's architecture gives you everything you'd need for a money-handling system:
+Because `usage_credits` uses `wallets` underneath, the underlying wallet object also supports low-level wallet operations like transfers:
+
+```ruby
+seller.credit_wallet.transfer_to(
+  buyer.credit_wallet,
+  500,
+  category: :refund,
+  metadata: { order_id: 42 }
+)
+```
+
+Transfers preserve expiration buckets by default because they run through the underlying `wallets` ledger. If you need cash-like behavior instead, you can still opt into evergreen receive-side credits at the wallet layer:
+
+```ruby
+seller.credit_wallet.transfer_to(
+  buyer.credit_wallet,
+  500,
+  category: :refund,
+  expiration_policy: :none,
+  metadata: { order_id: 42 }
+)
+```
+
+This is intentionally a **wallet-level API**, not the main `usage_credits` DSL. The main product surface of `usage_credits` is still:
+- `give_credits`
+- `spend_credits_on`
+- credit packs
+- subscription fulfillment
+- Pay integration
+
+If transfers, multi-asset balances, and wallet movement are central to your app, that is usually a sign you should use [`wallets`](https://github.com/rameerez/wallets) directly.
+
+### Why this still works for money-like balances
+
+The ledger architecture gives you everything you'd want from a serious internal balance system:
 
 | Feature | How it helps |
 |---------|--------------|
@@ -744,14 +792,17 @@ The gem's architecture gives you everything you'd need for a money-handling syst
 
 ### A note on multi-currency
 
-Currently, the gem uses a single currency per installation (configured via `config.default_currency`). All amounts are stored as integers (cents) to avoid floating-point issues.
+`usage_credits` is intentionally **single-asset**. All amounts are stored as integers (for money, usually cents) to avoid floating-point issues.
 
-If you need multi-currency support, you could:
-1. Store amounts in the smallest unit of each currency (cents, pence, etc.)
-2. Use metadata to track the currency per transaction
-3. Handle conversion at the application layer
+If you need one wallet per currency or asset per user, use [`wallets`](https://github.com/rameerez/wallets):
 
-Multi-currency wallets (one wallet per currency per user) is on the roadmap for a future version. For now, if you need this, you'd run separate wallet instances or handle it at the application level.
+```ruby
+user.wallet(:eur)
+user.wallet(:usd)
+user.wallet(:wood)
+```
+
+That is now the dedicated gem for multi-asset support.
 
 ### Naming your "credits"
 
@@ -862,7 +913,9 @@ Real billing systems usually find edge cases when handling things like:
 Please help us by contributing to add tests to cover all critical paths!
 
 ## TODO
-No open TODOs here right now. If you find an edge case, please open an issue or PR.
+
+- Add a first-class reversal/refund helper on top of wallet-level transfers if transfers become a documented primary use case
+- Clarify paused subscription behavior across processors and plan states
 
 ## Testing
 

@@ -906,12 +906,10 @@ class UsageCredits::TransactionTest < ActiveSupport::TestCase
       wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
       wallet.give_credits(10, reason: "initial")
 
-      # Deduct more than available (goes "negative" but credits floors at 0)
+      # Deduct more than available - usage_credits preserves the legacy public
+      # contract of flooring displayed balances to zero.
       spend_tx = wallet.deduct_credits(25, category: "operation_charge", metadata: {})
 
-      # Note: The credits method floors at 0, so balance_after shows 0 even when
-      # allow_negative_balance is enabled. This is the existing system behavior.
-      # The negative deduction is tracked but the balance is capped at 0.
       assert_equal 0, spend_tx.balance_after
       assert_equal 10, spend_tx.balance_before
 

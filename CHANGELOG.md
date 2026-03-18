@@ -1,3 +1,9 @@
+## [1.0.0] - 2026-03-18
+
+- Rebuild `usage_credits` on top of the new `wallets` ledger core while preserving the existing credits-focused DX
+- Add the pre-1.0 upgrade generator for existing installs, including `asset_code`, `bigint` value columns, and transfer support in the underlying wallet layer
+- Keep `usage_credits` single-asset and backwards-compatible while allowing advanced wallet-level operations through `credit_wallet`
+
 ## [0.5.0] - 2026-03-15
 
 - Add configurable transaction categories via `config.additional_categories` for money-like wallet use cases (marketplaces, fintech) by @rameerez in https://github.com/rameerez/usage_credits/pull/29

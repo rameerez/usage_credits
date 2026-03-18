@@ -6,6 +6,7 @@
 require "rails"
 require "active_record"
 require "pay"
+require "wallets"
 require "active_support/all"
 
 # Load order matters! Dependencies are loaded in this specific order:
@@ -43,9 +44,11 @@ module UsageCredits
 end
 
 # 6. Models (order matters for dependencies)
+#    These extend Wallets::* classes, so wallets gem must be loaded first
 require "usage_credits/models/wallet"
 require "usage_credits/models/transaction"
 require "usage_credits/models/allocation"
+require "usage_credits/models/transfer"
 require "usage_credits/models/operation"
 require "usage_credits/models/fulfillment"
 require "usage_credits/models/credit_pack"
@@ -62,6 +65,7 @@ module UsageCredits
   class Error < StandardError; end
   class InsufficientCredits < Error; end
   class InvalidOperation < Error; end
+  class InvalidTransfer < Error; end
 
   class << self
     attr_writer :configuration

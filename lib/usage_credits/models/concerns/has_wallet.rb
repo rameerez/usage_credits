@@ -6,7 +6,9 @@ module UsageCredits
     extend ActiveSupport::Concern
 
     included do
+      # Filter to the default "credits" asset_code for backwards compatibility
       has_one :credit_wallet,
+              -> { where(asset_code: "credits") },
               class_name: "UsageCredits::Wallet",
               as: :owner,
               dependent: :destroy
@@ -75,16 +77,22 @@ module UsageCredits
     end
 
     def ensure_credit_wallet
-      return original_credit_wallet if original_credit_wallet.present?
-      return unless should_create_wallet?
-
-      if persisted?
-        build_credit_wallet(
-          balance: credit_options[:initial_balance] || 0
-        ).tap(&:save!)
-      else
-        raise "Cannot create wallet for unsaved owner"
+      wallet = original_credit_wallet || UsageCredits::Wallet.find_by(owner: self, asset_code: "credits")
+      if wallet.present?
+        self.credit_wallet = wallet unless original_credit_wallet == wallet
+        return wallet
       end
+      return unless should_create_wallet?
+      raise "Cannot create wallet for unsaved owner" unless persisted?
+
+      wallet = UsageCredits::Wallet.create_for_owner!(
+        owner: self,
+        asset_code: "credits",
+        initial_balance: credit_options[:initial_balance].to_i
+      )
+
+      self.credit_wallet = wallet
+      wallet
     end
 
     def create_credit_wallet

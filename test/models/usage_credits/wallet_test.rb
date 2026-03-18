@@ -206,7 +206,7 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
   end
 
   test "respects grace period for expiration" do
-    wallet = usage_credits_wallets(:empty_wallet)
+    wallet = UsageCredits::Wallet.create!(owner: users(:walletless_user), asset_code: "grace_test")
 
     # Add credit that expires very soon (within grace period)
     expires_at = 1.minute.from_now
@@ -279,6 +279,66 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
 
     total_allocated = spend_tx.outgoing_allocations.sum(:amount)
     assert_equal 100, total_allocated
+  end
+
+  test "credit wallet supports direct wallet transfers without transfer callback wiring" do
+    sender = User.create!(email: "sender-#{SecureRandom.hex(4)}@example.com", name: "Sender")
+    recipient = User.create!(email: "recipient-#{SecureRandom.hex(4)}@example.com", name: "Recipient")
+
+    sender.credit_wallet.give_credits(100, reason: "bonus")
+
+    assert_difference -> { UsageCredits::Transfer.count }, 1 do
+      transfer = sender.credit_wallet.transfer_to(
+        recipient.credit_wallet,
+        30,
+        category: :gift,
+        metadata: { source: "test" }
+      )
+
+      assert_equal sender.credit_wallet, transfer.from_wallet
+      assert_equal recipient.credit_wallet, transfer.to_wallet
+      assert_equal 30, transfer.amount
+      assert_instance_of UsageCredits::Transaction, transfer.outbound_transaction
+      assert_instance_of UsageCredits::Transaction, transfer.inbound_transactions.sole
+      assert_equal "transfer_out", transfer.outbound_transaction.category
+      assert_equal "transfer_in", transfer.inbound_transactions.sole.category
+      assert_equal "preserve", transfer.expiration_policy
+    end
+
+    assert_equal 70, sender.credit_wallet.reload.credits
+    assert_equal 30, recipient.credit_wallet.reload.credits
+  end
+
+  test "credit wallet transfers preserve expiration buckets by default" do
+    sender = User.create!(email: "sender-exp-#{SecureRandom.hex(4)}@example.com", name: "Sender Exp")
+    recipient = User.create!(email: "recipient-exp-#{SecureRandom.hex(4)}@example.com", name: "Recipient Exp")
+    earliest_credit = sender.credit_wallet.give_credits(100, reason: "promo", expires_at: 5.days.from_now)
+    later_credit = sender.credit_wallet.give_credits(80, reason: "promo", expires_at: 20.days.from_now)
+
+    transfer = sender.credit_wallet.transfer_to(recipient.credit_wallet, 130, category: :gift)
+    inbound_legs = transfer.inbound_transactions.order(:expires_at, :id).to_a
+
+    assert_equal "preserve", transfer.expiration_policy
+    assert_equal 2, inbound_legs.size
+    assert_nil transfer.inbound_transaction
+    assert_equal [100, 30], inbound_legs.map(&:amount)
+    assert_equal [earliest_credit.expires_at.to_i, later_credit.expires_at.to_i], inbound_legs.map { |tx| tx.expires_at.to_i }
+  end
+
+  test "credit wallet transfer can override expiration policy to none" do
+    sender = User.create!(email: "sender-none-#{SecureRandom.hex(4)}@example.com", name: "Sender None")
+    recipient = User.create!(email: "recipient-none-#{SecureRandom.hex(4)}@example.com", name: "Recipient None")
+    sender.credit_wallet.give_credits(100, reason: "promo", expires_at: 10.days.from_now)
+
+    transfer = sender.credit_wallet.transfer_to(
+      recipient.credit_wallet,
+      30,
+      category: :gift,
+      expiration_policy: :none
+    )
+
+    assert_equal "none", transfer.expiration_policy
+    assert_nil transfer.inbound_transactions.sole.expires_at
   end
 
   test "partial allocation from multiple sources" do
@@ -623,10 +683,29 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
         wallet.deduct_credits(10, category: "operation_charge", metadata: {})
       end
 
-      # The credits method calculates from remaining positive transactions
-      # With negative balance enabled, it should show 0 or the actual negative
-      # depending on implementation
-      assert wallet.reload.balance <= 0
+      # usage_credits historically floors negative balances to zero for public
+      # balance access, even when negative balances are allowed.
+      assert_equal 0, wallet.reload.credits
+      assert_equal 0, wallet.balance
+    ensure
+      UsageCredits.configuration.allow_negative_balance = original_setting
+    end
+  end
+
+  test "new credits remain fully usable after an unbacked negative debit" do
+    original_setting = UsageCredits.configuration.allow_negative_balance
+
+    begin
+      UsageCredits.configuration.allow_negative_balance = true
+
+      wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+      wallet.give_credits(10, reason: "initial")
+      wallet.deduct_credits(25, category: "operation_charge", metadata: {})
+
+      refill = wallet.give_credits(20, reason: "refill")
+
+      assert_equal 20, wallet.reload.credits
+      assert_equal 20, refill.balance_after
     ensure
       UsageCredits.configuration.allow_negative_balance = original_setting
     end

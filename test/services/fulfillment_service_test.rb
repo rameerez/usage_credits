@@ -642,7 +642,7 @@ module UsageCredits
         end
       end
 
-      wallet = usage_credits_wallets(:empty_wallet)
+      wallet = UsageCredits::Wallet.create!(owner: users(:walletless_user), asset_code: "accumulation_test")
 
       # Create fulfillment
       fulfillment = Fulfillment.create!(

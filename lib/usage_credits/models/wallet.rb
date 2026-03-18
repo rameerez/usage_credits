@@ -3,90 +3,95 @@
 module UsageCredits
   # A Wallet manages credit balance and transactions for a user/owner.
   #
-  # It's responsible for:
-  #   1. Tracking credit balance
-  #   2. Performing credit operations (add/deduct)
-  #   3. Managing credit expiration
-  #   4. Handling low balance alerts
+  # This class extends Wallets::Wallet with usage_credits-specific features:
+  #   - Operation-based spending (spend_credits_on)
+  #   - Human-friendly API (give_credits, credits, credit_history)
+  #   - Fulfillment tracking for subscriptions and credit packs
+  #   - Usage-credits specific callbacks (credits_added, credits_deducted, etc.)
 
-  class Wallet < ApplicationRecord
-    self.table_name = "usage_credits_wallets"
-
+  class Wallet < Wallets::Wallet
     # =========================================
-    # Associations & Validations
+    # Embeddability Configuration
     # =========================================
 
-    belongs_to :owner, polymorphic: true
+    self.embedded_table_name = "usage_credits_wallets"
+    self.config_provider = -> { UsageCredits.configuration }
+    self.callbacks_module = UsageCredits::Callbacks
+    self.transaction_class_name = "UsageCredits::Transaction"
+    self.allocation_class_name = "UsageCredits::Allocation"
+    self.transfer_class_name = "UsageCredits::Transfer"
+
+    # Map base wallet events to usage_credits-specific event names
+    self.callback_event_map = {
+      credited: :credits_added,
+      debited: :credits_deducted,
+      insufficient: :insufficient_credits,
+      low_balance: :low_balance_reached,
+      depleted: :balance_depleted,
+      transfer_completed: nil
+    }.freeze
+
+    # =========================================
+    # Re-declare Associations with Correct Classes
+    # =========================================
+
+    # Override parent associations to use UsageCredits classes
     has_many :transactions, class_name: "UsageCredits::Transaction", dependent: :destroy
+    has_many :outgoing_transfers,
+             class_name: "UsageCredits::Transfer",
+             foreign_key: :from_wallet_id,
+             dependent: :destroy,
+             inverse_of: :from_wallet
+    has_many :incoming_transfers,
+             class_name: "UsageCredits::Transfer",
+             foreign_key: :to_wallet_id,
+             dependent: :destroy,
+             inverse_of: :to_wallet
+
+    # UsageCredits-specific associations
     has_many :fulfillments, class_name: "UsageCredits::Fulfillment", dependent: :destroy
-    has_many :outbound_allocations, through: :transactions, source: :outgoing_allocations
-    has_many :inbound_allocations, through: :transactions, source: :incoming_allocations
-    has_many :allocations, ->(wallet) { unscope(:where).where("usage_credits_allocations.transaction_id IN (?) OR usage_credits_allocations.source_transaction_id IN (?)", wallet.transaction_ids, wallet.transaction_ids) }, class_name: "UsageCredits::Allocation", dependent: :destroy
 
-    validates :balance, numericality: { greater_than_or_equal_to: 0 }, unless: :allow_negative_balance?
+    class << self
+      private
 
-    # =========================================
-    # Metadata Handling
-    # =========================================
-
-    # Sync in-place modifications to metadata before saving
-    before_save :sync_metadata_cache
-
-    # Get metadata with indifferent access (string/symbol keys)
-    # Returns empty hash if nil (for MySQL compatibility where JSON columns can't have defaults)
-    def metadata
-      @indifferent_metadata ||= ActiveSupport::HashWithIndifferentAccess.new(super || {})
-    end
-
-    # Set metadata, ensuring consistent storage format
-    def metadata=(hash)
-      @indifferent_metadata = nil  # Clear cache
-      super(hash.is_a?(Hash) ? hash.to_h : {})
-    end
-
-    # Clear metadata cache on reload to ensure fresh data from database
-    def reload(*)
-      @indifferent_metadata = nil
-      super
+      def initial_balance_credit_attributes
+        {
+          category: :manual_adjustment,
+          metadata: { reason: "initial_balance" }
+        }
+      end
     end
 
     # =========================================
-    # Credit Balance & History
+    # Backwards Compatibility API
     # =========================================
 
-    # Get current credit balance
+    # Get current credit balance (alias for balance)
     #
-    # The first naive approach was to compute this as a sum of all non-expired transactions like:
-    #   transactions.not_expired.sum(:amount)
-    # but that fails when we mix expiring and non-expiring credits: https://x.com/rameerez/status/1884246492837302759
-    #
-    # So we needed to introduce the Allocation model
-    #
-    # Now to calculate current balance, instead of summing:
-    # we sum only unexpired positive transactions’ remaining_amount
+    # usage_credits historically floors negative balances to zero even when
+    # allow_negative_balance is enabled. Keep that contract for backwards
+    # compatibility, even though the shared wallets core can represent unbacked
+    # negative debits explicitly.
     def credits
-      # Sum the leftover in all *positive* transactions that haven't expired
-      transactions
-        .where("amount > 0")
-        .where("expires_at IS NULL OR expires_at > ?", Time.current)
-        .sum("amount - (SELECT COALESCE(SUM(amount), 0) FROM usage_credits_allocations WHERE source_transaction_id = usage_credits_transactions.id)")
-        .yield_self { |sum| [sum, 0].max }.to_i
+      balance
     end
 
-    # Get transaction history (oldest first)
+    def current_balance
+      positive_remaining_balance
+    end
+
+    # Get transaction history (oldest first) - alias for history
     def credit_history
-      transactions.order(created_at: :asc)
+      history
     end
 
     # =========================================
-    # Credit Operations
+    # Credit Operations (High-Level API)
     # =========================================
 
     # Check if wallet has enough credits for an operation
     def has_enough_credits_to?(operation_name, **params)
       operation = find_and_validate_operation(operation_name, params)
-
-      # Then check if we actually have enough credits
       credits >= operation.calculate_cost(params)
     rescue InvalidOperation => e
       raise e
@@ -97,8 +102,6 @@ module UsageCredits
     # Calculate how many credits an operation would cost
     def estimate_credits_to(operation_name, **params)
       operation = find_and_validate_operation(operation_name, params)
-
-      # Then calculate the cost
       operation.calculate_cost(params)
     rescue InvalidOperation => e
       raise e
@@ -112,12 +115,10 @@ module UsageCredits
     # @yield Optional block that must succeed before credits are deducted
     def spend_credits_on(operation_name, **params)
       operation = find_and_validate_operation(operation_name, params)
-
       cost = operation.calculate_cost(params)
 
       # Check if user has enough credits
       unless has_enough_credits_to?(operation_name, **params)
-        # Fire insufficient_credits callback before raising
         UsageCredits::Callbacks.dispatch(:insufficient_credits,
           wallet: self,
           amount: cost,
@@ -132,7 +133,6 @@ module UsageCredits
       end
 
       # Create audit trail
-      # Stringify keys from audit_data to avoid duplicate key warnings in JSON
       audit_data = operation.to_audit_hash(params).deep_stringify_keys
       deduct_params = {
         metadata: audit_data.merge(operation.metadata.deep_stringify_keys).merge(
@@ -143,13 +143,10 @@ module UsageCredits
       }
 
       if block_given?
-        # If block given, only deduct credits if it succeeds
         ActiveRecord::Base.transaction do
-          lock!  # Row-level lock for concurrency safety
-
-          yield  # Perform the operation first
-
-          deduct_credits(cost, **deduct_params)  # Deduct credits only if the block was successful
+          lock!
+          yield
+          deduct_credits(cost, **deduct_params)
         end
       else
         deduct_credits(cost, **deduct_params)
@@ -160,7 +157,7 @@ module UsageCredits
 
     # Give credits to the wallet with optional reason and expiration date
     # @param amount [Integer] Number of credits to give
-    # @param reason [String, nil] Optional reason for giving credits (for auditing / trail purposes)
+    # @param reason [String, nil] Optional reason for giving credits
     # @param expires_at [DateTime, nil] Optional expiration date for the credits
     def give_credits(amount, reason: nil, expires_at: nil)
       raise ArgumentError, "Amount is required" if amount.nil?
@@ -188,227 +185,48 @@ module UsageCredits
     # Credit Management (Internal API)
     # =========================================
 
-    # Add credits to the wallet (internal method)
+    # Add credits to the wallet (wraps parent's credit method)
+    # Maintains backwards compatibility with fulfillment parameter
     def add_credits(amount, metadata: {}, category: :credit_added, expires_at: nil, fulfillment: nil)
-      with_lock do
-        amount = amount.to_i
-        raise ArgumentError, "Cannot add non-positive credits" if amount <= 0
-
-        previous_balance = credits  # Capture BEFORE creating transaction
-
-        transaction = transactions.create!(
-          amount: amount,
-          category: category,
-          expires_at: expires_at,
-          metadata: metadata,
-          fulfillment: fulfillment
-        )
-
-        # Sync the wallet's `balance` column
-        self.balance = credits
-        save!
-
-        # Store balance information in transaction metadata for audit trail.
-        # Note: This update! is in the same DB transaction as the create! above (via with_lock),
-        # so if this fails, the entire transaction rolls back - no orphaned records possible.
-        # We intentionally overwrite any user-supplied balance_before/balance_after keys
-        # to ensure system-set values are authoritative.
-        transaction.update!(metadata: transaction.metadata.merge(
-          balance_before: previous_balance,
-          balance_after: balance
-        ))
-
-        # Dispatch callback with full context
-        UsageCredits::Callbacks.dispatch(:credits_added,
-          wallet: self,
-          amount: amount,
-          category: category,
-          transaction: transaction,
-          previous_balance: previous_balance,
-          new_balance: balance,
-          metadata: metadata
-        )
-
-        # To finish, let's return the transaction that has been just created so we can reference it in parts of the code
-        # Useful, for example, to update the transaction's `fulfillment` reference in the subscription extension
-        # after the credits have been awarded and the Fulfillment object has been created, we need to store it
-        return transaction
-      end
-    end
-
-    # Remove credits from the wallet (Internal method)
-    #
-    # After implementing the expiring FIFO inventory-like system through the Allocation model,
-    # we no longer just create one -X transaction. Now we also allocate that spend across whichever
-    # positive transactions still have leftover.
-    #
-    # TODO: This code enumerates all unexpired positive transactions each time.
-    # That's fine if usage scale is moderate. We're already indexing this.
-    # If performance becomes a concern, we need to create a separate model to store the partial allocations efficiently.
-    def deduct_credits(amount, metadata: {}, category: :credit_deducted)
-      with_lock do
-      amount = amount.to_i
-      raise InsufficientCredits, "Cannot deduct a non-positive amount" if amount <= 0
-
-      # Capture previous balance for low_balance check
-      previous_balance = credits
-
-      # Figure out how many credits are available right now
-      available = previous_balance
-      if amount > available && !allow_negative_balance?
-        raise InsufficientCredits, "Insufficient credits (#{available} < #{amount})"
-      end
-
-      # Create the negative transaction that represents the spend
-      spend_tx = transactions.create!(
-        amount: -amount,
+      credit(
+        amount,
+        metadata: metadata,
         category: category,
-        metadata: metadata
-      ) # We'll attach allocations to it next.
-
-      # We now allocate from oldest/soonest-expiring positive transactions
-      remaining_to_deduct = amount
-
-      # 1) Gather all unexpired positives with leftover, order by expire time (soonest first),
-      #    then fallback to any with no expiry (which should come last).
-      positive_txs = transactions
-                      .where("amount > 0")
-                      .where("expires_at IS NULL OR expires_at > ?", Time.current)
-                      .order(Arel.sql("COALESCE(expires_at, '9999-12-31 23:59:59'), id ASC"))
-                      .lock("FOR UPDATE")
-                      .select(:id, :amount, :expires_at)
-                      .to_a
-
-      positive_txs.each do |pt|
-        # Calculate leftover amount for this transaction
-        allocated = pt.incoming_allocations.sum(:amount)
-        leftover = pt.amount - allocated
-        next if leftover <= 0
-
-        allocate_amount = [leftover, remaining_to_deduct].min
-
-        # Create allocation
-        Allocation.create!(
-          spend_transaction: spend_tx,
-          source_transaction: pt,
-          amount: allocate_amount
-        )
-
-        remaining_to_deduct -= allocate_amount
-        break if remaining_to_deduct <= 0
-      end
-
-      # If anything’s still left to deduct (and we allow negative?), we just leave it unallocated
-      # TODO: implement this edge case; typically we'd create an unbacked negative record.
-      if remaining_to_deduct.positive? && allow_negative_balance?
-        # The spend_tx already has -amount, so effectively user goes negative
-        # with no “source bucket” to allocate from. That is an edge case the end user's business logic must handle.
-      elsif remaining_to_deduct.positive?
-        # We shouldn’t get here if InsufficientCredits is raised earlier, but just in case:
-        raise InsufficientCredits, "Not enough credit buckets to cover the deduction"
-      end
-
-      # Keep the `balance` column in sync
-      self.balance = credits
-      save!
-
-      # Store balance information in transaction metadata for audit trail.
-      # Note: This update! is in the same DB transaction as the create! above (via with_lock),
-      # so if this fails, the entire transaction rolls back - no orphaned records possible.
-      # We intentionally overwrite any user-supplied balance_before/balance_after keys
-      # to ensure system-set values are authoritative.
-      spend_tx.update!(metadata: spend_tx.metadata.merge(
-        balance_before: previous_balance,
-        balance_after: balance
-      ))
-
-      # Dispatch credits_deducted callback
-      UsageCredits::Callbacks.dispatch(:credits_deducted,
-        wallet: self,
-        amount: amount,
-        category: category,
-        transaction: spend_tx,
-        previous_balance: previous_balance,
-        new_balance: balance,
-        metadata: metadata
+        expires_at: expires_at,
+        fulfillment: fulfillment
       )
-
-      # Check for low balance threshold crossing
-      if !was_low_balance?(previous_balance) && low_balance?
-        UsageCredits::Callbacks.dispatch(:low_balance_reached,
-          wallet: self,
-          threshold: UsageCredits.configuration.low_balance_threshold,
-          previous_balance: previous_balance,
-          new_balance: balance
-        )
-      end
-
-      # Check for balance depletion (balance reaches exactly zero)
-      if previous_balance > 0 && balance == 0
-        UsageCredits::Callbacks.dispatch(:balance_depleted,
-          wallet: self,
-          previous_balance: previous_balance,
-          new_balance: 0
-        )
-      end
-
-      spend_tx
-      end
     end
 
+    # Remove credits from the wallet (wraps parent's debit method)
+    # Converts Wallets::InsufficientBalance to InsufficientCredits for backwards compatibility
+    def deduct_credits(amount, metadata: {}, category: :credit_deducted)
+      debit(amount, metadata: metadata, category: category)
+    rescue Wallets::InsufficientBalance => e
+      raise InsufficientCredits, e.message
+    end
+
+    # Transfer credits to another wallet
+    # Converts Wallets errors to usage_credits errors for backwards compatibility
+    def transfer_credits_to(other_wallet, amount, category: :transfer, metadata: {})
+      transfer_to(other_wallet, amount, category: category, metadata: metadata)
+    rescue Wallets::InvalidTransfer => e
+      raise InvalidTransfer, e.message
+    rescue Wallets::InsufficientBalance => e
+      raise InsufficientCredits, e.message
+    end
 
     private
-
-    # Sync in-place modifications to the cached metadata back to the attribute
-    # This ensures changes like `metadata["key"] = "value"` are persisted on save
-    # Also ensures metadata is never null for MySQL compatibility (JSON columns can't have defaults)
-    def sync_metadata_cache
-      if @indifferent_metadata
-        write_attribute(:metadata, @indifferent_metadata.to_h)
-      elsif read_attribute(:metadata).nil?
-        write_attribute(:metadata, {})
-      end
-    end
 
     # =========================================
     # Helper Methods
     # =========================================
 
     # Find an operation and validate its parameters
-    # @param name [Symbol] Operation name
-    # @param params [Hash] Operation parameters to validate
-    # @return [Operation] The validated operation
-    # @raise [InvalidOperation] If operation not found or validation fails
     def find_and_validate_operation(name, params)
       operation = UsageCredits.operations[name.to_sym]
       raise InvalidOperation, "Operation not found: #{name}" unless operation
       operation.validate!(params)
       operation
     end
-
-    def insufficient_credits?(amount)
-      !allow_negative_balance? && amount > credits
-    end
-
-    def allow_negative_balance?
-      UsageCredits.configuration.allow_negative_balance
-    end
-
-    # =========================================
-    # Balance Threshold Helpers
-    # =========================================
-
-    def low_balance?
-      threshold = UsageCredits.configuration.low_balance_threshold
-      return false if threshold.nil? || threshold.negative?
-      credits <= threshold
-    end
-
-    def was_low_balance?(previous_balance)
-      threshold = UsageCredits.configuration.low_balance_threshold
-      return false if threshold.nil? || threshold.negative?
-      previous_balance <= threshold
-    end
   end
-
 end

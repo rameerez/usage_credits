@@ -3,145 +3,84 @@
 module UsageCredits
   # Records all credit changes in a wallet (additions, deductions, expirations).
   #
-  # Each transaction represents a single credit operation and includes:
-  #   - amount: How many credits (positive for additions, negative for deductions)
-  #   - category: What kind of operation (subscription fulfillment, pack purchase, etc)
-  #   - metadata: Additional details about the operation
-  #   - expires_at: When these credits expire (optional)
-  class Transaction < ApplicationRecord
-    self.table_name = "usage_credits_transactions"
+  # This class extends Wallets::Transaction with usage_credits-specific features:
+  #   - Fulfillment tracking for subscription/pack credits
+  #   - Usage-credits specific transaction categories
+  #   - Operation charge descriptions and formatting
+
+  class Transaction < Wallets::Transaction
+    # =========================================
+    # Embeddability Configuration
+    # =========================================
+
+    self.embedded_table_name = "usage_credits_transactions"
+    self.config_provider = -> { UsageCredits.configuration }
 
     # =========================================
     # Transaction Categories
     # =========================================
 
-    # Default transaction types, grouped by purpose:
+    # Override base categories with usage_credits-specific ones
     DEFAULT_CATEGORIES = [
       # Bonus credits
-      "signup_bonus",                   # Initial signup bonus
-      "referral_bonus",                 # Referral reward bonus
-      "bonus",                          # Generic bonus
+      "signup_bonus",
+      "referral_bonus",
+      "bonus",
 
       # Subscription-related
-      "subscription_credits",           # Generic subscription credits
-      "subscription_trial",             # Trial period credits
-      "subscription_signup_bonus",      # Bonus for subscribing
-      "subscription_upgrade",           # Plan upgrade credits
+      "subscription_credits",
+      "subscription_trial",
+      "subscription_signup_bonus",
+      "subscription_upgrade",
 
       # One-time purchases
-      "credit_pack",                    # Generic credit pack
-      "credit_pack_purchase",           # Credit pack bought
-      "credit_pack_refund",             # Credit pack refunded
+      "credit_pack",
+      "credit_pack_purchase",
+      "credit_pack_refund",
 
       # Credit usage & management
-      "operation_charge",               # Credits spent on operation
-      "manual_adjustment",              # Manual admin adjustment
-      "credit_added",                   # Generic addition
-      "credit_deducted"                 # Generic deduction
+      "operation_charge",
+      "manual_adjustment",
+      "credit_added",
+      "credit_deducted",
+
+      # Transfer categories (from wallets)
+      "transfer_in",
+      "transfer_out"
     ].freeze
 
-    # All valid categories: defaults + any custom categories added via config
-    # @return [Array<String>] Combined list of valid category names
-    def self.categories
-      (DEFAULT_CATEGORIES + UsageCredits.configuration.additional_categories).uniq
-    end
-
-    # Backwards compatibility: CATEGORIES constant still works
-    # but prefer using Transaction.categories for dynamic lookup
     CATEGORIES = DEFAULT_CATEGORIES
 
+    def self.categories
+      (DEFAULT_CATEGORIES + resolved_config.additional_categories).uniq
+    end
+
     # =========================================
-    # Associations & Validations
+    # Additional Associations
     # =========================================
 
-    belongs_to :wallet
+    belongs_to :wallet, class_name: "UsageCredits::Wallet"
+    belongs_to :transfer, class_name: "UsageCredits::Transfer", optional: true
+    belongs_to :fulfillment, class_name: "UsageCredits::Fulfillment", optional: true
 
-    belongs_to :fulfillment, optional: true
-
+    # Re-declare allocation associations with correct classes
     has_many :outgoing_allocations,
-              class_name: "UsageCredits::Allocation",
-              foreign_key: :transaction_id,
-              dependent: :destroy
+             class_name: "UsageCredits::Allocation",
+             foreign_key: :transaction_id,
+             dependent: :destroy
 
     has_many :incoming_allocations,
-              class_name: "UsageCredits::Allocation",
-              foreign_key: :source_transaction_id,
-              dependent: :destroy
-
-    validates :amount, presence: true, numericality: { only_integer: true }
-    validates :category, presence: true, inclusion: { in: ->(record) { Transaction.categories } }
-
-    validate :remaining_amount_cannot_be_negative
+             class_name: "UsageCredits::Allocation",
+             foreign_key: :source_transaction_id,
+             dependent: :destroy
 
     # =========================================
-    # Scopes
+    # Backwards Compatibility Scopes
     # =========================================
 
     scope :credits_added, -> { where("amount > 0") }
     scope :credits_deducted, -> { where("amount < 0") }
-    scope :by_category, ->(category) { where(category: category) }
-    scope :recent, -> { order(created_at: :desc) }
     scope :operation_charges, -> { where(category: :operation_charge) }
-
-    # A transaction is not expired if:
-    # 1. It has no expiration date, OR
-    # 2. Its expiration date is in the future
-    scope :not_expired, -> { where("expires_at IS NULL OR expires_at > ?", Time.current) }
-    scope :expired, -> { where("expires_at < ?", Time.current) }
-
-
-    # =========================================
-    # Helpers
-    # =========================================
-
-    # Get the owner of the wallet these credits belong to
-    def owner
-      wallet.owner
-    end
-
-    # Have these credits expired?
-    def expired?
-      expires_at.present? && expires_at < Time.current
-    end
-
-    # Is this transaction a positive credit or a negative (spend)?
-    def credit?
-      amount > 0
-    end
-
-    def debit?
-      amount < 0
-    end
-
-    # How many credits from this transaction have already been allocated (spent)?
-    # Only applies if this transaction is positive.
-    def allocated_amount
-      incoming_allocations.sum(:amount)
-    end
-
-    # How many credits remain unused in this positive transaction?
-    # If negative, this will effectively be 0.
-    def remaining_amount
-      return 0 unless credit?
-      amount - allocated_amount
-    end
-
-    # =========================================
-    # Balance After Transaction
-    # =========================================
-
-    # Get the balance after this transaction was applied
-    # Returns nil for transactions created before this feature was added
-    def balance_after
-      metadata[:balance_after]
-    end
-
-    # Get the balance before this transaction was applied
-    # Returns the stored value if available, otherwise nil
-    # Note: For transactions created before this feature, returns nil
-    def balance_before
-      metadata[:balance_before]
-    end
 
     # =========================================
     # Display Formatting
@@ -154,7 +93,6 @@ module UsageCredits
     end
 
     # Format the balance after for display (e.g., "500 credits")
-    # Returns nil if balance_after is not stored
     def formatted_balance_after
       return nil unless balance_after
       UsageCredits.configuration.credit_formatter.call(balance_after)
@@ -162,53 +100,12 @@ module UsageCredits
 
     # Get a human-readable description of what this transaction represents
     def description
-      # Custom description takes precedence
       return self[:description] if self[:description].present?
-
-      # Operation charges have dynamic descriptions
       return operation_description if category == "operation_charge"
-
-      # Use predefined description or fallback to titleized category
       category.titleize
     end
 
-    # =========================================
-    # Metadata Handling
-    # =========================================
-
-    # Sync in-place modifications to metadata before saving
-    before_save :sync_metadata_cache
-
-    # Get metadata with indifferent access (string/symbol keys)
-    # Returns empty hash if nil (for MySQL compatibility where JSON columns can't have defaults)
-    def metadata
-      @indifferent_metadata ||= ActiveSupport::HashWithIndifferentAccess.new(super || {})
-    end
-
-    # Set metadata, ensuring consistent storage format
-    def metadata=(hash)
-      @indifferent_metadata = nil  # Clear cache
-      super(hash.is_a?(Hash) ? hash.to_h : {})
-    end
-
-    # Clear metadata cache on reload to ensure fresh data from database
-    def reload(*)
-      @indifferent_metadata = nil
-      super
-    end
-
     private
-
-    # Sync in-place modifications to the cached metadata back to the attribute
-    # This ensures changes like `metadata["key"] = "value"` are persisted on save
-    # Also ensures metadata is never null for MySQL compatibility (JSON columns can't have defaults)
-    def sync_metadata_cache
-      if @indifferent_metadata
-        write_attribute(:metadata, @indifferent_metadata.to_h)
-      elsif read_attribute(:metadata).nil?
-        write_attribute(:metadata, {})
-      end
-    end
 
     # Format operation charge descriptions (e.g., "Process Video (-10 credits)")
     def operation_description
@@ -220,12 +117,5 @@ module UsageCredits
 
       "#{operation} (-#{cost} credits)"
     end
-
-    def remaining_amount_cannot_be_negative
-      if credit? && remaining_amount < 0
-        errors.add(:base, "Allocated amount exceeds transaction amount")
-      end
-    end
-
   end
 end

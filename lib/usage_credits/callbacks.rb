@@ -13,7 +13,11 @@ module UsageCredits
     # @param context_data [Hash] Data to pass to the callback via CallbackContext
     def dispatch(event, **context_data)
       config = UsageCredits.configuration
-      callback = config.public_send(:"on_#{event}_callback")
+      callback_method = :"on_#{event}_callback"
+
+      return unless config.respond_to?(callback_method)
+
+      callback = config.public_send(callback_method)
 
       return unless callback.is_a?(Proc)
 

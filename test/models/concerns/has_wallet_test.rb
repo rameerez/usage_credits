@@ -82,6 +82,47 @@ class HasWalletTest < ActiveSupport::TestCase
     assert_equal 100, test_class.credit_options[:initial_balance]
   end
 
+  test "initial_balance is applied through a manual_adjustment transaction" do
+    test_class = Class.new(User) do
+      def self.name
+        "TestUserWithInitialBalanceLedgerBootstrap"
+      end
+
+      has_credits initial_balance: 100
+    end
+
+    user = test_class.create!(email: "initial-balance-#{SecureRandom.hex(4)}@example.com", name: "Initial Balance User")
+    wallet = user.credit_wallet
+
+    assert_equal 100, user.credits
+    assert_equal 1, wallet.transactions.count
+    assert_equal "manual_adjustment", wallet.transactions.first.category
+    assert_equal "initial_balance", wallet.transactions.first.metadata["reason"]
+  end
+
+  test "usage credits wallet create_for_owner applies initial_balance via manual_adjustment once" do
+    wallet = UsageCredits::Wallet.create_for_owner!(
+      owner: users(:new_user),
+      asset_code: :credits,
+      initial_balance: 60
+    )
+
+    assert_no_difference -> { UsageCredits::Wallet.where(owner: users(:new_user), asset_code: "credits").count } do
+      same_wallet = UsageCredits::Wallet.create_for_owner!(
+        owner: users(:new_user),
+        asset_code: "CREDITS",
+        initial_balance: 999
+      )
+
+      assert_equal wallet.id, same_wallet.id
+    end
+
+    assert_equal 60, wallet.reload.balance
+    assert_equal 1, wallet.transactions.count
+    assert_equal "manual_adjustment", wallet.transactions.sole.category
+    assert_equal "initial_balance", wallet.transactions.sole.metadata["reason"]
+  end
+
   # ========================================
   # ASSOCIATIONS
   # ========================================
@@ -125,6 +166,12 @@ class HasWalletTest < ActiveSupport::TestCase
     assert_equal user.credit_wallet, user.wallet
   end
 
+  test "does not expose plural credit_wallets association" do
+    user = users(:rich_user)
+
+    refute_respond_to user, :credit_wallets
+  end
+
   # ========================================
   # WALLET AUTO-CREATION (ensure_credit_wallet)
   # ========================================
@@ -161,6 +208,31 @@ class HasWalletTest < ActiveSupport::TestCase
 
     # original_credit_wallet should NOT auto-create
     assert_nil user.original_credit_wallet
+  end
+
+  test "ensure_credit_wallet reuses an existing wallet when the association reader returns nil" do
+    test_class = Class.new(User) do
+      def self.name
+        "TestUserWithExistingWalletLookup"
+      end
+
+      has_credits initial_balance: 80
+    end
+
+    user = test_class.create!(email: "lookup-#{SecureRandom.hex(4)}@example.com", name: "Lookup User")
+    existing_wallet = user.credit_wallet
+
+    user.define_singleton_method(:original_credit_wallet) { nil }
+
+    assert_no_difference -> { UsageCredits::Wallet.where(owner: user, asset_code: "credits").count } do
+      wallet = user.send(:ensure_credit_wallet)
+
+      assert_equal existing_wallet.id, wallet.id
+    end
+
+    assert_equal 80, existing_wallet.reload.balance
+    assert_equal 1, existing_wallet.transactions.count
+    assert_equal "manual_adjustment", existing_wallet.transactions.sole.category
   end
 
   # ========================================

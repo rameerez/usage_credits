@@ -6,17 +6,33 @@ class CreateUsageCreditsTables < ActiveRecord::Migration<%= migration_version %>
 
     create_table :usage_credits_wallets, id: primary_key_type do |t|
       t.references :owner, polymorphic: true, null: false, type: foreign_key_type
-      t.integer :balance, null: false, default: 0
+      t.string :asset_code, null: false, default: "credits"
+      t.bigint :balance, null: false, default: 0
+      t.send(json_column_type, :metadata, null: false, default: json_column_default)
+
+      t.timestamps
+    end
+
+    add_index :usage_credits_wallets, [:owner_type, :owner_id, :asset_code], unique: true, name: "index_usage_credits_wallets_on_owner_and_asset"
+
+    create_table :usage_credits_transfers, id: primary_key_type do |t|
+      t.references :from_wallet, null: false, type: foreign_key_type, foreign_key: { to_table: :usage_credits_wallets }
+      t.references :to_wallet, null: false, type: foreign_key_type, foreign_key: { to_table: :usage_credits_wallets }
+      t.string :asset_code, null: false, default: "credits"
+      t.bigint :amount, null: false
+      t.string :category, null: false, default: "transfer"
+      t.string :expiration_policy, null: false, default: "preserve"
       t.send(json_column_type, :metadata, null: false, default: json_column_default)
 
       t.timestamps
     end
 
     create_table :usage_credits_transactions, id: primary_key_type do |t|
-      t.references :wallet, null: false, type: foreign_key_type
-      t.integer :amount, null: false
+      t.references :wallet, null: false, type: foreign_key_type, foreign_key: { to_table: :usage_credits_wallets }
+      t.bigint :amount, null: false
       t.string :category, null: false
       t.datetime :expires_at
+      t.references :transfer, type: foreign_key_type, foreign_key: { to_table: :usage_credits_transfers }
       t.references :fulfillment, type: foreign_key_type
       t.send(json_column_type, :metadata, null: false, default: json_column_default)
 
@@ -24,9 +40,9 @@ class CreateUsageCreditsTables < ActiveRecord::Migration<%= migration_version %>
     end
 
     create_table :usage_credits_fulfillments, id: primary_key_type do |t|
-      t.references :wallet, null: false, type: foreign_key_type
+      t.references :wallet, null: false, type: foreign_key_type, foreign_key: { to_table: :usage_credits_wallets }
       t.references :source, polymorphic: true, type: foreign_key_type
-      t.integer :credits_last_fulfillment, null: false    # Credits given in last fulfillment
+      t.bigint :credits_last_fulfillment, null: false     # Credits given in last fulfillment
       t.string :fulfillment_type, null: false             # What kind of fulfillment is this? (credit_pack / subscription)
       t.datetime :last_fulfilled_at                       # When last fulfilled
       t.datetime :next_fulfillment_at                     # When to fulfill next (nil if stopped/completed)
@@ -42,31 +58,32 @@ class CreateUsageCreditsTables < ActiveRecord::Migration<%= migration_version %>
       # The "spend" transaction (negative) that is *using* credits
       t.references :transaction, null: false, type: foreign_key_type,
                                  foreign_key: { to_table: :usage_credits_transactions },
-                                 index: { name: "index_allocations_on_transaction_id" }
+                                 index: { name: "index_usage_credits_allocations_on_transaction_id" }
 
       # The "source" transaction (positive) from which the credits are drawn
       t.references :source_transaction, null: false, type: foreign_key_type,
                                         foreign_key: { to_table: :usage_credits_transactions },
-                                        index: { name: "index_allocations_on_source_transaction_id" }
+                                        index: { name: "index_usage_credits_allocations_on_source_tx_id" }
 
       # How many credits were allocated from that particular source
-      t.integer :amount, null: false
+      t.bigint :amount, null: false
 
       t.timestamps
     end
 
-    # Add indexes
+    # Transaction indexes
     add_index :usage_credits_transactions, :category
     add_index :usage_credits_transactions, :expires_at
+    add_index :usage_credits_transactions, [:expires_at, :id], name: "index_usage_credits_transactions_on_expires_at_and_id"
+    add_index :usage_credits_transactions, [:wallet_id, :amount], name: "index_usage_credits_transactions_on_wallet_id_and_amount"
 
-    # Composite index on (expires_at, id) for efficient ordering when calculating balances
-    add_index :usage_credits_transactions, [:expires_at, :id], name: 'index_transactions_on_expires_at_and_id'
+    # Allocation indexes
+    add_index :usage_credits_allocations, [:transaction_id, :source_transaction_id], name: "index_usage_credits_allocations_on_tx_and_source_tx"
 
-    # Index on wallet_id and amount to speed up queries filtering by wallet and positive amounts
-    add_index :usage_credits_transactions, [:wallet_id, :amount], name: 'index_transactions_on_wallet_id_and_amount'
+    # Transfer indexes
+    add_index :usage_credits_transfers, [:from_wallet_id, :to_wallet_id, :asset_code], name: "index_usage_credits_transfers_on_wallets_and_asset"
 
-    add_index :usage_credits_allocations, [:transaction_id, :source_transaction_id], name: "index_allocations_on_tx_and_source_tx"
-
+    # Fulfillment indexes
     add_index :usage_credits_fulfillments, :next_fulfillment_at
     add_index :usage_credits_fulfillments, :fulfillment_type
   end

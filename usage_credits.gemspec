@@ -16,7 +16,7 @@ Gem::Specification.new do |spec|
 
   spec.metadata["allowed_push_host"] = "https://rubygems.org"
   spec.metadata["homepage_uri"] = spec.homepage
-  spec.metadata["source_code_uri"] = spec.homepage
+  spec.metadata["source_code_uri"] = "#{spec.homepage}/tree/main"
   spec.metadata["changelog_uri"] = "#{spec.homepage}/blob/main/CHANGELOG.md"
   spec.metadata["rubygems_mfa_required"] = "true"
 
@@ -26,7 +26,19 @@ Gem::Specification.new do |spec|
   spec.files = IO.popen(%w[git ls-files -z], chdir: __dir__, err: IO::NULL) do |ls|
     ls.readlines("\x0", chomp: true).reject do |f|
       (f == gemspec) ||
-        f.start_with?(*%w[bin/ test/ spec/ features/ .git .github appveyor Gemfile])
+        f.start_with?(*%w[
+          .aux/
+          .claude/
+          .cursor/
+          .git
+          .github/
+          appveyor
+          bin/
+          features/
+          Gemfile
+          spec/
+          test/
+        ])
     end
   end
   spec.bindir = "exe"
@@ -34,5 +46,6 @@ Gem::Specification.new do |spec|
   spec.require_paths = ["lib"]
 
   spec.add_dependency "pay", ">= 8.3", "< 12.0"
-  spec.add_dependency "rails", ">= 6.1"
+  spec.add_dependency "rails", ">= 6.1", "< 9.0"
+  spec.add_dependency "wallets", "~> 0.1"
 end

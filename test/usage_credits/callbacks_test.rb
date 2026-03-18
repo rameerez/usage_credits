@@ -51,6 +51,12 @@ class UsageCredits::CallbacksTest < ActiveSupport::TestCase
     end
   end
 
+  test "dispatch ignores unsupported callback events" do
+    assert_nothing_raised do
+      UsageCredits::Callbacks.dispatch(:transfer_completed, wallet: @user.credit_wallet, amount: 100)
+    end
+  end
+
   test "CallbackContext provides owner convenience method" do
     wallet = @user.credit_wallet
     ctx = UsageCredits::CallbackContext.new(event: :test, wallet: wallet)
@@ -87,7 +93,7 @@ class UsageCredits::CallbacksTest < ActiveSupport::TestCase
     assert_nil UsageCredits.configuration.on_credits_added_callback
   end
 
-  test "dispatch handles all 7 callback events" do
+  test "dispatch handles all 7 supported callback events" do
     events_received = []
 
     UsageCredits.configure do |config|

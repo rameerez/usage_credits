@@ -21,14 +21,18 @@ module UsageCredits
       def display_post_upgrade_message
         say "\nUsageCredits 1.0 upgrade migration has been generated!", :green
         say "\nThis migration will:"
+        say "  - Check for duplicate owner wallets first, and abort with instructions if any exist"
         say "  - Add 'asset_code' column to wallets (default: 'credits')"
+        say "  - Enforce one wallet per owner per asset with a unique index"
         say "  - Change integer columns to bigint for larger balance support"
         say "  - Create 'usage_credits_transfers' table for wallet transfers"
         say "  - Add 'transfer_id' column to transactions"
         say "  - Upgrade pre-1.0 installs to the wallets-backed ledger core"
+        say "\nEvery step is guarded, so the migration is safe to re-run if interrupted."
         say "\nTo complete the upgrade:"
         say "  1. Review the migration file in db/migrate/"
-        say "  2. Run 'rails db:migrate'"
+        say "  2. Back up your database (this migration is not reversible)"
+        say "  3. Run 'rails db:migrate'"
         say "\n"
       end
 

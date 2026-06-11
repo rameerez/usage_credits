@@ -1,8 +1,31 @@
-## [1.0.0] - 2026-03-18
+## [1.0.0] - Unreleased
 
-- Rebuild `usage_credits` on top of the new `wallets` ledger core while preserving the existing credits-focused DX
-- Add the pre-1.0 upgrade generator for existing installs, including `asset_code`, `bigint` value columns, and transfer support in the underlying wallet layer
-- Keep `usage_credits` single-asset and backwards-compatible while allowing advanced wallet-level operations through `credit_wallet`
+`usage_credits` is now built on top of [`wallets`](https://github.com/rameerez/wallets), our append-only, multi-asset ledger core. The credits-focused DX you know is unchanged — same `has_credits`, `spend_credits_on`, `give_credits`, packs, subscriptions, and Pay integration — but the FIFO ledger, balance math, row-level locking, and transfer machinery now live in a shared, independently tested core.
+
+### Added
+
+- New runtime dependency: `wallets` (`~> 0.2`), installed automatically with the gem
+- Upgrade generator for existing installs: `rails generate usage_credits:upgrade` creates an in-place, re-runnable migration that preserves all existing ledger data. It pre-checks for duplicate owner wallets (possible under pre-1.0's lack of a uniqueness constraint) and aborts with actionable instructions *before* touching the schema if any exist
+- Wallet-to-wallet credit transfers via the underlying wallets layer (`usage_credits_transfers` table), with expiration-preserving semantics by default
+- `UsageCredits::Transfer` model, plus `transfer_in` / `transfer_out` transaction categories
+
+### Changed
+
+- **Schema** (handled by the upgrade migration for existing apps): wallets gain an `asset_code` column (default `"credits"`); one wallet per owner per asset is now enforced with a unique index; `balance` / `amount` / `credits_last_fulfillment` columns widen from `integer` to `bigint`; transactions gain a nullable `transfer_id` reference
+- `UsageCredits::Wallet`, `Transaction`, and `Allocation` now subclass the `wallets` core models via its embeddability hooks (same tables as before, prefixed `usage_credits_`)
+- Wallet creation now goes through the race-safe, idempotent `create_for_owner!` from the wallets core; an `initial_balance` is recorded as a proper ledger transaction (category `manual_adjustment`, reason `initial_balance`) instead of a bare column write, so initial balances are auditable
+
+### Unchanged (backwards compatibility)
+
+- The entire public API: `credits`, `credit_history`, `give_credits`, `spend_credits_on`, `has_enough_credits_to?`, `estimate_credits_to`, `add_credits`, `deduct_credits`, callbacks, categories, scopes, and the Pay integration all behave exactly as in 0.5.0
+- Negative balances still floor to zero in `credits` (the wallets core can represent overdrafts, but `usage_credits` keeps its historical contract)
+- `usage_credits` stays single-asset (`"credits"`) by design — multi-asset apps can use the `wallets` gem directly, side by side, including in the same app
+
+### Upgrade instructions
+
+1. Update the gem, then run `rails generate usage_credits:upgrade`
+2. Review the generated migration and **back up your database** (the migration is not reversible)
+3. Deploy the gem update and `rails db:migrate` together — the 1.0 models expect the upgraded schema
 
 ## [0.5.0] - 2026-03-15
 

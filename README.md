@@ -21,6 +21,7 @@ All with a simple DSL that reads just like English.
 
 - An ActiveJob backend (Sidekiq, `solid_queue`, etc.) for subscription credit fulfillment
 - [`pay`](https://github.com/pay-rails/pay) gem for Stripe/PayPal/Lemon Squeezy integration (sell credits, refill subscriptions)
+- [`wallets`](https://github.com/rameerez/wallets) gem (installed automatically as a dependency — it's the ledger core `usage_credits` runs on)
 
 ## 👨‍💻 Example
 
@@ -97,11 +98,22 @@ rails generate usage_credits:install
 rails db:migrate
 ```
 
-If you're upgrading an existing app from pre-1.0 `usage_credits`, run:
+### Upgrading from pre-1.0
+
+If you're upgrading an existing app from pre-1.0 `usage_credits`, run this instead of the install generator:
 ```bash
 rails generate usage_credits:upgrade
 rails db:migrate
 ```
+
+The upgrade migration moves your existing ledger onto the [`wallets`](https://github.com/rameerez/wallets) core schema **in place** — all balances, transactions, allocations, and fulfillments are preserved exactly as they are. It:
+
+- Adds an `asset_code` column to wallets (defaults to `"credits"`, so nothing changes for you)
+- Enforces one wallet per owner with a unique index (it first checks your data and aborts with step-by-step instructions if any owner somehow has duplicate wallets, before touching anything)
+- Widens integer amount columns to `bigint`
+- Creates the `usage_credits_transfers` table that powers wallet-to-wallet transfers
+
+A few production notes: back up your database first (the migration is not reversible), expect the `bigint` column changes to take a while on very large tables, and deploy the gem update and the migration together (the 1.0 models expect the upgraded schema). Every step of the migration is guarded, so it's safe to re-run if it ever gets interrupted halfway.
 
 Add `has_credits` your user model (or any model that needs to have credits):
 ```ruby
@@ -792,17 +804,21 @@ The ledger architecture gives you everything you'd want from a serious internal 
 
 ### A note on multi-currency
 
-`usage_credits` is intentionally **single-asset**. All amounts are stored as integers (for money, usually cents) to avoid floating-point issues.
+`usage_credits` is intentionally **single-asset**: every owner gets exactly one credits wallet (asset code `"credits"`). All amounts are stored as integers (for money, usually cents) to avoid floating-point issues.
 
-If you need one wallet per currency or asset per user, use [`wallets`](https://github.com/rameerez/wallets):
+If you need one wallet per currency or asset, use [`wallets`](https://github.com/rameerez/wallets) — the dedicated gem for multi-asset support, and the same ledger core `usage_credits` runs on. Both gems coexist cleanly in the same app, each with its own tables. Put `has_wallets` (from `wallets`) on the models that need multi-asset balances, and `has_credits` (from `usage_credits`) on the models that need credits:
 
 ```ruby
-user.wallet(:eur)
-user.wallet(:usd)
-user.wallet(:wood)
+class User < ApplicationRecord
+  has_credits             # user.credits, user.spend_credits_on(...)
+end
+
+class Team < ApplicationRecord
+  has_wallets             # team.wallet(:eur), team.wallet(:usd), team.wallet(:wood)
+end
 ```
 
-That is now the dedicated gem for multi-asset support.
+One caveat: avoid putting both `has_credits` and `has_wallets` on the *same* model — both define a `wallet` method (the credits wallet vs. the multi-asset lookup), so whichever you include last wins. If you ever do need both on one model, use the unambiguous `credit_wallet` for credits and `find_wallet(:asset)` for the rest.
 
 ### Naming your "credits"
 

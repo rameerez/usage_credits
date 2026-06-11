@@ -13,6 +13,12 @@ module UsageCredits
               as: :owner,
               dependent: :destroy
 
+      # NOTE on the alias dance below: `credits_wallet` and `wallet` are aliased
+      # to the raw has_one reader *before* `credit_wallet` is redefined to
+      # auto-create missing wallets (see `define_method(:credit_wallet)` further
+      # down). So `user.credit_wallet` auto-creates, while `user.wallet` /
+      # `user.credits_wallet` just read. This asymmetry is the pre-1.0 contract,
+      # kept as-is for backwards compatibility.
       alias_method :credits_wallet, :credit_wallet
       alias_method :wallet, :credit_wallet
 

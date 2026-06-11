@@ -93,8 +93,8 @@ module UsageCredits
     def has_enough_credits_to?(operation_name, **params)
       operation = find_and_validate_operation(operation_name, params)
       credits >= operation.calculate_cost(params)
-    rescue InvalidOperation => e
-      raise e
+    rescue InvalidOperation
+      raise
     rescue StandardError => e
       raise InvalidOperation, "Error checking credits: #{e.message}"
     end
@@ -103,8 +103,8 @@ module UsageCredits
     def estimate_credits_to(operation_name, **params)
       operation = find_and_validate_operation(operation_name, params)
       operation.calculate_cost(params)
-    rescue InvalidOperation => e
-      raise e
+    rescue InvalidOperation
+      raise
     rescue StandardError => e
       raise InvalidOperation, "Error estimating cost: #{e.message}"
     end
@@ -151,8 +151,6 @@ module UsageCredits
       else
         deduct_credits(cost, **deduct_params)
       end
-    rescue StandardError => e
-      raise e
     end
 
     # Give credits to the wallet with optional reason and expiration date

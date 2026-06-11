@@ -29,6 +29,7 @@ group :test do
   gem "receipts"
   gem "sqlite3"
   gem "pg"
+  gem "mysql2"
   gem "bootsnap", require: false
   gem "puma"
   gem "importmap-rails"

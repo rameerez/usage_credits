@@ -129,10 +129,12 @@ jobs:
       - name: Audit locked dependencies
         # ruby/setup-ruby may remove an untracked lock after populating its
         # cache, and bundler-audit does not infer the appraisal lock path from
-        # BUNDLE_GEMFILE. Recreate and audit the exact graph explicitly.
+        # BUNDLE_GEMFILE. Its --gemfile-lock value is relative to the scan root,
+        # so strip the absolute workspace prefix before auditing.
         run: |
           bundle lock
-          bundle exec bundle-audit check --update --gemfile-lock "$BUNDLE_GEMFILE.lock"
+          lockfile="${BUNDLE_GEMFILE#"$GITHUB_WORKSPACE/"}.lock"
+          bundle exec bundle-audit check --update --gemfile-lock "$lockfile"
 
   # PostgreSQL compatibility tests
   postgres:

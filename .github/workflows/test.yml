@@ -12,6 +12,15 @@ on:
       - "*.md"
       - "LICENSE.txt"
 
+permissions:
+  contents: read
+
+# usage_credits 1.0 depends on wallets 0.3 before that version exists on
+# RubyGems. Every CI lane resolves the exact reviewed Wallets candidate below;
+# remove this source override only after the published dependency is available.
+env:
+  WALLETS_PATH: ${{ github.workspace }}/wallets-core
+
 jobs:
   # Main test suite - tests Ruby versions and Rails/Pay compatibility with SQLite
   sqlite:
@@ -47,7 +56,17 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Checkout reviewed wallets 0.3 candidate
+        uses: actions/checkout@v7
+        with:
+          repository: rameerez/wallets
+          ref: 84b5b1f4b0ff46641d8e0e88719c3885cd980c7c
+          path: wallets-core
+          persist-credentials: false
 
       - name: Set up Ruby ${{ matrix.ruby_version }}
         uses: ruby/setup-ruby@v1
@@ -62,7 +81,7 @@ jobs:
 
       - name: Upload test results
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-results-sqlite-ruby-${{ matrix.ruby_version }}-${{ matrix.gemfile.label }}
           path: test/reports/
@@ -89,7 +108,17 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Checkout reviewed wallets 0.3 candidate
+        uses: actions/checkout@v7
+        with:
+          repository: rameerez/wallets
+          ref: 84b5b1f4b0ff46641d8e0e88719c3885cd980c7c
+          path: wallets-core
+          persist-credentials: false
 
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
@@ -98,7 +127,9 @@ jobs:
           bundler-cache: true
 
       - name: Audit locked dependencies
-        run: bundle exec bundle-audit check --update
+        # bundler-audit does not infer an appraisal lock path from
+        # BUNDLE_GEMFILE; point it at the exact lock ruby/setup-ruby created.
+        run: bundle exec bundle-audit check --update --gemfile-lock "$BUNDLE_GEMFILE.lock"
 
   # PostgreSQL compatibility tests
   postgres:
@@ -130,7 +161,17 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Checkout reviewed wallets 0.3 candidate
+        uses: actions/checkout@v7
+        with:
+          repository: rameerez/wallets
+          ref: 84b5b1f4b0ff46641d8e0e88719c3885cd980c7c
+          path: wallets-core
+          persist-credentials: false
 
       - name: Set up Ruby ${{ matrix.ruby_version }}
         uses: ruby/setup-ruby@v1
@@ -149,7 +190,7 @@ jobs:
 
       - name: Upload test results
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-results-postgres-ruby-${{ matrix.ruby_version }}
           path: test/reports/
@@ -184,7 +225,17 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Checkout reviewed wallets 0.3 candidate
+        uses: actions/checkout@v7
+        with:
+          repository: rameerez/wallets
+          ref: 84b5b1f4b0ff46641d8e0e88719c3885cd980c7c
+          path: wallets-core
+          persist-credentials: false
 
       - name: Set up Ruby ${{ matrix.ruby_version }}
         uses: ruby/setup-ruby@v1
@@ -203,7 +254,7 @@ jobs:
 
       - name: Upload test results
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-results-mysql-ruby-${{ matrix.ruby_version }}
           path: test/reports/

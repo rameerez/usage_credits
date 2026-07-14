@@ -1,5 +1,9 @@
 # frozen_string_literal: true
 
+# The generated gemfiles intentionally retain the root Gemfile's conditional
+# WALLETS_PATH hook for coordinated pre-release CI. Appraisal cannot emit that
+# runtime conditional itself, so preserve the postamble when regenerating.
+
 # Test minimum supported Rails version (with latest Pay)
 appraise "rails-7.2" do
   gem "rails", "~> 7.2.0"

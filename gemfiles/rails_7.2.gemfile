@@ -41,3 +41,10 @@ group :test do
 end
 
 gemspec path: "../"
+
+# Appraisal does not carry the root Gemfile's conditional path dependency into
+# generated gemfiles. Keep coordinated pre-release CI on the exact Wallets
+# source checkout without weakening the runtime gemspec constraint.
+if ENV["WALLETS_PATH"]
+  gem "wallets", path: File.expand_path(ENV.fetch("WALLETS_PATH"), __dir__)
+end

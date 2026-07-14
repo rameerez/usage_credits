@@ -419,7 +419,7 @@ module UsageCredits
         fulfillment_attributes = {stops_at: fulfillment_should_stop_at}
         if terms&.expire_credits_on_cancel
           expires_at = cancellation_credit_expiration_at(terms)
-          expire_fulfillment_credits!(wallet, fulfillment, expires_at)
+          wallet.expire_fulfillment_credits!(fulfillment: fulfillment, expires_at: expires_at)
           fulfillment_attributes[:metadata] = fulfillment.metadata.merge(
             "cancellation_credit_expiration_at" => expires_at,
             "cancellation_credit_expiration_applied_at" => Time.current
@@ -437,18 +437,6 @@ module UsageCredits
     def cancellation_credit_expiration_at(terms)
       effective_cancellation_at = fulfillment_should_stop_at || Time.current
       effective_cancellation_at + terms.credit_expiration_period_seconds.seconds
-    end
-
-    def expire_fulfillment_credits!(wallet, fulfillment, expires_at)
-      transactions = wallet.transactions.credits.where(fulfillment: fulfillment)
-      expiry = transactions.klass.arel_table[:expires_at]
-      transactions
-        .where(expiry.eq(nil).or(expiry.gt(expires_at)))
-        .update_all(expires_at: expires_at, updated_at: Time.current)
-
-      # Keep the persisted cache aligned for consumers that query the column
-      # directly. The public balance is still derived from ledger rows.
-      wallet.send(:refresh_cached_balance!)
     end
 
     # Wrapper to check condition and call handle_plan_change

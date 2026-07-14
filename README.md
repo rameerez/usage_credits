@@ -448,6 +448,13 @@ subscription_plan :pro do
 end
 ```
 
+Cancellation terms are snapshotted when the subscription is fulfilled, so a
+later initializer change or plan removal cannot rewrite the customer's policy.
+`expire_after` only shortens credits minted by that subscription; manual grants,
+credit packs, and other subscriptions are untouched. When cancellation makes
+those credits expire immediately, any resulting low-balance or depleted
+crossing is dispatched after the cancellation transaction commits.
+
 The first thing to understand is that **credit fulfillment** is decoupled from **billing periods**:
 
 ### Credit fulfillment cycles

@@ -30,6 +30,37 @@ class CreditCalculatorTest < ActiveSupport::TestCase
   end
 
   # ========================================
+  # CREDIT AMOUNT NORMALIZATION
+  # ========================================
+
+  test "normalize_credit_amount returns canonical non-negative integers" do
+    assert_equal 0, UsageCredits::CreditCalculator.normalize_credit_amount(0)
+    assert_equal 12, UsageCredits::CreditCalculator.normalize_credit_amount(12)
+    assert_equal 12, UsageCredits::CreditCalculator.normalize_credit_amount(12.0)
+    assert_equal 12, UsageCredits::CreditCalculator.normalize_credit_amount(BigDecimal("12.0"))
+  end
+
+  test "normalize_credit_amount rejects negative values with a stable error" do
+    [-1, -1.0, BigDecimal("-1")].each do |value|
+      error = assert_raises(ArgumentError) do
+        UsageCredits::CreditCalculator.normalize_credit_amount(value)
+      end
+
+      assert_equal "Credit amount cannot be negative (got: #{value})", error.message
+    end
+  end
+
+  test "normalize_credit_amount rejects non-whole values with a stable error" do
+    [nil, 1.5, Float::NAN, Float::INFINITY, "12", :twelve].each do |value|
+      error = assert_raises(ArgumentError) do
+        UsageCredits::CreditCalculator.normalize_credit_amount(value)
+      end
+
+      assert_equal "Credit amount must be a whole number (got: #{value})", error.message
+    end
+  end
+
+  # ========================================
   # ROUNDING STRATEGIES
   # ========================================
 

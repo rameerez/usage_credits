@@ -149,7 +149,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ruby_version: ["3.4"]
+        include:
+          - ruby_version: "3.4"
+            gemfile:
+              path: Gemfile
+              label: default
+          # Real-adapter coverage for the literal minimum supported
+          # Ruby/Rails/Pay boundary, not only the modern dependency graph.
+          - ruby_version: "3.2"
+            gemfile:
+              path: gemfiles/rails_7.2.gemfile
+              label: minimum
 
     services:
       postgres:
@@ -169,6 +179,7 @@ jobs:
     env:
       RAILS_ENV: test
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/usage_credits_test
+      BUNDLE_GEMFILE: ${{ github.workspace }}/${{ matrix.gemfile.path }}
 
     steps:
       - name: Checkout code
@@ -203,7 +214,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: test-results-postgres-ruby-${{ matrix.ruby_version }}
+          name: test-results-postgres-ruby-${{ matrix.ruby_version }}-${{ matrix.gemfile.label }}
           path: test/reports/
           retention-days: 7
 
@@ -214,7 +225,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ruby_version: ["3.4"]
+        include:
+          - ruby_version: "3.4"
+            gemfile:
+              path: Gemfile
+              label: default
+          # Real-adapter coverage for the literal minimum supported
+          # Ruby/Rails/Pay boundary, not only the modern dependency graph.
+          - ruby_version: "3.2"
+            gemfile:
+              path: gemfiles/rails_7.2.gemfile
+              label: minimum
 
     services:
       mysql:
@@ -233,6 +254,7 @@ jobs:
     env:
       RAILS_ENV: test
       DATABASE_URL: mysql2://root:root@127.0.0.1:3306/usage_credits_test
+      BUNDLE_GEMFILE: ${{ github.workspace }}/${{ matrix.gemfile.path }}
 
     steps:
       - name: Checkout code
@@ -267,6 +289,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: test-results-mysql-ruby-${{ matrix.ruby_version }}
+          name: test-results-mysql-ruby-${{ matrix.ruby_version }}-${{ matrix.gemfile.label }}
           path: test/reports/
           retention-days: 7

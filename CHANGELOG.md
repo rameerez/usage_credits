@@ -18,8 +18,8 @@
 - Credit-pack fulfillment/refunds and subscription fulfillment are serialized with row locks and database uniqueness constraints; successful callbacks are deferred until the outermost transaction commits.
 - Pay fulfillment hooks run only after create/update commits, never after destroy commits; deleting an eligible but unfulfilled processor record cannot mint credits against a dangling source.
 - Credit-pack refunds are cumulative, proportional, and idempotent under concurrent webhook delivery. If purchased credits were already spent, the refund records explicit credit debt instead of silently under-refunding; a never-fulfilled purchase cannot create debt.
-- Operations evaluate dynamic costs exactly once under the wallet lock, and free operations remain ledger-free while preserving the established callback contract.
-- `expire_after` now applies the snapshotted cancellation policy to credits created by that subscription, including after the configured plan is removed; unrelated credits are never shortened.
+- Operations evaluate dynamic costs exactly once under the wallet lock, round once at the final operation boundary, and normalize fixed/dynamic credit amounts through one strict validation path. Free operations remain ledger-free while preserving the established callback contract.
+- `expire_after` now applies the snapshotted cancellation policy to credits created by that subscription, including after the configured plan is removed; unrelated credits are never shortened. The wallet owns this mutation and emits low-balance/depleted crossings when cancellation makes the expiration effective immediately.
 - Persisted fulfillment cadence is parsed through the same strict duration parser as configuration and is never permitted below one second, preventing malformed metadata or a zero-period retry loop.
 - Recurring Pay-backed fulfillment locks and re-checks the subscription before minting, fails closed for dangling Pay sources (including processor-specific STI type names) and unresolved plan transitions, and never awards while the processor subscription is trialing, paused, incomplete, or canceled.
 - The locked subscription freshness check canonicalizes processor timestamps to the database column precision. Sub-microsecond values from processor SDKs can no longer make a just-committed callback look stale and silently suppress the initial credit award.
@@ -40,8 +40,8 @@
 
 ### Tests
 
-- The suite now contains 813 runs / 2,234 assertions, including adversarial coverage for concurrent fulfillment/refund delivery, stale processor records, processor timestamp precision, processor pauses/resumes, transfer API/error compatibility, cross-gem isolation, destroy callbacks, immutable commercial terms, cancellation expiration, malformed persisted cadence, interrupted upgrades, and database constraints.
-- Compatibility coverage includes Ruby 3.2 across both the Rails 7.2 and Rails 8.1 boundaries, Ruby 3.3/3.4/4.0 across Rails 7.2/8.1 and both the Pay 11.6.2 security floor and latest compatible Pay release, plus clean migrations and the full suite on SQLite, PostgreSQL, and MySQL.
+- The suite now contains 835 runs / 2,400 assertions, including adversarial coverage for concurrent fulfillment/refund delivery, stale processor records, processor timestamp precision, processor pauses/resumes, transfer API/error compatibility, cross-gem isolation, destroy callbacks, immutable commercial terms, cancellation expiration and threshold callbacks, malformed persisted cadence, centralized cost normalization, one-time compound rounding, interrupted upgrades, and database constraints.
+- Compatibility coverage includes Ruby 3.2 across both the Rails 7.2 and Rails 8.1 boundaries, Ruby 3.3/3.4/4.0 across Rails 7.2/8.1 and both the Pay 11.6.2 security floor and latest compatible Pay release, plus clean migrations and the full suite on SQLite, PostgreSQL, and MySQL. PostgreSQL and MySQL each run both the default dependency graph and the literal Ruby 3.2 / Rails 7.2 / Pay 11.6.2 minimum boundary.
 - CI audits every supported dependency bundle against the latest `ruby-advisory-db` before release.
 
 ### Upgrade instructions

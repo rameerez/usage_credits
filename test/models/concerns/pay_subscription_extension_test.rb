@@ -796,6 +796,9 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
   end
 
   test "cancellation can expire subscription credits immediately without touching unrelated credits" do
+    low_balance_events = []
+    depleted_events = []
+
     UsageCredits.configure do |config|
       config.subscription_plan :cancel_immediately do
         processor_plan(:fake_processor, "cancel_immediately_plan")
@@ -803,6 +806,10 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
         unused_credits :rollover
         expire_after nil
       end
+
+      config.low_balance_threshold = 50
+      config.on_low_balance_reached { |context| low_balance_events << context }
+      config.on_balance_depleted { |context| depleted_events << context }
     end
 
     user = User.create!(email: "cancel-now-#{SecureRandom.hex(4)}@example.com", name: "Cancel Now")
@@ -831,6 +838,53 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     assert subscription_credit.reload.expires_at <= Time.current
     assert_nil manual_credit.reload.expires_at
     assert_equal 25, wallet.reload.credits
+    assert_equal 1, low_balance_events.size
+    assert_equal 125, low_balance_events.sole.previous_balance
+    assert_equal 25, low_balance_events.sole.new_balance
+    assert_empty depleted_events
+  end
+
+  test "immediate cancellation expiration dispatches low balance and depleted callbacks" do
+    low_balance_events = []
+    depleted_events = []
+
+    UsageCredits.configure do |config|
+      config.subscription_plan :cancel_to_zero do
+        processor_plan(:fake_processor, "cancel_to_zero_plan")
+        gives 100.credits.every(:month)
+        unused_credits :rollover
+        expire_after nil
+      end
+
+      config.low_balance_threshold = 50
+      config.on_low_balance_reached { |context| low_balance_events << context }
+      config.on_balance_depleted { |context| depleted_events << context }
+    end
+
+    user = User.create!(email: "cancel-zero-#{SecureRandom.hex(4)}@example.com", name: "Cancel Zero")
+    wallet = user.credit_wallet
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_cancel_zero_#{SecureRandom.hex(4)}"
+    )
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_cancel_zero_#{SecureRandom.hex(4)}",
+      processor_plan: "cancel_to_zero_plan",
+      status: "active",
+      quantity: 1
+    )
+    assert_equal 100, wallet.reload.credits
+
+    subscription.update!(status: "canceled", ends_at: Time.current)
+
+    assert_equal 0, wallet.reload.credits
+    assert_equal 1, low_balance_events.size
+    assert_equal 1, depleted_events.size
+    assert_equal [100, 0], [low_balance_events.sole.previous_balance, low_balance_events.sole.new_balance]
+    assert_equal [100, 0], [depleted_events.sole.previous_balance, depleted_events.sole.new_balance]
   end
 
   # ========================================

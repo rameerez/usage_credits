@@ -179,6 +179,47 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
     assert transactions.exists?(id: usage_credits_transactions(:expiry_expires_later).id)
   end
 
+  test "expire_fulfillment_credits shortens only matching later expirations and is idempotent" do
+    wallet = usage_credits_wallets(:subscribed_wallet)
+    fulfillment = usage_credits_fulfillments(:active_subscription_fulfillment)
+    subscription_credit = usage_credits_transactions(:subscribed_month1_credit)
+    unrelated_credit = usage_credits_transactions(:subscribed_signup_bonus)
+    shortened_expiration = 10.days.from_now
+
+    assert_equal 1, wallet.expire_fulfillment_credits!(
+      fulfillment: fulfillment,
+      expires_at: shortened_expiration
+    )
+    assert_in_delta shortened_expiration.to_i, subscription_credit.reload.expires_at.to_i, 1
+    assert_nil unrelated_credit.reload.expires_at
+
+    assert_equal 0, wallet.expire_fulfillment_credits!(
+      fulfillment: fulfillment,
+      expires_at: 20.days.from_now
+    )
+    assert_in_delta shortened_expiration.to_i, subscription_credit.reload.expires_at.to_i, 1
+  end
+
+  test "expire_fulfillment_credits rejects an invalid expiration" do
+    wallet = usage_credits_wallets(:subscribed_wallet)
+    fulfillment = usage_credits_fulfillments(:active_subscription_fulfillment)
+
+    error = assert_raises(ArgumentError) do
+      wallet.expire_fulfillment_credits!(fulfillment: fulfillment, expires_at: Object.new)
+    end
+    assert_equal "Expiration date must respond to to_datetime", error.message
+
+    invalid_date = Object.new
+    def invalid_date.to_datetime
+      raise ArgumentError, "not a date"
+    end
+
+    error = assert_raises(ArgumentError) do
+      wallet.expire_fulfillment_credits!(fulfillment: fulfillment, expires_at: invalid_date)
+    end
+    assert_equal "Expiration date must be a valid date or time", error.message
+  end
+
   test "includes never-expiring credits" do
     wallet = usage_credits_wallets(:expiry_wallet)
 

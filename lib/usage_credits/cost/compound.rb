@@ -12,6 +12,8 @@ module UsageCredits
       end
 
       def calculate(params = {})
+        # Components stay unrounded until Operation#calculate_cost applies the
+        # configured strategy once to the final sum.
         costs.sum { |cost| cost.calculate(params) }
       end
 

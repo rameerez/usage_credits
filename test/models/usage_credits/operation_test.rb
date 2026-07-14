@@ -378,6 +378,25 @@ class UsageCredits::OperationTest < ActiveSupport::TestCase
     assert_equal 1, operation.calculate_cost(mb: 0.2, units: 0.2)
   end
 
+  test "cost calculators preserve raw fractions until the operation rounding boundary" do
+    per_megabyte = 1.credit_per(:mb)
+    compound = per_megabyte + 1.credit_per(:units)
+
+    assert_in_delta 0.2, per_megabyte.calculate(mb: 0.2)
+    assert_in_delta 0.4, compound.calculate(mb: 0.2, units: 0.2)
+  end
+
+  test "fixed and dynamic costs share canonical amount validation errors" do
+    fixed_error = assert_raises(ArgumentError) { UsageCredits::Cost::Fixed.new(-1) }
+    dynamic_operation = UsageCredits::Operation.new(:invalid_dynamic_cost) do
+      costs ->(_params) { -1 }
+    end
+    dynamic_error = assert_raises(ArgumentError) { dynamic_operation.calculate_cost }
+
+    assert_equal "Credit amount cannot be negative (got: -1)", fixed_error.message
+    assert_equal fixed_error.message, dynamic_error.message
+  end
+
   test "round rounding strategy uses standard rounding" do
     UsageCredits.configure do |config|
       config.rounding_strategy = :round

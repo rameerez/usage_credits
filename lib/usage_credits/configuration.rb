@@ -189,6 +189,9 @@ module UsageCredits
     end
 
     def fulfillment_grace_period=(value)
+      # Only actual nil/numeric zero select the safe one-second fallback.
+      # String coercion previously made arbitrary garbage ("nope".to_i == 0)
+      # silently valid configuration; non-Duration strings now fail closed.
       if value.nil? || value == 0
         @fulfillment_grace_period = 1.second
         return

@@ -18,7 +18,6 @@ module UsageCredits
           value.calculate(params)
         else
           validate_amount!(value)
-          value.to_i
         end
       end
 

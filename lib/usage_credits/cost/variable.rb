@@ -15,6 +15,9 @@ module UsageCredits
       end
 
       def calculate(params = {})
+        # Return the raw composable cost. Operation#calculate_cost is the one
+        # rounding boundary, preventing nested Variable/Compound calculators
+        # from rounding the same business cost more than once.
         size = extract_size(params)
         amount * size
       end

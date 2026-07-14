@@ -197,6 +197,14 @@ class UsageCredits::ConfigurationTest < ActiveSupport::TestCase
     assert_equal 1.second, @config.fulfillment_grace_period
   end
 
+  test "fulfillment_grace_period rejects string zero instead of coercing arbitrary strings" do
+    error = assert_raises(ArgumentError) do
+      @config.fulfillment_grace_period = "0"
+    end
+
+    assert_includes error.message, "must be an ActiveSupport::Duration"
+  end
+
   # ========================================
   # CURRENCY CONFIGURATION
   # ========================================

@@ -81,6 +81,10 @@ module UsageCredits
     end
 
     def current_balance
+      # Wallets::Wallet#balance delegates dynamically to current_balance, so
+      # this override is the active public balance implementation (not a dead
+      # helper). Refund debits remain explicit ledger debt while the Usage
+      # Credits compatibility view stays floored at zero.
       refund_debits = transactions.debits.where(category: "credit_pack_refund")
       [positive_remaining_balance - unbacked_negative_balance(refund_debits), 0].max
     end
@@ -199,6 +203,39 @@ module UsageCredits
       debit(amount, metadata: metadata, category: category, fulfillment: fulfillment)
     rescue Wallets::InsufficientBalance => e
       raise InsufficientCredits, e.message
+    end
+
+    # Shorten the lifetime of credits minted by one fulfillment and reconcile
+    # the wallet through the same balance/callback internals as core mutations.
+    # This keeps Pay lifecycle code out of Wallets' private implementation and
+    # makes immediate cancellation expiry observable through low/depleted
+    # callbacks after the surrounding transaction commits.
+    def expire_fulfillment_credits!(fulfillment:, expires_at:)
+      unless expires_at.respond_to?(:to_datetime)
+        raise ArgumentError, "Expiration date must respond to to_datetime"
+      end
+
+      expiration = begin
+        expires_at.to_datetime
+      rescue
+        raise ArgumentError, "Expiration date must be a valid date or time"
+      end
+
+      with_lock do
+        previous_balance = balance
+        transactions_to_expire = transactions.credits.where(fulfillment: fulfillment)
+        expiry = transactions_to_expire.klass.arel_table[:expires_at]
+        updated_count = transactions_to_expire
+          .where(expiry.eq(nil).or(expiry.gt(expiration)))
+          .update_all(expires_at: expiration, updated_at: Time.current)
+
+        if updated_count.positive?
+          refresh_cached_balance!
+          dispatch_balance_threshold_callbacks!(previous_balance)
+        end
+
+        updated_count
+      end
     end
 
     # Keep the inherited wallet primitive inside usage_credits' public error

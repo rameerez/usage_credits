@@ -60,13 +60,9 @@ module UsageCredits
       normalized_params = normalize_params(params)
       validate!(normalized_params)  # Ensure params are valid before calculating
 
-      # Calculate raw cost
-      total = case cost_calculator
-      when Proc
-        normalize_calculated_cost(cost_calculator.call(normalized_params))
-      else
-        cost_calculator.calculate(normalized_params)
-      end
+      # `costs` wraps every configured value (including a Proc) in a Cost
+      # object, so there is one calculation/validation path here.
+      total = cost_calculator.calculate(normalized_params)
 
       # Apply configured rounding strategy
       CreditCalculator.apply_rounding(total)
@@ -160,17 +156,6 @@ module UsageCredits
       number
     rescue ArgumentError, TypeError
       raise ArgumentError, "#{name} must be a finite, non-negative number"
-    end
-
-    def normalize_calculated_cost(result)
-      number = Wallets::WholeNumber.parse(result, name: "Credit amount")
-      raise ArgumentError, "Credit amount cannot be negative (got: #{result})" if number.negative?
-
-      number
-    rescue ArgumentError => error
-      raise unless error.message == "Credit amount must be a whole number"
-
-      raise ArgumentError, "Credit amount must be a whole number (got: #{result})"
     end
   end
 end

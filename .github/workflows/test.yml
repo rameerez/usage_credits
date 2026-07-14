@@ -127,9 +127,12 @@ jobs:
           bundler-cache: true
 
       - name: Audit locked dependencies
-        # bundler-audit does not infer an appraisal lock path from
-        # BUNDLE_GEMFILE; point it at the exact lock ruby/setup-ruby created.
-        run: bundle exec bundle-audit check --update --gemfile-lock "$BUNDLE_GEMFILE.lock"
+        # ruby/setup-ruby may remove an untracked lock after populating its
+        # cache, and bundler-audit does not infer the appraisal lock path from
+        # BUNDLE_GEMFILE. Recreate and audit the exact graph explicitly.
+        run: |
+          bundle lock
+          bundle exec bundle-audit check --update --gemfile-lock "$BUNDLE_GEMFILE.lock"
 
   # PostgreSQL compatibility tests
   postgres:

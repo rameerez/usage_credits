@@ -49,6 +49,12 @@ jobs:
             gemfile:
               path: gemfiles/rails_8.1.gemfile
               label: rails-8.1
+          # Also exercise the literal minimum runtime/dependency pair, not just
+          # each minimum independently in newer combinations.
+          - ruby_version: "3.2"
+            gemfile:
+              path: gemfiles/pay_minimum.gemfile
+              label: pay-minimum
 
     env:
       RAILS_ENV: test
@@ -64,7 +70,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: rameerez/wallets
-          ref: 84b5b1f4b0ff46641d8e0e88719c3885cd980c7c
+          ref: 743f57e96a7b48e3bb790e63d5cba2e83f4f057b
           path: wallets-core
           persist-credentials: false
 
@@ -116,7 +122,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: rameerez/wallets
-          ref: 84b5b1f4b0ff46641d8e0e88719c3885cd980c7c
+          ref: 743f57e96a7b48e3bb790e63d5cba2e83f4f057b
           path: wallets-core
           persist-credentials: false
 
@@ -174,7 +180,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: rameerez/wallets
-          ref: 84b5b1f4b0ff46641d8e0e88719c3885cd980c7c
+          ref: 743f57e96a7b48e3bb790e63d5cba2e83f4f057b
           path: wallets-core
           persist-credentials: false
 
@@ -238,7 +244,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: rameerez/wallets
-          ref: 84b5b1f4b0ff46641d8e0e88719c3885cd980c7c
+          ref: 743f57e96a7b48e3bb790e63d5cba2e83f4f057b
           path: wallets-core
           persist-credentials: false
 

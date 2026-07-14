@@ -40,6 +40,10 @@ class HasWalletTest < ActiveSupport::TestCase
   # AUTOMATIC WALLET CREATION
   # ========================================
 
+  test "default asset code is the single credits asset" do
+    assert_equal "credits", UsageCredits::DEFAULT_ASSET_CODE
+  end
+
   test "wallet is automatically created on user creation" do
     user = User.create!(email: "autowallet@example.com", name: "Auto Wallet User")
 
@@ -60,6 +64,23 @@ class HasWalletTest < ActiveSupport::TestCase
 
     # For this test, we'll just verify the option is set correctly
     assert_equal false, test_class.credit_options[:auto_create]
+  end
+
+  test "auto-create disabled reads an existing wallet after a cached miss" do
+    test_class = Class.new(User) do
+      def self.name
+        "TestUserNoAutoWalletWithExistingRow"
+      end
+
+      has_credits auto_create: false
+    end
+
+    user = test_class.create!(email: "no-auto-#{SecureRandom.hex(4)}@example.com", name: "No Auto")
+    assert_nil user.credit_wallet
+
+    wallet = UsageCredits::Wallet.create_for_owner!(owner: user, asset_code: "credits")
+
+    assert_equal wallet, user.credit_wallet
   end
 
   test "wallet is created with default balance of zero" do
@@ -238,7 +259,7 @@ class HasWalletTest < ActiveSupport::TestCase
     assert_nil user.original_credit_wallet
   end
 
-  test "ensure_credit_wallet reuses an existing wallet when the association reader returns nil" do
+  test "ensure_credit_wallet reuses an existing wallet through the core lookup without querying the association first" do
     test_class = Class.new(User) do
       def self.name
         "TestUserWithExistingWalletLookup"
@@ -250,7 +271,8 @@ class HasWalletTest < ActiveSupport::TestCase
     user = test_class.create!(email: "lookup-#{SecureRandom.hex(4)}@example.com", name: "Lookup User")
     existing_wallet = user.credit_wallet
 
-    user.define_singleton_method(:original_credit_wallet) { nil }
+    user.association(:credit_wallet).reset
+    user.expects(:original_credit_wallet).never
 
     assert_no_difference -> { UsageCredits::Wallet.where(owner: user, asset_code: "credits").count } do
       wallet = user.send(:ensure_credit_wallet)

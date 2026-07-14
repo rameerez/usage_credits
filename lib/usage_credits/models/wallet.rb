@@ -201,15 +201,20 @@ module UsageCredits
       raise InsufficientCredits, e.message
     end
 
-    # Transfer credits to another wallet
-    # Converts Wallets errors to usage_credits errors for backwards compatibility
-    def transfer_credits_to(other_wallet, amount, category: :transfer, metadata: {})
-      transfer_to(other_wallet, amount, category: category, metadata: metadata)
+    # Keep the inherited wallet primitive inside usage_credits' public error
+    # hierarchy. Both transfer entry points share this implementation and the
+    # complete wallets transfer surface, including expiration overrides.
+    def transfer_to(other_wallet, amount, category: :transfer, metadata: {}, expiration_policy: nil, expires_at: nil)
+      super
     rescue Wallets::InvalidTransfer => e
       raise InvalidTransfer, e.message
     rescue Wallets::InsufficientBalance => e
       raise InsufficientCredits, e.message
+    rescue Wallets::Error => e
+      raise UsageCredits::Error, e.message
     end
+
+    alias_method :transfer_credits_to, :transfer_to
 
     private
 

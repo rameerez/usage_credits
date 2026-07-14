@@ -299,6 +299,14 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     assert_nil fulfillment.metadata["stopped_plan"]
   end
 
+  test "unrelated subscription updates skip deferred resume reconciliation" do
+    _wallet, customer = stripe_subscription_context("unrelated-update")
+    subscription = create_stripe_subscription(customer, processor_plan: "stripe_pause_pro")
+
+    subscription.expects(:apply_deferred_plan_change_after_resume).never
+    subscription.update!(quantity: 2)
+  end
+
   test "destroying a subscription does not run credit lifecycle callbacks" do
     user = User.create!(email: "destroy-subscription-#{SecureRandom.hex(4)}@example.com", name: "Destroy Subscription")
     wallet = user.credit_wallet

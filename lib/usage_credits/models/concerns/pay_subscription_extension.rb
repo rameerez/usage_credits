@@ -36,7 +36,9 @@ module UsageCredits
       after_commit :update_fulfillment_on_renewal, on: :update, if: :subscription_renewed?
       after_commit :update_fulfillment_on_cancellation, on: :update, if: :subscription_canceled?
       after_commit :handle_plan_change_wrapper, on: :update
-      after_commit :apply_deferred_plan_change_after_resume, on: :update
+      after_commit :apply_deferred_plan_change_after_resume,
+        on: :update,
+        if: :usage_credit_resume_state_changed?
     end
 
     # Identify the usage_credits plan object
@@ -217,12 +219,12 @@ module UsageCredits
         # Lock order for every subscription mutation is subscription →
         # fulfillment → wallet. Serializing on the Pay row closes duplicate
         # webhook races and prevents lock-order deadlocks with recurring jobs.
-        return unless lock_current_subscription_version
-        return unless eligible_for_usage_credit_fulfillment?(include_trial: true)
+        next unless lock_current_subscription_version
+        next unless eligible_for_usage_credit_fulfillment?(include_trial: true)
         existing_fulfillment = UsageCredits::Fulfillment.lock.find_by(source: self)
         wallet.lock!
-        return if existing_fulfillment&.metadata&.key?("deferred_plan_change")
-        return if existing_fulfillment && initial_award_completed?(existing_fulfillment) && !reactivatable_record?(existing_fulfillment)
+        next if existing_fulfillment&.metadata&.key?("deferred_plan_change")
+        next if existing_fulfillment && initial_award_completed?(existing_fulfillment) && !reactivatable_record?(existing_fulfillment)
 
         is_reactivation = existing_fulfillment.present? && reactivatable_record?(existing_fulfillment)
         is_trial_activation = existing_fulfillment.present? && status == "active" && !trialing_for_credits? && !is_reactivation
@@ -376,7 +378,7 @@ module UsageCredits
       return unless fulfillment
 
       self.class.transaction do
-        return unless lock_current_subscription_version
+        next unless lock_current_subscription_version
         fulfillment.lock!
         # Check if there's a pending plan change to apply
         if fulfillment.metadata["pending_plan_change"].present?
@@ -400,7 +402,7 @@ module UsageCredits
       return unless fulfillment
 
       self.class.transaction do
-        return unless lock_current_subscription_version
+        next unless lock_current_subscription_version
         fulfillment.lock!
         wallet = fulfillment.wallet
         wallet.lock!
@@ -511,8 +513,8 @@ module UsageCredits
       return unless new_plan  # Neither current nor new plan provides credits - nothing to do
 
       self.class.transaction do
-        return unless lock_current_subscription_version
-        return unless eligible_for_usage_credit_fulfillment?
+        next unless lock_current_subscription_version
+        next unless eligible_for_usage_credit_fulfillment?
         fulfillment.lock!
         # FIRST: Check if returning to current plan (canceling a pending change)
         # This must come first! Returning to current plan = no credits, just clear pending
@@ -520,7 +522,7 @@ module UsageCredits
         if current_plan_id == new_plan_id
           Rails.logger.info "  Action: Returning to current plan (clearing pending change)"
           clear_pending_plan_change(fulfillment)
-          return
+          next
         end
 
         # Now compare credits to determine upgrade vs downgrade
@@ -659,7 +661,7 @@ module UsageCredits
       schedule_time = [current_period_end || Time.current, Time.current].max
 
       self.class.transaction do
-        return unless lock_current_subscription_version
+        next unless lock_current_subscription_version
         fulfillment.lock!
         # Use string keys consistently to avoid duplicates after JSON serialization
         fulfillment.update!(
@@ -706,8 +708,8 @@ module UsageCredits
 
     def defer_plan_change_until_resume(fulfillment, new_plan)
       self.class.transaction do
-        return unless lock_current_subscription_version
-        return unless paused_for_usage_credits?
+        next unless lock_current_subscription_version
+        next unless paused_for_usage_credits?
         fulfillment.lock!
 
         if new_plan.nil?
@@ -743,8 +745,8 @@ module UsageCredits
       return unless fulfillment&.metadata&.key?("deferred_plan_change")
 
       self.class.transaction do
-        return unless lock_current_subscription_version
-        return unless eligible_for_usage_credit_fulfillment?
+        next unless lock_current_subscription_version
+        next unless eligible_for_usage_credit_fulfillment?
         fulfillment.lock!
 
         plan_id = fulfillment.metadata["deferred_plan_change"]
@@ -865,6 +867,16 @@ module UsageCredits
       scale = 10**precision
 
       (persisted_value.to_r * scale).floor == (callback_value.to_r * scale).floor
+    end
+
+    # Deferred terms only need callback-time reconciliation when a processor
+    # lifecycle field may have moved a subscription out of a pause. The
+    # recurring service still calls the reconciliation method directly as a
+    # recovery path, so unrelated subscription updates can skip its lookup.
+    def usage_credit_resume_state_changed?
+      %w[status pause_behavior pause_starts_at pause_resumes_at].any? do |attribute|
+        has_attribute?(attribute) && saved_change_to_attribute?(attribute)
+      end
     end
 
     def paused_for_usage_credits?

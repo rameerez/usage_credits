@@ -33,8 +33,8 @@ module UsageCredits
         @fulfillment.lock! # row lock to avoid double awarding
 
         # re-check if it's still due, in case time changed or another process already updated it
-        return unless @fulfillment.due_for_fulfillment?
-        return unless subscription_source_eligible?
+        next unless @fulfillment.due_for_fulfillment?
+        next unless subscription_source_eligible?
 
         credits = calculate_credits
         unless credits.is_a?(Integer) && credits.positive?

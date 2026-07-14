@@ -10,6 +10,13 @@ require "pay"
 require "wallets"
 require "active_support/all"
 
+module UsageCredits
+  # usage_credits deliberately exposes one asset. Keep its persisted value in
+  # one runtime constant so association lookup and race-safe creation cannot
+  # drift apart.
+  DEFAULT_ASSET_CODE = "credits"
+end
+
 # Load order matters! Dependencies are loaded in this specific order:
 #
 # 1. Core helpers

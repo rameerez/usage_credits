@@ -6,6 +6,14 @@
 # an interrupted MySQL deployment. Data-integrity preflights run before the
 # first schema mutation. The migration is intentionally irreversible: restore
 # the required pre-deploy backup to roll back this release.
+#
+# PostgreSQL runs this migration inside one DDL transaction. Locks acquired by
+# the index build, bigint conversions, constraints, foreign keys, and transfer
+# schema are held until the entire migration commits. Rehearse on a production
+# snapshot and schedule a maintenance window for a large/write-heavy ledger.
+# Do not casually add disable_ddl_transaction!: a lower-lock rollout needs an
+# application-specific staged plan for concurrent indexes and later constraint
+# validation, and necessarily exposes a partially upgraded schema between steps.
 class UpgradeUsageCreditsToWalletsCore < ActiveRecord::Migration<%= migration_version %>
   REQUIRED_TABLES = %i[
     usage_credits_wallets

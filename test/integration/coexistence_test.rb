@@ -77,16 +77,21 @@ class CoexistenceTest < ActiveSupport::TestCase
     team1.wallet(:points).credit(100, category: :reward)
     team2.wallet(:points)  # Ensure wallet exists
 
-    transfer = team1.wallet(:points).transfer_to(team2.wallet(:points), 30, category: :gift)
+    transfer = nil
+
+    assert_no_difference -> { UsageCredits::Transfer.count } do
+      assert_no_difference -> { UsageCredits::Transaction.count } do
+        assert_no_difference -> { UsageCredits::Allocation.count } do
+          transfer = team1.wallet(:points).transfer_to(team2.wallet(:points), 30, category: :gift)
+        end
+      end
+    end
 
     # Verify transfer is in wallets_transfers table
     assert_instance_of Wallets::Transfer, transfer
     assert_equal 30, transfer.amount
     assert_equal 70, team1.wallet(:points).reload.balance
     assert_equal 30, team2.wallet(:points).reload.balance
-
-    # Verify no records in usage_credits_transfers
-    assert_equal 0, UsageCredits::Transfer.where(from_wallet_id: team1.wallet(:points).id).count
   end
 
   test "usage_credits gem transfers stay within usage_credits_* tables" do
@@ -101,7 +106,9 @@ class CoexistenceTest < ActiveSupport::TestCase
       assert_difference -> { UsageCredits::Transaction.count }, 2 do
         assert_no_difference -> { Wallets::Transfer.count } do
           assert_no_difference -> { Wallets::Transaction.count } do
-            transfer = user1.credit_wallet.transfer_to(user2.credit_wallet, 30, category: :gift)
+            assert_no_difference -> { Wallets::Allocation.count } do
+              transfer = user1.credit_wallet.transfer_to(user2.credit_wallet, 30, category: :gift)
+            end
           end
         end
       end
@@ -124,12 +131,34 @@ class CoexistenceTest < ActiveSupport::TestCase
     sender.give_credits(100, reason: "test")
     transfer = sender.credit_wallet.transfer_to(recipient.credit_wallet, 30, category: :gift)
     recipient_transaction = transfer.inbound_transaction
+    transfer_id = transfer.id
+    sender_wallet_id = sender.credit_wallet.id
+    sender_id = sender.id
 
     sender.destroy!
 
-    assert_nil UsageCredits::Transfer.find_by(id: transfer.id)
+    assert_nil UsageCredits::Transfer.find_by(id: transfer_id)
     assert_equal 30, recipient.credit_wallet.reload.credits
     assert_nil recipient_transaction.reload.transfer_id
+    assert_equal transfer_id, recipient_transaction.metadata["transfer_id"]
+    assert_equal sender_wallet_id, recipient_transaction.metadata["counterparty_wallet_id"]
+    assert_equal sender_id, recipient_transaction.metadata["counterparty_owner_id"]
+    assert_equal "User", recipient_transaction.metadata["counterparty_owner_type"]
+  end
+
+  test "destroying a receiving usage credits wallet preserves the sender ledger" do
+    sender = User.create!(email: "sender-receiver-destroy-#{SecureRandom.hex(4)}@example.com", name: "Sender")
+    recipient = User.create!(email: "recipient-receiver-destroy-#{SecureRandom.hex(4)}@example.com", name: "Recipient")
+    sender.give_credits(100, reason: "test")
+    transfer = sender.credit_wallet.transfer_to(recipient.credit_wallet, 30, category: :gift)
+    sender_transaction = transfer.outbound_transaction
+
+    recipient.destroy!
+
+    assert_nil UsageCredits::Transfer.find_by(id: transfer.id)
+    assert_equal 70, sender.credit_wallet.reload.credits
+    assert_nil sender_transaction.reload.transfer_id
+    assert_equal transfer.id, sender_transaction.metadata["transfer_id"]
   end
 
   test "cross-gem transfers are rejected" do
@@ -149,7 +178,7 @@ class CoexistenceTest < ActiveSupport::TestCase
     assert_equal "Wallet classes must match", error.message
 
     # Reverse direction should also fail
-    error = assert_raises(Wallets::InvalidTransfer) do
+    error = assert_raises(UsageCredits::InvalidTransfer) do
       user.credit_wallet.transfer_to(team.wallet(:credits), 30, category: :gift)
     end
     assert_equal "Wallet classes must match", error.message
@@ -175,38 +204,40 @@ class CoexistenceTest < ActiveSupport::TestCase
     wallets_callback_fired = false
     usage_credits_callback_fired = false
 
-    # Set up wallets gem callback
     original_wallets_callback = Wallets.configuration.instance_variable_get(:@on_balance_credited_callback)
-    Wallets.configure do |config|
-      config.on_balance_credited { |_ctx| wallets_callback_fired = true }
-    end
-
-    # Set up usage_credits gem callback
     original_uc_callback = UsageCredits.configuration.instance_variable_get(:@on_credits_added_callback)
-    UsageCredits.configure do |config|
-      config.on_credits_added { |_ctx| usage_credits_callback_fired = true }
+
+    begin
+      Wallets.configure do |config|
+        config.on_balance_credited { |_ctx| wallets_callback_fired = true }
+      end
+
+      UsageCredits.configure do |config|
+        config.on_credits_added { |_ctx| usage_credits_callback_fired = true }
+      end
+
+      # Credit via wallets gem
+      team = teams(:alpha_team)
+      team.wallet(:points).credit(50, category: :reward)
+
+      assert wallets_callback_fired, "Wallets gem callback should have fired"
+      assert_not usage_credits_callback_fired, "Usage credits callback should NOT have fired for wallets gem operation"
+
+      # Reset flags
+      wallets_callback_fired = false
+      usage_credits_callback_fired = false
+
+      # Credit via usage_credits gem
+      user = User.create!(email: "callback-#{SecureRandom.hex(4)}@example.com", name: "Callback User")
+      user.give_credits(50, reason: "test")
+
+      assert usage_credits_callback_fired, "Usage credits callback should have fired"
+      assert_not wallets_callback_fired, "Wallets gem callback should NOT have fired for usage_credits operation"
+    ensure
+      # Configuration is global process state. Always restore it, even when an
+      # assertion or ledger operation fails, so later tests cannot be polluted.
+      Wallets.configuration.instance_variable_set(:@on_balance_credited_callback, original_wallets_callback)
+      UsageCredits.configuration.instance_variable_set(:@on_credits_added_callback, original_uc_callback)
     end
-
-    # Credit via wallets gem
-    team = teams(:alpha_team)
-    team.wallet(:points).credit(50, category: :reward)
-
-    assert wallets_callback_fired, "Wallets gem callback should have fired"
-    assert_not usage_credits_callback_fired, "Usage credits callback should NOT have fired for wallets gem operation"
-
-    # Reset flags
-    wallets_callback_fired = false
-    usage_credits_callback_fired = false
-
-    # Credit via usage_credits gem
-    user = User.create!(email: "callback-#{SecureRandom.hex(4)}@example.com", name: "Callback User")
-    user.give_credits(50, reason: "test")
-
-    assert usage_credits_callback_fired, "Usage credits callback should have fired"
-    assert_not wallets_callback_fired, "Wallets gem callback should NOT have fired for usage_credits operation"
-
-    # Restore original callbacks
-    Wallets.configuration.instance_variable_set(:@on_balance_credited_callback, original_wallets_callback)
-    UsageCredits.configuration.instance_variable_set(:@on_credits_added_callback, original_uc_callback)
   end
 end

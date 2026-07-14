@@ -309,6 +309,75 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
     assert_equal 30, recipient.credit_wallet.reload.credits
   end
 
+  test "transfer_credits_to is a full backwards-compatible alias for transfer_to" do
+    sender = User.create!(email: "sender-alias-#{SecureRandom.hex(4)}@example.com", name: "Sender Alias")
+    recipient = User.create!(email: "recipient-alias-#{SecureRandom.hex(4)}@example.com", name: "Recipient Alias")
+    sender.credit_wallet.give_credits(100, reason: "promo", expires_at: 10.days.from_now)
+
+    transfer = sender.credit_wallet.transfer_credits_to(
+      recipient.credit_wallet,
+      30,
+      category: :gift,
+      metadata: {source: "alias-test"},
+      expiration_policy: :none
+    )
+
+    assert_instance_of UsageCredits::Transfer, transfer
+    assert_equal "gift", transfer.category
+    assert_equal "alias-test", transfer.metadata["source"]
+    assert_equal "none", transfer.expiration_policy
+    assert_nil transfer.inbound_transactions.sole.expires_at
+    assert_equal 70, sender.credit_wallet.reload.credits
+    assert_equal 30, recipient.credit_wallet.reload.credits
+  end
+
+  test "both transfer entry points translate invalid transfers without writing ledger rows" do
+    sender = User.create!(email: "sender-invalid-#{SecureRandom.hex(4)}@example.com", name: "Sender Invalid")
+    recipient = User.create!(email: "recipient-invalid-#{SecureRandom.hex(4)}@example.com", name: "Recipient Invalid")
+    sender.credit_wallet.give_credits(100, reason: "bonus")
+    incompatible_wallet = UsageCredits::Wallet.create!(owner: recipient, asset_code: "other")
+
+    %i[transfer_to transfer_credits_to].each do |entry_point|
+      error = nil
+
+      assert_no_difference -> { UsageCredits::Transfer.count } do
+        assert_no_difference -> { UsageCredits::Transaction.count } do
+          error = assert_raises(UsageCredits::InvalidTransfer) do
+            sender.credit_wallet.public_send(entry_point, incompatible_wallet, 30)
+          end
+        end
+      end
+
+      assert_equal "Wallet assets must match", error.message
+    end
+
+    assert_equal 100, sender.credit_wallet.reload.credits
+    assert_equal 0, incompatible_wallet.reload.credits
+  end
+
+  test "both transfer entry points translate insufficient balance without writing ledger rows" do
+    sender = User.create!(email: "sender-insufficient-#{SecureRandom.hex(4)}@example.com", name: "Sender Insufficient")
+    recipient = User.create!(email: "recipient-insufficient-#{SecureRandom.hex(4)}@example.com", name: "Recipient Insufficient")
+    sender.credit_wallet.give_credits(5, reason: "bonus")
+
+    %i[transfer_to transfer_credits_to].each do |entry_point|
+      error = nil
+
+      assert_no_difference -> { UsageCredits::Transfer.count } do
+        assert_no_difference -> { UsageCredits::Transaction.count } do
+          error = assert_raises(UsageCredits::InsufficientCredits) do
+            sender.credit_wallet.public_send(entry_point, recipient.credit_wallet, 30)
+          end
+        end
+      end
+
+      assert_equal "Insufficient balance (5 < 30)", error.message
+    end
+
+    assert_equal 5, sender.credit_wallet.reload.credits
+    assert_equal 0, recipient.credit_wallet.reload.credits
+  end
+
   test "credit wallet transfers preserve expiration buckets by default" do
     sender = User.create!(email: "sender-exp-#{SecureRandom.hex(4)}@example.com", name: "Sender Exp")
     recipient = User.create!(email: "recipient-exp-#{SecureRandom.hex(4)}@example.com", name: "Recipient Exp")

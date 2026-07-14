@@ -114,7 +114,14 @@ The upgrade migration moves your existing ledger onto the [`wallets`](https://gi
 - Widens integer amount columns to `bigint`
 - Creates the `usage_credits_transfers` table that powers wallet-to-wallet transfers
 
-A few production notes: back up your database first (the migration is not reversible), expect the `bigint` column changes to take a while on very large tables, and deploy the gem update and the migration together (the 1.0 models expect the upgraded schema). Every step of the migration is guarded, so it's safe to re-run if it ever gets interrupted halfway.
+A few production notes:
+
+- Back up your database first. The migration is intentionally irreversible; rollback means restoring that backup.
+- Rehearse the migration against a recent production snapshot and measure it before choosing a deployment window.
+- On PostgreSQL, Rails runs the migration in one DDL transaction. The unique-index build, four `bigint` conversions, constraints, foreign keys, and transfer-table changes therefore hold their acquired table locks until the whole migration commits. Writes to **all** `usage_credits_*` ledger tables may be blocked for the combined duration, not only while each individual `bigint` conversion is executing. Use a maintenance window for a large or write-heavy ledger. A genuinely lower-lock rollout requires a DBA-reviewed, application-specific staged migration (including concurrent indexes and separately validated constraints); do not add `disable_ddl_transaction!` to the generated migration casually, because that trades atomicity for partial-schema exposure.
+- MySQL DDL commits step by step. Every mutation is independently guarded, so an interrupted run can be fixed and safely re-run.
+- Deploy the gem update and migration together: the 1.0 models expect the upgraded schema.
+- Fresh installs use descriptive `usage_credits_*` index names. Upgrades deliberately preserve safe legacy index names rather than dropping and rebuilding equivalent indexes, so schema dumps from fresh and upgraded databases can differ by index name while remaining structurally equivalent.
 
 Add `has_credits` your user model (or any model that needs to have credits):
 ```ruby
@@ -778,6 +785,12 @@ seller.credit_wallet.transfer_to(
   metadata: { order_id: 42 }
 )
 ```
+
+`transfer_credits_to` is a backwards-compatible alias for `transfer_to`; both
+accept the same expiration options and return a `UsageCredits::Transfer`.
+Transfer domain failures stay inside the `usage_credits` error hierarchy:
+`UsageCredits::InvalidTransfer` for invalid endpoints and
+`UsageCredits::InsufficientCredits` for insufficient balance.
 
 This is intentionally a **wallet-level API**, not the main `usage_credits` DSL. The main product surface of `usage_credits` is still:
 - `give_credits`

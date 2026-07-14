@@ -49,6 +49,9 @@ module UsageCredits
       "transfer_out"
     ].freeze
 
+    # Kept as an immutable compatibility snapshot for callers that referenced
+    # the historical constant. Runtime validation uses .categories so configured
+    # additions remain dynamic without mutating this public constant.
     CATEGORIES = DEFAULT_CATEGORIES
 
     def self.categories

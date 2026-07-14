@@ -23,6 +23,9 @@
 - Persisted fulfillment cadence is parsed through the same strict duration parser as configuration and is never permitted below one second, preventing malformed metadata or a zero-period retry loop.
 - Recurring Pay-backed fulfillment locks and re-checks the subscription before minting, fails closed for dangling Pay sources (including processor-specific STI type names) and unresolved plan transitions, and never awards while the processor subscription is trialing, paused, incomplete, or canceled.
 - The locked subscription freshness check canonicalizes processor timestamps to the database column precision. Sub-microsecond values from processor SDKs can no longer make a just-committed callback look stale and silently suppress the initial credit award.
+- Subscription lifecycle transactions now exit their blocks locally instead of using method-level `return`, preserving explicit commit semantics across the Rails 7.2-to-8.x behavior change; unrelated subscription updates also skip deferred-resume reconciliation queries.
+- Credit-wallet lookup now delegates cold-cache lookup and race recovery to the wallets core's single `create_for_owner!` path instead of querying the same owner/asset association first.
+- `transfer_to` and its backwards-compatible `transfer_credits_to` alias now share the complete expiration-policy signature and consistently translate core transfer failures into the `usage_credits` error hierarchy.
 - Effective processor pauses use Pay's processor-specific lifecycle predicate rather than raw status (Stripe can remain `"active"` while paused). Plan changes made during a pause are snapshotted without minting, reconciled before the first resumed fulfillment even if an after-commit callback was interrupted, and rejected fail-closed if the persisted terms are inconsistent.
 - Fresh and upgrade migrations add row-local ledger constraints and abort before schema changes when legacy rows violate amount, allocation, transfer, wallet, or fulfillment invariants.
 - Rails 7.2's transaction callback API is now required to prevent rolled-back ledger events.
@@ -37,7 +40,7 @@
 
 ### Tests
 
-- The suite now contains 806 runs / 2,179 assertions, including adversarial coverage for concurrent fulfillment/refund delivery, stale processor records, processor timestamp precision, processor pauses/resumes, deferred-plan reconciliation, destroy callbacks, immutable commercial terms, cancellation expiration, malformed persisted cadence, interrupted upgrades, and database constraints.
+- The suite now contains 813 runs / 2,234 assertions, including adversarial coverage for concurrent fulfillment/refund delivery, stale processor records, processor timestamp precision, processor pauses/resumes, transfer API/error compatibility, cross-gem isolation, destroy callbacks, immutable commercial terms, cancellation expiration, malformed persisted cadence, interrupted upgrades, and database constraints.
 - Compatibility coverage includes Ruby 3.2 across both the Rails 7.2 and Rails 8.1 boundaries, Ruby 3.3/3.4/4.0 across Rails 7.2/8.1 and both the Pay 11.6.2 security floor and latest compatible Pay release, plus clean migrations and the full suite on SQLite, PostgreSQL, and MySQL.
 - CI audits every supported dependency bundle against the latest `ruby-advisory-db` before release.
 
@@ -46,7 +49,7 @@
 1. Release or install `wallets` 0.3.x first; `usage_credits` 1.0 will not resolve against 0.2.x.
 2. Update `usage_credits`, then run `rails generate usage_credits:upgrade`.
 3. Review the generated migration and **back up your database** (the migration is not reversible).
-4. Run the migration against a production snapshot and resolve every preflight failure before deployment.
+4. Run the migration against a production snapshot, resolve every preflight failure, and measure its locking window before deployment. On PostgreSQL, locks acquired across all ledger DDL are held until the whole migration commits.
 5. Deploy the gem update and `rails db:migrate` together — the 1.0 models expect the upgraded schema.
 
 ## [0.5.0] - 2026-03-15

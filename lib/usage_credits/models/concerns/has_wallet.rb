@@ -8,7 +8,7 @@ module UsageCredits
     included do
       # Filter to the default "credits" asset_code for backwards compatibility
       has_one :credit_wallet,
-        -> { where(asset_code: "credits") },
+        -> { where(asset_code: UsageCredits::DEFAULT_ASSET_CODE) },
         class_name: "UsageCredits::Wallet",
         as: :owner,
         dependent: :destroy
@@ -84,17 +84,25 @@ module UsageCredits
     end
 
     def ensure_credit_wallet
-      wallet = original_credit_wallet || UsageCredits::Wallet.find_by(owner: self, asset_code: "credits")
-      if wallet.present?
-        self.credit_wallet = wallet unless original_credit_wallet == wallet
-        return wallet
+      credit_wallet_association = association(:credit_wallet)
+      cached_wallet = credit_wallet_association.target if credit_wallet_association.loaded?
+      return cached_wallet if cached_wallet&.persisted?
+
+      # With auto-creation disabled, retain the ordinary has_one reader and
+      # refresh a cached miss so a concurrently-created wallet is still seen.
+      # With it enabled, create_for_owner! is the one lookup/creation primitive:
+      # it returns an existing row or creates it race-safely. This avoids
+      # querying once through the association and then repeating the same
+      # owner/asset lookup in create_for_owner! on a cold cache.
+      unless should_create_wallet?
+        return original_credit_wallet unless credit_wallet_association.loaded?
+        return credit_wallet_association.reload.target
       end
-      return unless should_create_wallet?
       raise "Cannot create wallet for unsaved owner" unless persisted?
 
       wallet = UsageCredits::Wallet.create_for_owner!(
         owner: self,
-        asset_code: "credits",
+        asset_code: UsageCredits::DEFAULT_ASSET_CODE,
         initial_balance: credit_options[:initial_balance]
       )
 

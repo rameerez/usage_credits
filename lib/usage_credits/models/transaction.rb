@@ -59,27 +59,27 @@ module UsageCredits
     # Additional Associations
     # =========================================
 
-    belongs_to :wallet, class_name: "UsageCredits::Wallet"
+    belongs_to :wallet, class_name: "UsageCredits::Wallet", inverse_of: :transactions, optional: false
     belongs_to :transfer, class_name: "UsageCredits::Transfer", optional: true
     belongs_to :fulfillment, class_name: "UsageCredits::Fulfillment", optional: true
 
     # Re-declare allocation associations with correct classes
     has_many :outgoing_allocations,
-             class_name: "UsageCredits::Allocation",
-             foreign_key: :transaction_id,
-             dependent: :destroy
+      class_name: "UsageCredits::Allocation",
+      foreign_key: :transaction_id,
+      dependent: :destroy
 
     has_many :incoming_allocations,
-             class_name: "UsageCredits::Allocation",
-             foreign_key: :source_transaction_id,
-             dependent: :destroy
+      class_name: "UsageCredits::Allocation",
+      foreign_key: :source_transaction_id,
+      dependent: :destroy
 
     # =========================================
     # Backwards Compatibility Scopes
     # =========================================
 
-    scope :credits_added, -> { where("amount > 0") }
-    scope :credits_deducted, -> { where("amount < 0") }
+    scope :credits_added, -> { where(arel_table[:amount].gt(0)) }
+    scope :credits_deducted, -> { where(arel_table[:amount].lt(0)) }
     scope :operation_charges, -> { where(category: :operation_charge) }
 
     # =========================================

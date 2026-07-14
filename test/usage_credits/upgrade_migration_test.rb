@@ -51,8 +51,8 @@ class UsageCredits::UpgradeMigrationTest < ActiveSupport::TestCase
 
     transaction_rows = @connection.exec_query("SELECT id, wallet_id, amount, category, transfer_id FROM usage_credits_transactions ORDER BY id").to_a
     assert_equal [
-      { "id" => 1, "wallet_id" => 1, "amount" => 200, "category" => "signup_bonus", "transfer_id" => nil },
-      { "id" => 2, "wallet_id" => 1, "amount" => -50, "category" => "operation_charge", "transfer_id" => nil }
+      {"id" => 1, "wallet_id" => 1, "amount" => 200, "category" => "signup_bonus", "transfer_id" => nil},
+      {"id" => 2, "wallet_id" => 1, "amount" => -50, "category" => "operation_charge", "transfer_id" => nil}
     ], transaction_rows
 
     # Pre-1.0 stored balance snapshots inside metadata; they must survive untouched.
@@ -82,6 +82,47 @@ class UsageCredits::UpgradeMigrationTest < ActiveSupport::TestCase
 
     transfers_index = @connection.indexes(:usage_credits_transfers).find { |index| index.name == "index_usage_credits_transfers_on_wallets_and_asset" }
     assert transfers_index, "expected transfers wallet/asset index to be created"
+
+    source_index = @connection.indexes(:usage_credits_fulfillments).find { |index| index.columns == %w[source_type source_id] }
+    assert source_index, "expected fulfillment source index to be created"
+    assert source_index.unique, "fulfillment source idempotency must be enforced by the database"
+
+    transfer_reference_index = @connection.indexes(:usage_credits_transactions).find { |index| index.columns == ["transfer_id"] }
+    assert transfer_reference_index, "expected interrupted reference index to be independently ensured"
+
+    transaction_transfer_fk = @connection.foreign_keys(:usage_credits_transactions).find do |foreign_key|
+      foreign_key.to_table == "usage_credits_transfers" && foreign_key.options[:column].to_s == "transfer_id"
+    end
+    assert transaction_transfer_fk, "expected transfer foreign key to be created"
+
+    assert @connection.check_constraint_exists?(
+      :usage_credits_transactions,
+      name: "check_usage_credits_transactions_amount_nonzero"
+    )
+    assert @connection.check_constraint_exists?(
+      :usage_credits_allocations,
+      name: "check_usage_credits_allocations_amount_positive"
+    )
+    assert @connection.check_constraint_exists?(
+      :usage_credits_transfers,
+      name: "check_usage_credits_transfers_distinct_wallets"
+    )
+
+    assert @connection.foreign_key_exists?(
+      :usage_credits_transactions,
+      :usage_credits_wallets,
+      column: :wallet_id
+    )
+    assert @connection.foreign_key_exists?(
+      :usage_credits_fulfillments,
+      :usage_credits_wallets,
+      column: :wallet_id
+    )
+    assert @connection.foreign_key_exists?(
+      :usage_credits_transactions,
+      :usage_credits_fulfillments,
+      column: :fulfillment_id
+    )
 
     # Pre-1.0 index names are intentionally preserved (no renames on production tables).
     legacy_allocation_index = @connection.indexes(:usage_credits_allocations).find { |index| index.name == "index_allocations_on_tx_and_source_tx" }
@@ -144,10 +185,228 @@ class UsageCredits::UpgradeMigrationTest < ActiveSupport::TestCase
     assert_equal 150, @connection.select_value("SELECT balance FROM usage_credits_wallets WHERE id = 1")
   end
 
+  test "upgrade aborts before schema changes when payment sources have duplicate fulfillments" do
+    create_pre_1_0_schema!
+    seed_pre_1_0_data!
+    duplicate = @connection.select_one("SELECT * FROM usage_credits_fulfillments WHERE id = 1").symbolize_keys
+    duplicate[:id] = 2
+    insert_row :usage_credits_fulfillments, duplicate
+
+    error = assert_raises(StandardError) { run_upgrade_migration! }
+
+    assert_match(/duplicate fulfillments/, error.message)
+    assert_match(/Pay::Charge#7 \(2 fulfillments\)/, error.message)
+    refute @connection.columns(:usage_credits_wallets).any? { |column| column.name == "asset_code" }
+    refute_includes @connection.tables, "usage_credits_transfers"
+  end
+
+  test "upgrade aborts before schema changes when ledger references are orphaned" do
+    create_pre_1_0_schema!
+    seed_pre_1_0_data!
+    @connection.disable_referential_integrity do
+      @connection.execute("UPDATE usage_credits_transactions SET wallet_id = 999 WHERE id = 1")
+    end
+
+    error = assert_raises(StandardError) { run_upgrade_migration! }
+
+    assert_match(/orphaned ledger references/, error.message)
+    assert_match(/usage_credits_transactions\.wallet_id: 1/, error.message)
+    refute @connection.columns(:usage_credits_wallets).any? { |column| column.name == "asset_code" }
+    refute_includes @connection.tables, "usage_credits_transfers"
+  end
+
+  test "upgrade aborts before schema changes when a Pay source is orphaned" do
+    create_pre_1_0_schema!
+    seed_pre_1_0_data!
+    @connection.execute(<<~SQL.squish)
+      UPDATE usage_credits_fulfillments
+      SET source_type = 'Pay::Subscription', source_id = 999
+      WHERE id = 1
+    SQL
+
+    error = assert_raises(StandardError) { run_upgrade_migration! }
+
+    assert_match(/fulfillment payment sources are missing/, error.message)
+    assert_match(/Pay::Subscription: 1/, error.message)
+    refute @connection.columns(:usage_credits_wallets).any? { |column| column.name == "asset_code" }
+    refute_includes @connection.tables, "usage_credits_transfers"
+  end
+
+  test "upgrade aborts before schema changes when allocation direction is invalid" do
+    create_pre_1_0_schema!
+    seed_pre_1_0_data!
+    @connection.execute("UPDATE usage_credits_transactions SET amount = 50 WHERE id = 2")
+
+    error = assert_raises(StandardError) { run_upgrade_migration! }
+
+    assert_match(/violates wallets accounting invariants/, error.message)
+    assert_match(/invalid debit\/credit direction/, error.message)
+    refute @connection.columns(:usage_credits_wallets).any? { |column| column.name == "asset_code" }
+    refute_includes @connection.tables, "usage_credits_transfers"
+  end
+
+  test "upgrade aborts before schema changes when allocations exceed a ledger leg" do
+    create_pre_1_0_schema!
+    seed_pre_1_0_data!
+    @connection.execute("UPDATE usage_credits_allocations SET amount = 250 WHERE id = 1")
+
+    error = assert_raises(StandardError) { run_upgrade_migration! }
+
+    assert_match(/over-allocated credit sources: 1/, error.message)
+    assert_match(/over-allocated debit transactions: 1/, error.message)
+    refute @connection.columns(:usage_credits_wallets).any? { |column| column.name == "asset_code" }
+  end
+
+  test "upgrade aborts before schema changes for zero transactions or negative fulfillment snapshots" do
+    create_pre_1_0_schema!
+    seed_pre_1_0_data!
+    @connection.execute("UPDATE usage_credits_transactions SET amount = 0 WHERE id = 1")
+    @connection.execute("UPDATE usage_credits_fulfillments SET credits_last_fulfillment = -1 WHERE id = 1")
+
+    error = assert_raises(StandardError) { run_upgrade_migration! }
+
+    assert_match(/zero-amount transactions: 1/, error.message)
+    assert_match(/negative fulfillment credit snapshots: 1/, error.message)
+    refute @connection.columns(:usage_credits_wallets).any? { |column| column.name == "asset_code" }
+  end
+
+  test "upgrade aborts before schema changes when a reserved index name has different columns" do
+    create_pre_1_0_schema!
+    seed_pre_1_0_data!
+    @connection.add_index :usage_credits_wallets,
+      :owner_id,
+      name: "index_usage_credits_wallets_on_owner_and_asset"
+
+    error = assert_raises(StandardError) { run_upgrade_migration! }
+
+    assert_match(/index_usage_credits_wallets_on_owner_and_asset/, error.message)
+    assert_match(/reserved/, error.message)
+    refute @connection.columns(:usage_credits_wallets).any? { |column| column.name == "asset_code" }
+  end
+
+  test "upgrade aborts before schema changes for half-populated fulfillment sources" do
+    create_pre_1_0_schema!
+    seed_pre_1_0_data!
+    @connection.execute("UPDATE usage_credits_fulfillments SET source_id = NULL WHERE id = 1")
+
+    error = assert_raises(StandardError) { run_upgrade_migration! }
+
+    assert_match(/incomplete polymorphic/, error.message)
+    refute @connection.columns(:usage_credits_wallets).any? { |column| column.name == "asset_code" }
+  end
+
+  test "upgrade repairs an interrupted transfer reference column" do
+    create_pre_1_0_schema!
+    seed_pre_1_0_data!
+
+    create_interrupted_transfers_table!
+    @connection.add_column :usage_credits_transactions, :transfer_id, :integer
+
+    run_upgrade_migration!
+
+    assert @connection.index_exists?(:usage_credits_transactions, :transfer_id)
+    assert @connection.foreign_key_exists?(
+      :usage_credits_transactions,
+      :usage_credits_transfers,
+      column: :transfer_id
+    )
+    assert @connection.check_constraint_exists?(
+      :usage_credits_transactions,
+      name: "check_usage_credits_transactions_amount_nonzero"
+    )
+    assert @connection.check_constraint_exists?(
+      :usage_credits_fulfillments,
+      name: "check_usage_credits_fulfillments_credits_nonnegative"
+    )
+    assert @connection.foreign_key_exists?(
+      :usage_credits_transfers,
+      :usage_credits_wallets,
+      column: :from_wallet_id
+    )
+  end
+
+  test "upgrade rejects an orphan in an interrupted transfers table before new changes" do
+    create_pre_1_0_schema!
+    seed_pre_1_0_data!
+    create_interrupted_transfers_table!
+    insert_row :usage_credits_transfers,
+      id: 1,
+      from_wallet_id: 1,
+      to_wallet_id: 999,
+      asset_code: "credits",
+      amount: 10,
+      category: "transfer",
+      expiration_policy: "preserve",
+      metadata: json_payload({}),
+      created_at: Time.current,
+      updated_at: Time.current
+
+    error = assert_raises(StandardError) { run_upgrade_migration! }
+
+    assert_match(/usage_credits_transfers\.to_wallet_id: 1/, error.message)
+    refute @connection.columns(:usage_credits_wallets).any? { |column| column.name == "asset_code" }
+  end
+
+  test "upgrade rejects an incomplete interrupted transfers table before new changes" do
+    create_pre_1_0_schema!
+    seed_pre_1_0_data!
+    @connection.create_table :usage_credits_transfers do |t|
+      t.references :from_wallet, null: false
+    end
+
+    error = assert_raises(StandardError) { run_upgrade_migration! }
+
+    assert_match(/usage_credits_transfers is incomplete/, error.message)
+    assert_match(/to_wallet_id/, error.message)
+    refute @connection.columns(:usage_credits_wallets).any? { |column| column.name == "asset_code" }
+  end
+
+  test "upgrade rejects an incomplete pre-1.0 schema without touching existing tables" do
+    create_pre_1_0_schema!
+    @connection.drop_table :usage_credits_allocations
+
+    error = assert_raises(StandardError) { run_upgrade_migration! }
+
+    assert_match(/incomplete usage_credits schema/, error.message)
+    assert_match(/usage_credits_allocations/, error.message)
+    refute @connection.columns(:usage_credits_wallets).any? { |column| column.name == "asset_code" }
+  end
+
   test "upgrade migration tells fresh apps to use the install generator instead" do
     error = assert_raises(StandardError) { run_upgrade_migration! }
     assert_match(/No usage_credits tables found/, error.message)
     assert_match(/usage_credits:install/, error.message)
+  end
+
+  test "fresh install migration executes up and down with all integrity constraints" do
+    migration = load_install_migration_class.new
+    migration.verbose = false
+    migration.exec_migration(@connection, :up)
+
+    expected_tables = %w[
+      usage_credits_wallets
+      usage_credits_transfers
+      usage_credits_transactions
+      usage_credits_fulfillments
+      usage_credits_allocations
+    ]
+    assert_empty expected_tables - @connection.tables
+
+    source_index = @connection.indexes(:usage_credits_fulfillments).find { |index| index.columns == %w[source_type source_id] }
+    assert source_index&.unique
+    assert @connection.foreign_key_exists?(
+      :usage_credits_transactions,
+      :usage_credits_fulfillments,
+      column: :fulfillment_id
+    )
+    assert @connection.foreign_key_exists?(
+      :usage_credits_transactions,
+      :usage_credits_transfers,
+      column: :transfer_id
+    )
+
+    migration.exec_migration(@connection, :down)
+    assert_empty expected_tables & @connection.tables
   end
 
   private
@@ -156,6 +415,12 @@ class UsageCredits::UpgradeMigrationTest < ActiveSupport::TestCase
   # create_usage_credits_tables.rb.erb on the 0.5.0 tag) so we test the upgrade
   # against the schema real production apps are coming from.
   def create_pre_1_0_schema!
+    # usage_credits 0.5 fulfillment sources point at Pay's tables. Including
+    # them here makes the migration fixture representative and lets preflight
+    # tests prove that polymorphic payment references are not silently orphaned.
+    @connection.create_table :pay_charges
+    @connection.create_table :pay_subscriptions
+
     @connection.create_table :usage_credits_wallets do |t|
       t.references :owner, polymorphic: true, null: false
       t.integer :balance, null: false, default: 0
@@ -191,11 +456,11 @@ class UsageCredits::UpgradeMigrationTest < ActiveSupport::TestCase
 
     @connection.create_table :usage_credits_allocations do |t|
       t.references :transaction, null: false,
-                                 foreign_key: { to_table: :usage_credits_transactions },
-                                 index: { name: "index_allocations_on_transaction_id" }
+        foreign_key: {to_table: :usage_credits_transactions},
+        index: {name: "index_allocations_on_transaction_id"}
       t.references :source_transaction, null: false,
-                                        foreign_key: { to_table: :usage_credits_transactions },
-                                        index: { name: "index_allocations_on_source_transaction_id" }
+        foreign_key: {to_table: :usage_credits_transactions},
+        index: {name: "index_allocations_on_source_transaction_id"}
       t.integer :amount, null: false
 
       t.timestamps
@@ -212,6 +477,8 @@ class UsageCredits::UpgradeMigrationTest < ActiveSupport::TestCase
 
   def seed_pre_1_0_data!
     now = Time.current
+
+    insert_row :pay_charges, id: 7
 
     insert_row :usage_credits_wallets,
       id: 1,
@@ -263,6 +530,19 @@ class UsageCredits::UpgradeMigrationTest < ActiveSupport::TestCase
       updated_at: now
   end
 
+  def create_interrupted_transfers_table!
+    @connection.create_table :usage_credits_transfers do |t|
+      t.references :from_wallet, null: false
+      t.references :to_wallet, null: false
+      t.string :asset_code, null: false, default: "credits"
+      t.bigint :amount, null: false
+      t.string :category, null: false, default: "transfer"
+      t.string :expiration_policy, null: false, default: "preserve"
+      t.json :metadata, null: false, default: {}
+      t.timestamps
+    end
+  end
+
   def run_upgrade_migration!
     migration_class = load_upgrade_migration_class
     migration = migration_class.new
@@ -280,13 +560,23 @@ class UsageCredits::UpgradeMigrationTest < ActiveSupport::TestCase
     mod.const_get(:UpgradeUsageCreditsToWalletsCore)
   end
 
+  def load_install_migration_class
+    source = ERB.new(File.read(template_path("create_usage_credits_tables.rb.erb"))).result_with_hash(
+      migration_version: "[#{ActiveRecord::VERSION::STRING.to_f}]"
+    )
+
+    mod = Module.new
+    mod.module_eval(source, template_path("create_usage_credits_tables.rb.erb"), 1)
+    mod.const_get(:CreateUsageCreditsTables)
+  end
+
   def insert_row(table_name, attributes)
     columns = attributes.keys.map(&:to_s)
     values = attributes.values.map { |value| @connection.quote(value) }
 
     @connection.execute(<<~SQL.squish)
-      INSERT INTO #{table_name} (#{columns.join(', ')})
-      VALUES (#{values.join(', ')})
+      INSERT INTO #{table_name} (#{columns.join(", ")})
+      VALUES (#{values.join(", ")})
     SQL
   end
 

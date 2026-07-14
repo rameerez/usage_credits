@@ -7,28 +7,24 @@ require "active_support/core_ext/numeric"
 # (Cost::Base, Cost::Fixed, Cost::Variable, Cost::Compound, etc.)
 class Numeric
   def credits
-    raise ArgumentError, "Credit amount must be a whole number (decimals are not allowed)" unless self == self.to_i
-    raise ArgumentError, "Credit amount cannot be negative" if self.negative?
-    UsageCredits::Cost::Fixed.new(self.to_i)
+    UsageCredits::Cost::Fixed.new(self)
   end
   alias_method :credit, :credits
 
   def credits_per(unit)
-    raise ArgumentError, "Credit cost rate must be a whole number (decimals are not allowed)" unless self == self.to_i
-
     # Convert common units to their base unit
     unit = case unit.to_s.downcase
-           when "mb", "megabyte", "megabytes"
-             :mb
-           when "kb", "kilobyte", "kilobytes"
-             :kb
-           when "gb", "gigabyte", "gigabytes"
-             :gb
-           when "unit", "units"
-             :units
-           else
-             unit.to_sym
-           end
+    when "mb", "megabyte", "megabytes"
+      :mb
+    when "kb", "kilobyte", "kilobytes"
+      :kb
+    when "gb", "gigabyte", "gigabytes"
+      :gb
+    when "unit", "units"
+      :units
+    else
+      unit.to_sym
+    end
 
     UsageCredits::Cost::Variable.new(self, unit)
   end

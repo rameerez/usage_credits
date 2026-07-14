@@ -20,6 +20,7 @@ module UsageCredits
     self.transaction_class_name = "UsageCredits::Transaction"
     self.allocation_class_name = "UsageCredits::Allocation"
     self.transfer_class_name = "UsageCredits::Transfer"
+    self.additional_transaction_attribute_names = %i[fulfillment].freeze
 
     # Map base wallet events to usage_credits-specific event names
     self.callback_event_map = {
@@ -36,17 +37,20 @@ module UsageCredits
     # =========================================
 
     # Override parent associations to use UsageCredits classes
-    has_many :transactions, class_name: "UsageCredits::Transaction", dependent: :destroy
+    has_many :transactions,
+      class_name: "UsageCredits::Transaction",
+      inverse_of: :wallet,
+      dependent: :destroy
     has_many :outgoing_transfers,
-             class_name: "UsageCredits::Transfer",
-             foreign_key: :from_wallet_id,
-             dependent: :destroy,
-             inverse_of: :from_wallet
+      class_name: "UsageCredits::Transfer",
+      foreign_key: :from_wallet_id,
+      dependent: :destroy,
+      inverse_of: :from_wallet
     has_many :incoming_transfers,
-             class_name: "UsageCredits::Transfer",
-             foreign_key: :to_wallet_id,
-             dependent: :destroy,
-             inverse_of: :to_wallet
+      class_name: "UsageCredits::Transfer",
+      foreign_key: :to_wallet_id,
+      dependent: :destroy,
+      inverse_of: :to_wallet
 
     # UsageCredits-specific associations
     has_many :fulfillments, class_name: "UsageCredits::Fulfillment", dependent: :destroy
@@ -57,7 +61,7 @@ module UsageCredits
       def initial_balance_credit_attributes
         {
           category: :manual_adjustment,
-          metadata: { reason: "initial_balance" }
+          metadata: {reason: "initial_balance"}
         }
       end
     end
@@ -77,7 +81,8 @@ module UsageCredits
     end
 
     def current_balance
-      positive_remaining_balance
+      refund_debits = transactions.debits.where(category: "credit_pack_refund")
+      [positive_remaining_balance - unbacked_negative_balance(refund_debits), 0].max
     end
 
     # Get transaction history (oldest first) - alias for history
@@ -91,21 +96,21 @@ module UsageCredits
 
     # Check if wallet has enough credits for an operation
     def has_enough_credits_to?(operation_name, **params)
-      operation = find_and_validate_operation(operation_name, params)
+      operation = find_operation(operation_name)
       credits >= operation.calculate_cost(params)
     rescue InvalidOperation
       raise
-    rescue StandardError => e
+    rescue => e
       raise InvalidOperation, "Error checking credits: #{e.message}"
     end
 
     # Calculate how many credits an operation would cost
     def estimate_credits_to(operation_name, **params)
-      operation = find_and_validate_operation(operation_name, params)
+      operation = find_operation(operation_name)
       operation.calculate_cost(params)
     rescue InvalidOperation
       raise
-    rescue StandardError => e
+    rescue => e
       raise InvalidOperation, "Error estimating cost: #{e.message}"
     end
 
@@ -114,42 +119,41 @@ module UsageCredits
     # @param params [Hash] Parameters for the operation
     # @yield Optional block that must succeed before credits are deducted
     def spend_credits_on(operation_name, **params)
-      operation = find_and_validate_operation(operation_name, params)
+      operation = find_operation(operation_name)
       cost = operation.calculate_cost(params)
 
-      # Check if user has enough credits
-      unless has_enough_credits_to?(operation_name, **params)
-        UsageCredits::Callbacks.dispatch(:insufficient_credits,
-          wallet: self,
-          amount: cost,
-          operation_name: operation_name,
-          metadata: {
-            available: credits,
-            required: cost,
-            params: params
-          }
-        )
-        raise InsufficientCredits, "Insufficient credits (#{credits} < #{cost})"
-      end
-
       # Create audit trail
-      audit_data = operation.to_audit_hash(params).deep_stringify_keys
+      audit_data = operation.to_audit_hash(params, cost: cost).deep_stringify_keys
       deduct_params = {
-        metadata: audit_data.merge(operation.metadata.deep_stringify_keys).merge(
-          "executed_at" => Time.current,
-          "gem_version" => UsageCredits::VERSION
-        ),
+        metadata: audit_data,
         category: :operation_charge
       }
 
-      if block_given?
-        ActiveRecord::Base.transaction do
-          lock!
-          yield
-          deduct_credits(cost, **deduct_params)
+      # The affordability check and the protected operation must happen while
+      # holding the same wallet lock. Otherwise another request can consume the
+      # balance after the pre-check, causing this block's side effects to run
+      # even though its eventual debit fails.
+      with_lock do
+        available = credits
+        if cost > available
+          UsageCredits::Callbacks.dispatch(:insufficient_credits,
+            wallet: self,
+            amount: cost,
+            operation_name: operation_name,
+            metadata: {
+              available: available,
+              required: cost,
+              params: params
+            })
+          raise InsufficientCredits, "Insufficient credits (#{available} < #{cost})"
         end
-      else
-        deduct_credits(cost, **deduct_params)
+
+        yield if block_given?
+
+        # Free operations are a supported part of the DSL. There is no valid
+        # zero-amount ledger transaction to record, so execute the block and
+        # return nil without calling the strictly-positive debit primitive.
+        cost.zero? ? nil : deduct_credits(cost, **deduct_params)
       end
     end
 
@@ -158,22 +162,16 @@ module UsageCredits
     # @param reason [String, nil] Optional reason for giving credits
     # @param expires_at [DateTime, nil] Optional expiration date for the credits
     def give_credits(amount, reason: nil, expires_at: nil)
-      raise ArgumentError, "Amount is required" if amount.nil?
-      raise ArgumentError, "Cannot give negative credits" if amount.to_i.negative?
-      raise ArgumentError, "Credit amount must be a whole number" unless amount == amount.to_i
-      raise ArgumentError, "Expiration date must be a valid datetime" if expires_at && !expires_at.respond_to?(:to_datetime)
-      raise ArgumentError, "Expiration date must be in the future" if expires_at && expires_at <= Time.current
-
       category = case reason&.to_s
-                when "signup" then :signup_bonus
-                when "referral" then :referral_bonus
-                when /bonus/i then :bonus
-                else :manual_adjustment
-                end
+      when "signup" then :signup_bonus
+      when "referral" then :referral_bonus
+      when /bonus/i then :bonus
+      else :manual_adjustment
+      end
 
       add_credits(
-        amount.to_i,
-        metadata: { reason: reason },
+        amount,
+        metadata: {reason: reason},
         category: category,
         expires_at: expires_at
       )
@@ -197,8 +195,8 @@ module UsageCredits
 
     # Remove credits from the wallet (wraps parent's debit method)
     # Converts Wallets::InsufficientBalance to InsufficientCredits for backwards compatibility
-    def deduct_credits(amount, metadata: {}, category: :credit_deducted)
-      debit(amount, metadata: metadata, category: category)
+    def deduct_credits(amount, metadata: {}, category: :credit_deducted, fulfillment: nil)
+      debit(amount, metadata: metadata, category: category, fulfillment: fulfillment)
     rescue Wallets::InsufficientBalance => e
       raise InsufficientCredits, e.message
     end
@@ -215,15 +213,31 @@ module UsageCredits
 
     private
 
+    # Payment refunds must be represented even after the purchased credits
+    # have been consumed. The unbacked debit remains ledger debt; the public
+    # balance stays floored at zero until later credits repay that debt.
+    def deduct_refunded_credits(amount, metadata:, fulfillment:)
+      with_lock do
+        apply_debit(
+          amount,
+          metadata: metadata,
+          category: :credit_pack_refund,
+          transfer: nil,
+          extra_attributes: {fulfillment: fulfillment},
+          allow_unbacked: true
+        )
+      end
+    end
+
     # =========================================
     # Helper Methods
     # =========================================
 
-    # Find an operation and validate its parameters
-    def find_and_validate_operation(name, params)
+    # Find an operation. `Operation#calculate_cost` owns parameter validation,
+    # keeping validation and user-supplied cost code single-evaluation.
+    def find_operation(name)
       operation = UsageCredits.operations[name.to_sym]
       raise InvalidOperation, "Operation not found: #{name}" unless operation
-      operation.validate!(params)
       operation
     end
   end

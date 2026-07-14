@@ -44,7 +44,7 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
     wallet = usage_credits_wallets(:rich_wallet)
     initial_credits = wallet.credits
 
-    wallet.deduct_credits(50, category: "operation_charge", metadata: { test: true })
+    wallet.deduct_credits(50, category: "operation_charge", metadata: {test: true})
 
     assert_equal initial_credits - 50, wallet.credits
   end
@@ -292,7 +292,7 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
         recipient.credit_wallet,
         30,
         category: :gift,
-        metadata: { source: "test" }
+        metadata: {source: "test"}
       )
 
       assert_equal sender.credit_wallet, transfer.from_wallet
@@ -379,7 +379,7 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
 
   test "deduct_credits creates transaction with metadata" do
     wallet = usage_credits_wallets(:rich_wallet)
-    metadata = { operation: "test", param: "value" }
+    metadata = {operation: "test", param: "value"}
 
     tx = wallet.deduct_credits(10, category: "operation_charge", metadata: metadata)
 
@@ -474,6 +474,40 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
     end
   end
 
+  test "spend_credits_on evaluates dynamic cost exactly once" do
+    evaluations = 0
+    UsageCredits.configure do |config|
+      config.operation :single_evaluation do
+        costs ->(_params) {
+          evaluations += 1
+          25
+        }
+      end
+    end
+
+    wallet = usage_credits_wallets(:rich_wallet)
+    transaction = wallet.spend_credits_on(:single_evaluation)
+
+    assert_equal 1, evaluations
+    assert_equal 25, transaction.metadata["cost"]
+  end
+
+  test "spend_credits_on executes free operations without a zero-value transaction" do
+    UsageCredits.configure do |config|
+      config.operation(:free_operation) { costs 0.credits }
+    end
+
+    wallet = usage_credits_wallets(:rich_wallet)
+    executed = false
+
+    assert_no_difference -> { wallet.transactions.count } do
+      result = wallet.spend_credits_on(:free_operation) { executed = true }
+      assert_nil result
+    end
+
+    assert executed
+  end
+
   test "spend_credits_on creates transaction with operation metadata" do
     wallet = usage_credits_wallets(:rich_wallet)
 
@@ -492,6 +526,17 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
     assert_raises(UsageCredits::InsufficientCredits) do
       wallet.spend_credits_on(:test_operation)
     end
+  end
+
+  test "spend_credits_on never executes its block when the locked balance is insufficient" do
+    wallet = usage_credits_wallets(:poor_wallet)
+    block_executed = false
+
+    assert_raises(UsageCredits::InsufficientCredits) do
+      wallet.spend_credits_on(:test_operation) { block_executed = true }
+    end
+
+    refute block_executed
   end
 
   test "spend_credits_on raises for unknown operation" do
@@ -627,7 +672,7 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
 
     # Perform multiple sequential operations
     10.times do |i|
-      wallet.deduct_credits(50, category: "operation_charge", metadata: { iteration: i })
+      wallet.deduct_credits(50, category: "operation_charge", metadata: {iteration: i})
     end
 
     assert_equal 500, wallet.reload.credits
@@ -639,11 +684,11 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
 
   # NOTE: Rails doesn't enforce belongs_to presence for polymorphic associations by default
   # The database has NOT NULL constraints, so this is enforced at the DB level
-  #test "requires owner" do
+  # test "requires owner" do
   #  wallet = UsageCredits::Wallet.new
   #  assert_not wallet.valid?
   #  assert_includes wallet.errors[:owner], "must exist"
-  #end
+  # end
 
   test "balance defaults to 0" do
     wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
@@ -758,7 +803,7 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
 
   # NOTE: This test has an ambiguous SQL query that needs table name qualification
   # The current implementation uses a simpler credits calculation method
-  #test "recalculates balance accurately after many transactions" do
+  # test "recalculates balance accurately after many transactions" do
   #  wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
   #
   #  # Add 50 credits in various amounts
@@ -769,7 +814,7 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
   #
   #  # Balance should be consistent - using the model's credits method
   #  assert_equal wallet.credits, wallet.balance
-  #end
+  # end
 
   test "recalculates balance accurately after many transactions" do
     wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
@@ -778,7 +823,7 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
     25.times { |i| wallet.give_credits((i + 1) * 10, reason: "credit_#{i}") }
 
     # Spend some credits
-    20.times { |i| wallet.deduct_credits(50, category: "operation_charge", metadata: { iteration: i }) }
+    20.times { |i| wallet.deduct_credits(50, category: "operation_charge", metadata: {iteration: i}) }
 
     # Balance should be consistent with the credits calculation
     assert_equal wallet.credits, wallet.balance
@@ -812,7 +857,7 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
   test "handles mixed currency metadata" do
     wallet = UsageCredits::Wallet.create!(
       owner: users(:new_user),
-      metadata: { currency: "USD", region: "US" }
+      metadata: {currency: "USD", region: "US"}
     )
 
     assert_equal "USD", wallet.metadata["currency"]

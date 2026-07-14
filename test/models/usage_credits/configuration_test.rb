@@ -260,6 +260,12 @@ class UsageCredits::ConfigurationTest < ActiveSupport::TestCase
     assert_equal 50, @config.low_balance_threshold
   end
 
+  test "low_balance_threshold rejects fractional and non-numeric values" do
+    [1.5, "not-a-number", Float::INFINITY].each do |value|
+      assert_raises(ArgumentError) { @config.low_balance_threshold = value }
+    end
+  end
+
   test "low_balance_threshold setter raises for negative value" do
     error = assert_raises(ArgumentError) do
       @config.low_balance_threshold = -10

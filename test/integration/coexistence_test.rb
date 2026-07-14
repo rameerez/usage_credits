@@ -118,6 +118,20 @@ class CoexistenceTest < ActiveSupport::TestCase
     assert_equal "preserve", transfer.expiration_policy
   end
 
+  test "destroying a usage credits wallet preserves its counterparty ledger" do
+    sender = User.create!(email: "sender-destroy-#{SecureRandom.hex(4)}@example.com", name: "Sender")
+    recipient = User.create!(email: "recipient-destroy-#{SecureRandom.hex(4)}@example.com", name: "Recipient")
+    sender.give_credits(100, reason: "test")
+    transfer = sender.credit_wallet.transfer_to(recipient.credit_wallet, 30, category: :gift)
+    recipient_transaction = transfer.inbound_transaction
+
+    sender.destroy!
+
+    assert_nil UsageCredits::Transfer.find_by(id: transfer.id)
+    assert_equal 30, recipient.credit_wallet.reload.credits
+    assert_nil recipient_transaction.reload.transfer_id
+  end
+
   test "cross-gem transfers are rejected" do
     team = teams(:alpha_team)
     user = User.create!(email: "cross-#{SecureRandom.hex(4)}@example.com", name: "Cross User")

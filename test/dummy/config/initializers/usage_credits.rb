@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 UsageCredits.configure do |config|
-
   # Default test operations
   operation :small_operation do
     costs 1.credit
@@ -19,7 +18,6 @@ UsageCredits.configure do |config|
   operation :this_operation_will_always_fail do
     costs 42.credits
   end
-
 
   # Define test credit packs
   credit_pack :tiny do
@@ -39,7 +37,6 @@ UsageCredits.configure do |config|
     currency :usd
   end
 
-
   # Define subscriptions
   subscription_plan :test_plan do
     processor_plan(:fake_processor, "abcdef123456")
@@ -56,5 +53,4 @@ UsageCredits.configure do |config|
   #   # Send notification to user when their balance drops below the threshold
   #   ApplicationMailer.generic_email(to: user.email, body: "Heads up! You're low on credits.", subject: "Low credits alert").deliver_now
   # end
-
 end

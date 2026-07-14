@@ -19,7 +19,10 @@ module UsageCredits
     # Re-declare Associations with Correct Classes
     # =========================================
 
-    belongs_to :spend_transaction, class_name: "UsageCredits::Transaction", foreign_key: "transaction_id"
-    belongs_to :source_transaction, class_name: "UsageCredits::Transaction"
+    belongs_to :spend_transaction,
+      class_name: "UsageCredits::Transaction",
+      foreign_key: "transaction_id",
+      optional: false
+    belongs_to :source_transaction, class_name: "UsageCredits::Transaction", optional: false
   end
 end

@@ -12,8 +12,7 @@ module UsageCredits
       end
 
       def calculate(params = {})
-        total = costs.sum { |cost| cost.calculate(params) }
-        CreditCalculator.apply_rounding(total)
+        costs.sum { |cost| cost.calculate(params) }
       end
 
       def +(other)

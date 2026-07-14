@@ -59,12 +59,12 @@ module UsageCredits
     # =========================================
 
     attr_reader :on_credits_added_callback,
-                :on_credits_deducted_callback,
-                :on_low_balance_reached_callback,
-                :on_balance_depleted_callback,
-                :on_insufficient_credits_callback,
-                :on_subscription_credits_awarded_callback,
-                :on_credit_pack_purchased_callback
+      :on_credits_deducted_callback,
+      :on_low_balance_reached_callback,
+      :on_balance_depleted_callback,
+      :on_insufficient_credits_callback,
+      :on_subscription_credits_awarded_callback,
+      :on_credit_pack_purchased_callback
 
     def initialize
       # Initialize empty data stores
@@ -165,7 +165,7 @@ module UsageCredits
     def default_currency=(value)
       value = value.to_s.downcase.to_sym
       unless VALID_CURRENCIES.include?(value)
-        raise ArgumentError, "Invalid currency. Must be one of: #{VALID_CURRENCIES.join(', ')}"
+        raise ArgumentError, "Invalid currency. Must be one of: #{VALID_CURRENCIES.join(", ")}"
       end
       @default_currency = value
     end
@@ -173,7 +173,7 @@ module UsageCredits
     # Set low balance threshold with validation
     def low_balance_threshold=(value)
       if value
-        value = value.to_i
+        value = Wallets::WholeNumber.parse(value, name: "Low balance threshold", allow_string: true)
         raise ArgumentError, "Low balance threshold must be greater than or equal to zero" if value.negative?
       end
       @low_balance_threshold = value
@@ -189,7 +189,7 @@ module UsageCredits
     end
 
     def fulfillment_grace_period=(value)
-      if value.nil? || value&.to_i == 0
+      if value.nil? || value == 0
         @fulfillment_grace_period = 1.second
         return
       end
@@ -302,19 +302,19 @@ module UsageCredits
     def validate_currency!
       raise ArgumentError, "Default currency can't be blank" if default_currency.blank?
       unless VALID_CURRENCIES.include?(default_currency.to_s.downcase.to_sym)
-        raise ArgumentError, "Invalid currency. Must be one of: #{VALID_CURRENCIES.join(', ')}"
+        raise ArgumentError, "Invalid currency. Must be one of: #{VALID_CURRENCIES.join(", ")}"
       end
     end
 
     def validate_threshold!
-      if @low_balance_threshold && @low_balance_threshold.negative?
+      if @low_balance_threshold&.negative?
         raise ArgumentError, "Low balance threshold must be greater than or equal to zero"
       end
     end
 
     def validate_rounding_strategy!
       unless VALID_ROUNDING_STRATEGIES.include?(@rounding_strategy)
-        raise ArgumentError, "Invalid rounding strategy. Must be one of: #{VALID_ROUNDING_STRATEGIES.join(', ')}"
+        raise ArgumentError, "Invalid rounding strategy. Must be one of: #{VALID_ROUNDING_STRATEGIES.join(", ")}"
       end
     end
 

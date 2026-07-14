@@ -22,8 +22,8 @@ class CreateWalletsCoexistenceTables < ActiveRecord::Migration[7.2]
     add_index :wallets_wallets, [:owner_type, :owner_id, :asset_code], unique: true, name: "index_wallets_on_owner_and_asset_code"
 
     create_table :wallets_transfers, id: primary_key_type do |t|
-      t.references :from_wallet, null: false, type: foreign_key_type, foreign_key: { to_table: :wallets_wallets }
-      t.references :to_wallet, null: false, type: foreign_key_type, foreign_key: { to_table: :wallets_wallets }
+      t.references :from_wallet, null: false, type: foreign_key_type, foreign_key: {to_table: :wallets_wallets}
+      t.references :to_wallet, null: false, type: foreign_key_type, foreign_key: {to_table: :wallets_wallets}
       t.string :asset_code, null: false
       t.bigint :amount, null: false
       t.string :category, null: false, default: "transfer"
@@ -34,11 +34,11 @@ class CreateWalletsCoexistenceTables < ActiveRecord::Migration[7.2]
     end
 
     create_table :wallets_transactions, id: primary_key_type do |t|
-      t.references :wallet, null: false, type: foreign_key_type, foreign_key: { to_table: :wallets_wallets }
+      t.references :wallet, null: false, type: foreign_key_type, foreign_key: {to_table: :wallets_wallets}
       t.bigint :amount, null: false
       t.string :category, null: false
       t.datetime :expires_at
-      t.references :transfer, type: foreign_key_type, foreign_key: { to_table: :wallets_transfers }
+      t.references :transfer, type: foreign_key_type, foreign_key: {to_table: :wallets_transfers}
       t.send(json_column_type, :metadata, null: false, default: json_column_default)
 
       t.timestamps
@@ -46,11 +46,11 @@ class CreateWalletsCoexistenceTables < ActiveRecord::Migration[7.2]
 
     create_table :wallets_allocations, id: primary_key_type do |t|
       t.references :transaction, null: false, type: foreign_key_type,
-                                 foreign_key: { to_table: :wallets_transactions },
-                                 index: { name: "index_wallets_allocations_on_transaction_id" }
+        foreign_key: {to_table: :wallets_transactions},
+        index: {name: "index_wallets_allocations_on_transaction_id"}
       t.references :source_transaction, null: false, type: foreign_key_type,
-                                        foreign_key: { to_table: :wallets_transactions },
-                                        index: { name: "index_wallets_allocations_on_source_transaction_id" }
+        foreign_key: {to_table: :wallets_transactions},
+        index: {name: "index_wallets_allocations_on_source_transaction_id"}
       t.bigint :amount, null: false
 
       t.timestamps

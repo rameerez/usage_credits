@@ -100,6 +100,34 @@ class HasWalletTest < ActiveSupport::TestCase
     assert_equal "initial_balance", wallet.transactions.first.metadata["reason"]
   end
 
+  test "fractional initial_balance is rejected instead of truncated" do
+    test_class = Class.new(User) do
+      def self.name
+        "TestUserWithFractionalInitialBalance"
+      end
+
+      has_credits initial_balance: 10.5
+    end
+
+    email = "fractional-#{SecureRandom.hex(4)}@example.com"
+    error = assert_raises(ArgumentError) do
+      test_class.create!(email: email, name: "Fractional")
+    end
+
+    assert_includes error.message, "whole number"
+    assert_nil User.find_by(email: email)
+  end
+
+  test "credit options are immutable snapshots" do
+    test_class = Class.new(User) do
+      self.table_name = "users"
+      has_credits initial_balance: 25
+    end
+
+    assert_predicate test_class.credit_options, :frozen?
+    assert_raises(FrozenError) { test_class.credit_options[:initial_balance] = 100 }
+  end
+
   test "usage credits wallet create_for_owner applies initial_balance via manual_adjustment once" do
     wallet = UsageCredits::Wallet.create_for_owner!(
       owner: users(:new_user),
@@ -368,6 +396,28 @@ class HasWalletTest < ActiveSupport::TestCase
 
     assert_equal false, options[:auto_create]
     assert_equal 500, options[:initial_balance]
+  end
+
+  test "credit options are inherited and can be overridden by subclasses" do
+    parent_class = Class.new(User) do
+      def self.name
+        "TestUserCreditOptionsParent"
+      end
+
+      has_credits auto_create: false, initial_balance: 500
+    end
+    child_class = Class.new(parent_class) do
+      def self.name
+        "TestUserCreditOptionsChild"
+      end
+    end
+
+    assert_equal({auto_create: false, initial_balance: 500}, child_class.credit_options)
+
+    child_class.has_credits initial_balance: 25
+
+    assert_equal({auto_create: true, initial_balance: 25}, child_class.credit_options)
+    assert_equal({auto_create: false, initial_balance: 500}, parent_class.credit_options)
   end
 
   # ========================================

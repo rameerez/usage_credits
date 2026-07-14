@@ -16,8 +16,8 @@ class CreateUsageCreditsTables < ActiveRecord::Migration[7.2]
     add_index :usage_credits_wallets, [:owner_type, :owner_id, :asset_code], unique: true, name: "index_usage_credits_wallets_on_owner_and_asset"
 
     create_table :usage_credits_transfers, id: primary_key_type do |t|
-      t.references :from_wallet, null: false, type: foreign_key_type, foreign_key: { to_table: :usage_credits_wallets }
-      t.references :to_wallet, null: false, type: foreign_key_type, foreign_key: { to_table: :usage_credits_wallets }
+      t.references :from_wallet, null: false, type: foreign_key_type, foreign_key: {to_table: :usage_credits_wallets}
+      t.references :to_wallet, null: false, type: foreign_key_type, foreign_key: {to_table: :usage_credits_wallets}
       t.string :asset_code, null: false, default: "credits"
       t.bigint :amount, null: false
       t.string :category, null: false, default: "transfer"
@@ -28,11 +28,11 @@ class CreateUsageCreditsTables < ActiveRecord::Migration[7.2]
     end
 
     create_table :usage_credits_transactions, id: primary_key_type do |t|
-      t.references :wallet, null: false, type: foreign_key_type, foreign_key: { to_table: :usage_credits_wallets }
+      t.references :wallet, null: false, type: foreign_key_type, foreign_key: {to_table: :usage_credits_wallets}
       t.bigint :amount, null: false
       t.string :category, null: false
       t.datetime :expires_at
-      t.references :transfer, type: foreign_key_type, foreign_key: { to_table: :usage_credits_transfers }
+      t.references :transfer, type: foreign_key_type, foreign_key: {to_table: :usage_credits_transfers}
       t.references :fulfillment, type: foreign_key_type
       t.send(json_column_type, :metadata, null: false, default: json_column_default)
 
@@ -40,8 +40,11 @@ class CreateUsageCreditsTables < ActiveRecord::Migration[7.2]
     end
 
     create_table :usage_credits_fulfillments, id: primary_key_type do |t|
-      t.references :wallet, null: false, type: foreign_key_type, foreign_key: { to_table: :usage_credits_wallets }
-      t.references :source, polymorphic: true, type: foreign_key_type
+      t.references :wallet, null: false, type: foreign_key_type, foreign_key: {to_table: :usage_credits_wallets}
+      t.references :source,
+        polymorphic: true,
+        type: foreign_key_type,
+        index: {unique: true, name: "index_usage_credits_fulfillments_on_source"}
       t.bigint :credits_last_fulfillment, null: false    # Credits given in last fulfillment
       t.string :fulfillment_type, null: false             # What kind of fulfillment is this? (credit_pack / subscription)
       t.datetime :last_fulfilled_at                       # When last fulfilled
@@ -52,24 +55,43 @@ class CreateUsageCreditsTables < ActiveRecord::Migration[7.2]
 
       t.timestamps
     end
+    add_foreign_key :usage_credits_transactions,
+      :usage_credits_fulfillments,
+      column: :fulfillment_id
 
-    # Allocations are the basis for the bucket-based, FIFO with expiration inventory-like system
+    # Allocations are the basis for the bucket-based, first-expiring-first-out inventory system
     create_table :usage_credits_allocations, id: primary_key_type do |t|
       # The "spend" transaction (negative) that is *using* credits
       t.references :transaction, null: false, type: foreign_key_type,
-                                 foreign_key: { to_table: :usage_credits_transactions },
-                                 index: { name: "index_allocations_on_transaction_id" }
+        foreign_key: {to_table: :usage_credits_transactions},
+        index: {name: "index_usage_credits_allocations_on_transaction_id"}
 
       # The "source" transaction (positive) from which the credits are drawn
       t.references :source_transaction, null: false, type: foreign_key_type,
-                                        foreign_key: { to_table: :usage_credits_transactions },
-                                        index: { name: "index_usage_credits_allocations_on_source_tx_id" }
+        foreign_key: {to_table: :usage_credits_transactions},
+        index: {name: "index_usage_credits_allocations_on_source_tx_id"}
 
       # How many credits were allocated from that particular source
       t.bigint :amount, null: false
 
       t.timestamps
     end
+
+    add_check_constraint :usage_credits_transfers,
+      "amount > 0",
+      name: "check_usage_credits_transfers_amount_positive"
+    add_check_constraint :usage_credits_transfers,
+      "from_wallet_id <> to_wallet_id",
+      name: "check_usage_credits_transfers_distinct_wallets"
+    add_check_constraint :usage_credits_transactions,
+      "amount <> 0",
+      name: "check_usage_credits_transactions_amount_nonzero"
+    add_check_constraint :usage_credits_allocations,
+      "amount > 0",
+      name: "check_usage_credits_allocations_amount_positive"
+    add_check_constraint :usage_credits_fulfillments,
+      "credits_last_fulfillment >= 0",
+      name: "check_usage_credits_fulfillments_credits_nonnegative"
 
     # Transaction indexes
     add_index :usage_credits_transactions, :category
@@ -99,7 +121,7 @@ class CreateUsageCreditsTables < ActiveRecord::Migration[7.2]
   end
 
   def json_column_type
-    return :jsonb if connection.adapter_name.downcase.include?('postgresql')
+    return :jsonb if connection.adapter_name.downcase.include?("postgresql")
     :json
   end
 
@@ -107,7 +129,7 @@ class CreateUsageCreditsTables < ActiveRecord::Migration[7.2]
   # Returns an empty hash default for SQLite/PostgreSQL, nil for MySQL.
   # Models handle nil metadata gracefully by defaulting to {} in their accessors.
   def json_column_default
-    return nil if connection.adapter_name.downcase.include?('mysql')
+    return nil if connection.adapter_name.downcase.include?("mysql")
     {}
   end
 end

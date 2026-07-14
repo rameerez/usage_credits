@@ -5,51 +5,38 @@ module UsageCredits
   # including credit pack purchases and subscriptions.
   # Some of this credit-giving actions are repeating in nature (i.e.: subscriptions), some are not (one-time purchases)
   class Fulfillment < ApplicationRecord
+    include Wallets::HasMetadata
+
     self.table_name = "usage_credits_fulfillments"
 
     belongs_to :wallet
     belongs_to :source, polymorphic: true, optional: true
 
     validates :wallet, presence: true
-    validates :source_id, uniqueness: { scope: :source_type }, if: :source_id?
-    validates :credits_last_fulfillment, presence: true, numericality: { only_integer: true }
-    validates :fulfillment_type, presence: true
+    validates :source_id, uniqueness: {scope: :source_type}, if: :source_id?
+    validates :source_type, presence: true, if: :source_id?
+    validates :source_id, presence: true, if: :source_type?
+    validates :credits_last_fulfillment,
+      presence: true,
+      numericality: {only_integer: true, greater_than_or_equal_to: 0}
+    validates :fulfillment_type,
+      presence: true,
+      inclusion: {in: %w[subscription credit_pack manual]}
     validate :valid_fulfillment_period_format, if: :fulfillment_period?
-    validates :next_fulfillment_at, comparison: { greater_than: :last_fulfilled_at },
+    validates :next_fulfillment_at, comparison: {greater_than: :last_fulfilled_at},
       if: -> { recurring? && last_fulfilled_at.present? && next_fulfillment_at.present? }
-
-    # =========================================
-    # Metadata Handling
-    # =========================================
-
-    # Sync in-place modifications to metadata before saving
-    before_save :sync_metadata_cache
-
-    # Get metadata with indifferent access (string/symbol keys)
-    # Returns empty hash if nil (for MySQL compatibility where JSON columns can't have defaults)
-    def metadata
-      @indifferent_metadata ||= ActiveSupport::HashWithIndifferentAccess.new(super || {})
-    end
-
-    # Set metadata, ensuring consistent storage format
-    def metadata=(hash)
-      @indifferent_metadata = nil  # Clear cache
-      super(hash.is_a?(Hash) ? hash.to_h : {})
-    end
-
-    # Clear metadata cache on reload to ensure fresh data from database
-    def reload(*)
-      @indifferent_metadata = nil
-      super
-    end
 
     # Only get fulfillments that are due AND not stopped
     scope :due_for_fulfillment, -> {
-      where("next_fulfillment_at <= ?", Time.current)
-        .where("stops_at IS NULL OR stops_at > ?", Time.current)
-        .where("last_fulfilled_at IS NULL OR next_fulfillment_at > last_fulfilled_at")
+      table = arel_table
+      where(table[:next_fulfillment_at].lteq(Time.current))
+        .where(table[:stops_at].eq(nil).or(table[:stops_at].gt(Time.current)))
+        .where(table[:last_fulfilled_at].eq(nil).or(table[:next_fulfillment_at].gt(table[:last_fulfilled_at])))
     }
-    scope :active, -> { where("stops_at IS NULL OR stops_at > ?", Time.current) }
+    scope :active, -> {
+      table = arel_table
+      where(table[:stops_at].eq(nil).or(table[:stops_at].gt(Time.current)))
+    }
 
     # Alias for backward compatibility - will be removed in next version
     scope :pending, -> { due_for_fulfillment }
@@ -83,26 +70,15 @@ module UsageCredits
       # we use current time as the base to avoid scheduling multiple rapid fulfillments.
       # This ensures smooth recovery from missed fulfillments by scheduling the next one
       # from the current time rather than the missed fulfillment time.
-      base_time = next_fulfillment_at > Time.current ? next_fulfillment_at : Time.current
+      base_time = (next_fulfillment_at > Time.current) ? next_fulfillment_at : Time.current
 
-      base_time + UsageCredits::PeriodParser.parse_period(fulfillment_period)
+      base_time + UsageCredits::PeriodParser.parse_persisted_period(fulfillment_period)
     end
 
     private
 
-    # Sync in-place modifications to the cached metadata back to the attribute
-    # This ensures changes like `metadata["key"] = "value"` are persisted on save
-    # Also ensures metadata is never null for MySQL compatibility (JSON columns can't have defaults)
-    def sync_metadata_cache
-      if @indifferent_metadata
-        write_attribute(:metadata, @indifferent_metadata.to_h)
-      elsif read_attribute(:metadata).nil?
-        write_attribute(:metadata, {})
-      end
-    end
-
     def valid_fulfillment_period_format
-      unless UsageCredits::PeriodParser.valid_period_format?(fulfillment_period)
+      unless UsageCredits::PeriodParser.valid_persisted_period_format?(fulfillment_period)
         errors.add(:fulfillment_period, "must be in format like '2.months' or '15.days' and use supported units")
       end
     end
@@ -122,6 +98,5 @@ module UsageCredits
         errors.add(:next_fulfillment_at, "should be nil for non-recurring fulfillments") unless new_record?
       end
     end
-
   end
 end

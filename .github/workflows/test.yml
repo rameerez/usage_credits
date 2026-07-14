@@ -22,17 +22,28 @@ jobs:
       matrix:
         ruby_version: ["3.3", "3.4", "4.0"]
         gemfile:
-          - Gemfile
-          - gemfiles/rails_7.2.gemfile
-          - gemfiles/rails_8.1.gemfile
-          - gemfiles/pay_8.3.gemfile
-          - gemfiles/pay_9.0.gemfile
-          - gemfiles/pay_10.0.gemfile
-          - gemfiles/pay_11.0.gemfile
+          - path: Gemfile
+            label: default
+          - path: gemfiles/rails_7.2.gemfile
+            label: rails-7.2
+          - path: gemfiles/rails_8.1.gemfile
+            label: rails-8.1
+          - path: gemfiles/pay_minimum.gemfile
+            label: pay-minimum
+        include:
+          # Exercise both Rails boundaries on the minimum secure Ruby line.
+          - ruby_version: "3.2"
+            gemfile:
+              path: gemfiles/rails_7.2.gemfile
+              label: rails-7.2
+          - ruby_version: "3.2"
+            gemfile:
+              path: gemfiles/rails_8.1.gemfile
+              label: rails-8.1
 
     env:
       RAILS_ENV: test
-      BUNDLE_GEMFILE: ${{ github.workspace }}/${{ matrix.gemfile }}
+      BUNDLE_GEMFILE: ${{ github.workspace }}/${{ matrix.gemfile.path }}
 
     steps:
       - name: Checkout code
@@ -53,9 +64,41 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-sqlite-ruby-${{ matrix.ruby_version }}-${{ matrix.gemfile }}
+          name: test-results-sqlite-ruby-${{ matrix.ruby_version }}-${{ matrix.gemfile.label }}
           path: test/reports/
           retention-days: 7
+
+  security:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        gemfile:
+          - path: Gemfile
+            label: default
+          - path: gemfiles/rails_7.2.gemfile
+            label: rails-7.2
+          - path: gemfiles/rails_8.1.gemfile
+            label: rails-8.1
+          - path: gemfiles/pay_minimum.gemfile
+            label: pay-minimum
+
+    env:
+      BUNDLE_GEMFILE: ${{ github.workspace }}/${{ matrix.gemfile.path }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+
+      - name: Audit locked dependencies
+        run: bundle exec bundle-audit check --update
 
   # PostgreSQL compatibility tests
   postgres:

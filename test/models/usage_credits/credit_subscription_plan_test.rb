@@ -179,6 +179,14 @@ class UsageCredits::CreditSubscriptionPlanTest < ActiveSupport::TestCase
     assert_equal 0, plan.credit_expiration_period
   end
 
+  test "expire_after rejects negative, fractional, and non-numeric periods" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:test)
+
+    assert_raises(ArgumentError) { plan.expire_after(-1.second) }
+    assert_raises(ArgumentError) { plan.expire_after(0.5.seconds) }
+    assert_raises(ArgumentError) { plan.expire_after("1.day") }
+  end
+
   # ========================================
   # DSL - METADATA
   # ========================================
@@ -341,7 +349,7 @@ class UsageCredits::CreditSubscriptionPlanTest < ActiveSupport::TestCase
     assert_equal true, metadata[:rollover_enabled]
     assert_equal true, metadata[:expire_credits_on_cancel]
     assert_equal 30.days.to_i, metadata[:credit_expiration_period]
-    assert_equal({ tier: "premium" }, metadata[:metadata])
+    assert_equal({tier: "premium"}, metadata[:metadata])
   end
 
   # ========================================
@@ -557,14 +565,15 @@ class UsageCredits::CreditSubscriptionPlanTest < ActiveSupport::TestCase
       assert_equal 1, args[:line_items].first[:quantity]
       assert args[:subscription_data].present?, "subscription_data should be present"
       assert args[:subscription_data][:metadata].present?, "subscription_data metadata should be present"
+      assert_equal "price_123", args[:subscription_data][:metadata][:processor_plan]
 
       # Verify metadata contains all required fields
       metadata = args[:subscription_data][:metadata]
       assert_equal "credit_subscription", metadata[:purchase_type]
-      assert_equal :premium, metadata[:subscription_name]
-      assert_equal 1000, metadata[:credits_per_period]
-      assert_equal 200, metadata[:signup_bonus_credits]
-      assert_equal 50, metadata[:trial_credits]
+      assert_equal "premium", metadata[:subscription_name]
+      assert_equal "1000", metadata[:credits_per_period]
+      assert_equal "200", metadata[:signup_bonus_credits]
+      assert_equal "50", metadata[:trial_credits]
 
       true
     end
@@ -654,14 +663,14 @@ class UsageCredits::CreditSubscriptionPlanTest < ActiveSupport::TestCase
 
       # Verify all configuration is included
       assert_equal "credit_subscription", metadata[:purchase_type]
-      assert_equal :enterprise, metadata[:subscription_name]
-      assert_equal 10_000, metadata[:credits_per_period]
-      assert_equal 1_000, metadata[:signup_bonus_credits]
-      assert_equal 500, metadata[:trial_credits]
-      assert_equal true, metadata[:rollover_enabled]
-      assert_equal true, metadata[:expire_credits_on_cancel]
-      assert_equal 30.days.to_i, metadata[:credit_expiration_period]
-      assert_equal({ tier: "enterprise", max_users: 100 }, metadata[:metadata])
+      assert_equal "enterprise", metadata[:subscription_name]
+      assert_equal "10000", metadata[:credits_per_period]
+      assert_equal "1000", metadata[:signup_bonus_credits]
+      assert_equal "500", metadata[:trial_credits]
+      assert_equal "true", metadata[:rollover_enabled]
+      assert_equal "true", metadata[:expire_credits_on_cancel]
+      assert_equal 30.days.to_i.to_s, metadata[:credit_expiration_period]
+      assert_equal({"tier" => "enterprise", "max_users" => 100}, ActiveSupport::JSON.decode(metadata[:metadata]))
 
       true
     end
@@ -686,7 +695,7 @@ class UsageCredits::CreditSubscriptionPlanTest < ActiveSupport::TestCase
     plan.gives(1000).every(:month)
     plan.stripe_price month: "price_monthly", year: "price_yearly"
 
-    assert_equal({ month: "price_monthly", year: "price_yearly" }, plan.stripe_price)
+    assert_equal({month: "price_monthly", year: "price_yearly"}, plan.stripe_price)
   end
 
   test "stripe_price getter returns specific period from multi-period plan" do
@@ -724,14 +733,14 @@ class UsageCredits::CreditSubscriptionPlanTest < ActiveSupport::TestCase
     plan = UsageCredits::CreditSubscriptionPlan.new(:pro)
     plan.stripe_price month: "price_m", year: "price_y"
 
-    assert_equal({ month: "price_m", year: "price_y" }, plan.stripe_prices)
+    assert_equal({month: "price_m", year: "price_y"}, plan.stripe_prices)
   end
 
   test "stripe_prices wraps single price in hash with :default key" do
     plan = UsageCredits::CreditSubscriptionPlan.new(:basic)
     plan.stripe_price "price_single"
 
-    assert_equal({ default: "price_single" }, plan.stripe_prices)
+    assert_equal({default: "price_single"}, plan.stripe_prices)
   end
 
   test "stripe_prices returns empty hash when no prices set" do
@@ -748,7 +757,7 @@ class UsageCredits::CreditSubscriptionPlanTest < ActiveSupport::TestCase
     # Keys should be normalized to symbols for consistent lookup
     assert_equal "price_m", plan.stripe_price(:month)
     assert_equal "price_y", plan.stripe_price(:year)
-    assert_equal({ month: "price_m", year: "price_y" }, plan.stripe_price)
+    assert_equal({month: "price_m", year: "price_y"}, plan.stripe_price)
   end
 
   test "stripe_price rejects empty hash" do
@@ -763,14 +772,14 @@ class UsageCredits::CreditSubscriptionPlanTest < ActiveSupport::TestCase
 
   test "processor_plan accepts hash for multi-period storage" do
     plan = UsageCredits::CreditSubscriptionPlan.new(:pro)
-    plan.processor_plan(:stripe, { month: "price_m", year: "price_y" })
+    plan.processor_plan(:stripe, {month: "price_m", year: "price_y"})
 
-    assert_equal({ month: "price_m", year: "price_y" }, plan.plan_id_for(:stripe))
+    assert_equal({month: "price_m", year: "price_y"}, plan.plan_id_for(:stripe))
   end
 
   test "plan_id_for with period returns specific period price" do
     plan = UsageCredits::CreditSubscriptionPlan.new(:pro)
-    plan.processor_plan(:stripe, { month: "price_m", year: "price_y" })
+    plan.processor_plan(:stripe, {month: "price_m", year: "price_y"})
 
     assert_equal "price_m", plan.plan_id_for(:stripe, period: :month)
     assert_equal "price_y", plan.plan_id_for(:stripe, period: :year)
@@ -967,6 +976,14 @@ class UsageCredits::CreditSubscriptionPlanTest < ActiveSupport::TestCase
     multi = UsageCredits.find_subscription_plan(:multi_price)
 
     assert_equal "price_single", single.stripe_price
-    assert_equal({ month: "price_m", year: "price_y" }, multi.stripe_price)
+    assert_equal({month: "price_m", year: "price_y"}, multi.stripe_price)
+  end
+
+  test "credit setters reject fractional or non-finite ledger values" do
+    plan = UsageCredits::CreditSubscriptionPlan.new(:strict_values)
+
+    assert_raises(ArgumentError) { plan.gives(10.5) }
+    assert_raises(ArgumentError) { plan.signup_bonus(Float::NAN) }
+    assert_raises(ArgumentError) { plan.trial_includes(Float::INFINITY) }
   end
 end

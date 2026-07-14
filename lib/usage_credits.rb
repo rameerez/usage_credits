@@ -5,6 +5,7 @@
 
 require "rails"
 require "active_record"
+require "active_job"
 require "pay"
 require "wallets"
 require "active_support/all"
@@ -14,6 +15,8 @@ require "active_support/all"
 # 1. Core helpers
 require "usage_credits/helpers/credit_calculator"   # Centralized credit rounding
 require "usage_credits/helpers/period_parser"       # Parse fulfillment periods like `:monthly` to `1.month`
+require "usage_credits/helpers/processor_metadata"  # Payment metadata limits and serialization
+require "usage_credits/subscription_terms"          # Immutable processor subscription snapshots
 require "usage_credits/core_ext/numeric"            # Numeric extension to write `10.credits` in our DSL
 
 # 2. Cost calculation
@@ -55,8 +58,8 @@ require "usage_credits/models/credit_pack"
 require "usage_credits/models/credit_subscription_plan"
 
 # 7. Jobs
-require "usage_credits/services/fulfillment_service.rb"
-require "usage_credits/jobs/fulfillment_job.rb"
+require "usage_credits/services/fulfillment_service"
+require "usage_credits/jobs/fulfillment_job"
 
 # Main module that serves as the primary interface to the gem.
 # Most methods here delegate to Configuration, which is the single source of truth for all config in the initializer
@@ -161,7 +164,6 @@ module UsageCredits
         notify_low_balance(params[:wallet]&.owner)
       end
     end
-
   end
 end
 

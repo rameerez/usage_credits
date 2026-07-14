@@ -18,7 +18,7 @@ class UsageCredits::TransactionTest < ActiveSupport::TestCase
       wallet: wallet,
       amount: 100,
       category: "signup_bonus",
-      metadata: { source: "test" }
+      metadata: {source: "test"}
     )
 
     assert transaction.persisted?
@@ -45,22 +45,22 @@ class UsageCredits::TransactionTest < ActiveSupport::TestCase
   # ========================================
 
   # NOTE: Rails enforces belongs_to at DB level with foreign keys, not at validation level
-  #test "requires wallet" do
+  # test "requires wallet" do
   #  transaction = UsageCredits::Transaction.new(amount: 100, category: "signup_bonus")
   #  assert_not transaction.valid?
   #  assert_includes transaction.errors[:wallet], "must exist"
-  #end
+  # end
 
   # NOTE: Amount validation triggers other validations that expect amount to be present
   # Commenting out since the model's internal validations have dependencies
-  #test "requires amount" do
+  # test "requires amount" do
   #  transaction = UsageCredits::Transaction.new(
   #    wallet: usage_credits_wallets(:rich_wallet),
   #    category: "signup_bonus"
   #  )
   #  assert_not transaction.valid?
   #  assert_includes transaction.errors[:amount], "can't be blank"
-  #end
+  # end
 
   test "requires category" do
     transaction = UsageCredits::Transaction.new(
@@ -307,6 +307,16 @@ class UsageCredits::TransactionTest < ActiveSupport::TestCase
     end
   end
 
+  test "credit direction scopes remain unambiguous when joining transfers" do
+    assert_nothing_raised do
+      UsageCredits::Transaction
+        .left_joins(:transfer)
+        .credits_added
+        .credits_deducted
+        .load
+    end
+  end
+
   test "not_expired scope excludes expired" do
     not_expired = UsageCredits::Transaction.not_expired
 
@@ -428,9 +438,9 @@ class UsageCredits::TransactionTest < ActiveSupport::TestCase
     wallet = usage_credits_wallets(:rich_wallet)
     complex_metadata = {
       operation: "process_video",
-      params: { size_mb: 100, format: "mp4" },
+      params: {size_mb: 100, format: "mp4"},
       executed_at: Time.current.iso8601,
-      nested: { key: "value" }
+      nested: {key: "value"}
     }
 
     transaction = UsageCredits::Transaction.create!(
@@ -477,7 +487,7 @@ class UsageCredits::TransactionTest < ActiveSupport::TestCase
 
   test "handles very long metadata JSON" do
     wallet = usage_credits_wallets(:rich_wallet)
-    long_metadata = { data: "x" * 10000 }
+    long_metadata = {data: "x" * 10000}
 
     transaction = UsageCredits::Transaction.create!(
       wallet: wallet,
@@ -513,7 +523,7 @@ class UsageCredits::TransactionTest < ActiveSupport::TestCase
   end
 
   # NOTE: This test doesn't have clear expectations - commenting out
-  #test "transaction with zero amount is allowed by model but might be validated elsewhere" do
+  # test "transaction with zero amount is allowed by model but might be validated elsewhere" do
   #  wallet = usage_credits_wallets(:rich_wallet)
   #
   #  # The model itself might allow 0, but business logic should prevent it
@@ -525,7 +535,7 @@ class UsageCredits::TransactionTest < ActiveSupport::TestCase
   #
   #  # Test that it's either invalid or we document that 0-amount is not allowed
   #  # Depending on your validation rules
-  #end
+  # end
 
   test "transaction timestamps are set correctly" do
     wallet = usage_credits_wallets(:rich_wallet)
@@ -605,7 +615,7 @@ class UsageCredits::TransactionTest < ActiveSupport::TestCase
       wallet: wallet,
       amount: -10,
       category: "operation_charge",
-      metadata: { operation: "process_video", cost: 10 }
+      metadata: {operation: "process_video", cost: 10}
     )
 
     description = transaction.description
@@ -719,7 +729,7 @@ class UsageCredits::TransactionTest < ActiveSupport::TestCase
       wallet: wallet,
       amount: 100,
       category: "signup_bonus",
-      metadata: { balance_after: 500 }
+      metadata: {balance_after: 500}
     )
 
     assert_equal 500, transaction.balance_after
@@ -745,7 +755,7 @@ class UsageCredits::TransactionTest < ActiveSupport::TestCase
       wallet: wallet,
       amount: 100,
       category: "signup_bonus",
-      metadata: { balance_before: 400, balance_after: 500 }
+      metadata: {balance_before: 400, balance_after: 500}
     )
 
     assert_equal 400, transaction.balance_before
@@ -791,7 +801,7 @@ class UsageCredits::TransactionTest < ActiveSupport::TestCase
     wallet.give_credits(100, reason: "initial")
 
     # Spend 30 credits
-    spend_tx = wallet.deduct_credits(30, category: "operation_charge", metadata: { test: true })
+    spend_tx = wallet.deduct_credits(30, category: "operation_charge", metadata: {test: true})
 
     assert_equal 70, spend_tx.balance_after
     assert_equal 100, spend_tx.balance_before
@@ -859,7 +869,7 @@ class UsageCredits::TransactionTest < ActiveSupport::TestCase
       wallet: wallet,
       amount: 100,
       category: "signup_bonus",
-      metadata: { balance_after: 500 }
+      metadata: {balance_after: 500}
     )
 
     assert_equal "500 tokens", transaction.formatted_balance_after
@@ -1080,7 +1090,7 @@ class UsageCredits::TransactionTest < ActiveSupport::TestCase
     wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
     wallet.give_credits(100, reason: "initial")
 
-    custom_metadata = { custom_key: "custom_value", tracking_id: "abc123" }
+    custom_metadata = {custom_key: "custom_value", tracking_id: "abc123"}
     spend_tx = wallet.deduct_credits(30, category: "operation_charge", metadata: custom_metadata)
 
     # Both custom metadata AND balance_after should be present

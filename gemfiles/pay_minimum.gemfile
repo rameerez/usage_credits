@@ -3,14 +3,15 @@
 source "https://rubygems.org"
 
 gem "rake", "~> 13.0"
-gem "pay", "~> 11.0"
+gem "pay", "= 11.6.2"
 gem "stripe", "~> 19.0"
 gem "rails", "~> 8.1.0"
 
 group :development do
   gem "appraisal"
+  gem "bundler-audit", "~> 0.9"
   gem "web-console"
-  gem "standard"
+  gem "standard", ">= 1.35.1"
   gem "rubocop", "~> 1.0"
   gem "rubocop-minitest", "~> 0.35"
   gem "rubocop-performance", "~> 1.0"
@@ -27,7 +28,7 @@ group :test do
   gem "paddle", "~> 2.6"
   gem "prawn"
   gem "receipts"
-  gem "sqlite3"
+  gem "sqlite3", ">= 2.9.5"
   gem "pg"
   gem "mysql2"
   gem "bootsnap", require: false

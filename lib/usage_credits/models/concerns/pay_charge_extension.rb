@@ -11,7 +11,7 @@ module UsageCredits
 
     included do
       after_initialize :init_metadata
-      after_commit :fulfill_credit_pack!
+      after_commit :fulfill_credit_pack!, on: [:create, :update]
       after_commit :handle_refund!, on: :update, if: :refund_needed?
     end
 
@@ -40,9 +40,9 @@ module UsageCredits
         return amount_captured == amount.to_i && amount.to_i.positive?
       end
 
-      # For non-Stripe charges, we assume Pay only creates charges after successful payment
-      # This is a reasonable assumption based on Pay gem's behavior
-      # TODO: Implement for more payment processors if needed
+      # Pay's non-Stripe adapters persist Pay::Charge rows only after their
+      # processor-specific success event (for example, Paddle Billing ignores
+      # every transaction whose status is not "completed").
       true
     end
 
@@ -95,6 +95,45 @@ module UsageCredits
       metadata["pack_name"]
     end
 
+    # Checkout metadata is the immutable commercial snapshot: it records what
+    # the customer bought at payment time. Runtime configuration may be edited
+    # or the pack may be removed before a delayed webhook/refund arrives, so it
+    # must only be a legacy fallback, never the source of truth for quantities.
+    def credit_pack_snapshot
+      pack_name = pack_identifier.to_s
+      pack = UsageCredits.find_pack(pack_name.to_sym)
+
+      credits = strict_metadata_integer("credits", fallback: pack&.credits)
+      bonus_credits = strict_metadata_integer("bonus_credits", fallback: pack&.bonus_credits || 0)
+      return if credits.nil? || bonus_credits.nil? || !credits.positive? || bonus_credits.negative?
+
+      snapshot = {
+        pack_name: pack_name,
+        credits: credits,
+        bonus_credits: bonus_credits,
+        total_credits: credits + bonus_credits,
+        price_cents: strict_metadata_integer("price_cents", fallback: pack&.price_cents),
+        price_currency: (metadata["price_currency"].presence || pack&.price_currency || currency).to_s.upcase
+      }
+
+      if pack && (pack.credits != credits || pack.bonus_credits != bonus_credits)
+        Rails.logger.warn "Credit pack #{pack_name} changed after charge #{id}; honoring checkout snapshot (#{credits} + #{bonus_credits} credits)"
+      end
+
+      snapshot
+    rescue ArgumentError => e
+      Rails.logger.error "Invalid credit pack metadata for charge #{id}: #{e.message}"
+      nil
+    end
+
+    def strict_metadata_integer(key, fallback: nil)
+      value = metadata[key]
+      value = fallback if value.nil? || (value.respond_to?(:empty?) && value.empty?)
+      return nil if value.nil?
+
+      Wallets::WholeNumber.parse(value, name: key, allow_string: true)
+    end
+
     def credits_already_fulfilled?
       # First check if there's a fulfillment record for this charge
       return true if UsageCredits::Fulfillment.exists?(source: self)
@@ -106,10 +145,10 @@ module UsageCredits
       return false unless transactions.present?
 
       begin
-        adapter = ActiveRecord::Base.connection.adapter_name.downcase
+        adapter = transactions.connection.adapter_name.downcase
         if adapter.include?("postgres")
           # PostgreSQL supports the @> JSON containment operator.
-          transactions.exists?(['metadata @> ?', { purchase_charge_id: id, credits_fulfilled: true }.to_json])
+          transactions.exists?(["metadata @> ?", {purchase_charge_id: id, credits_fulfilled: true}.to_json])
         elsif adapter.include?("mysql")
           # MySQL: JSON_EXTRACT returns JSON values, use CAST for proper comparison
           transactions.exists?([
@@ -128,7 +167,11 @@ module UsageCredits
             if tx.metadata.is_a?(Hash)
               tx.metadata
             else
-              JSON.parse(tx.metadata) rescue {}
+              begin
+                JSON.parse(tx.metadata)
+              rescue
+                {}
+              end
             end
           data["purchase_charge_id"].to_i == id.to_i && data["credits_fulfilled"].to_s == "true"
         end
@@ -137,7 +180,7 @@ module UsageCredits
 
     def fulfill_credit_pack!
       return unless is_credit_pack_purchase?
-      return unless pack_identifier
+      return unless pack_identifier.present?
       return unless has_valid_wallet?
       return unless succeeded?
       return if refunded?
@@ -145,76 +188,79 @@ module UsageCredits
 
       Rails.logger.info "Starting to process charge #{id} to fulfill credits"
 
-      pack_name = pack_identifier.to_sym
-      pack = UsageCredits.find_pack(pack_name)
-
-      unless pack
-        Rails.logger.error "Credit pack not found: #{pack_name} for charge #{id}"
+      snapshot = credit_pack_snapshot
+      unless snapshot
+        Rails.logger.error "Credit pack snapshot is missing or invalid for charge #{id}"
         return
       end
 
-      # Validate that the pack details match if they're provided in metadata
-      if metadata["credits"].present?
-        expected_credits = metadata["credits"].to_i
-        if expected_credits != pack.credits
-          Rails.logger.error "Credit pack mismatch: expected #{expected_credits} credits but pack #{pack_name} provides #{pack.credits}"
-          return
-        end
-      end
-
       begin
+        wallet = credit_wallet
         credit_transaction = nil
+        fulfillment = nil
+        fulfilled = false
 
-        # Wrap in transaction to ensure atomicity - if Fulfillment.create! fails,
-        # the credits should NOT be added. This is critical for money handling.
-        ActiveRecord::Base.transaction do
-          # Add credits to the user's wallet
-          credit_transaction = credit_wallet.add_credits(
-            pack.total_credits,
+        # The wallet lock serializes duplicate webhook deliveries for the same
+        # owner. Re-check idempotency inside that lock; the database's unique
+        # source index is the final guard against duplicate fulfillment rows.
+        wallet.with_lock do
+          next if UsageCredits::Fulfillment.exists?(source: self)
+
+          fulfilled_at = Time.current
+          fulfillment = Fulfillment.create!(
+            wallet: wallet,
+            source: self,
+            fulfillment_type: "credit_pack",
+            credits_last_fulfillment: snapshot.fetch(:total_credits),
+            last_fulfilled_at: fulfilled_at,
+            next_fulfillment_at: nil,
+            metadata: snapshot.merge(
+              purchase_charge_id: id,
+              purchased_at: created_at
+            )
+          )
+
+          credit_transaction = wallet.add_credits(
+            snapshot.fetch(:total_credits),
             category: "credit_pack_purchase",
+            fulfillment: fulfillment,
             metadata: {
               purchase_charge_id: id,
               purchased_at: created_at,
               credits_fulfilled: true,
-              fulfilled_at: Time.current,
-              **pack.base_metadata
+              fulfilled_at: fulfilled_at,
+              **snapshot
             }
           )
-
-          # Also create a one-time fulfillment record for audit and consistency
-          # This Fulfillment record won't get picked up by the fulfillment job because `next_fulfillment_at` is nil
-          Fulfillment.create!(
-            wallet: credit_wallet,
-            source: self, # the Pay::Charge
-            fulfillment_type: "credit_pack",
-            credits_last_fulfillment: pack.total_credits,
-            last_fulfilled_at: Time.current,
-            next_fulfillment_at: nil, # so it doesn't get re-processed
-            metadata: {
-              purchase_charge_id: id,
-              purchased_at: created_at,
-              **pack.base_metadata
-            }
-          )
+          fulfilled = true
         end
+
+        return unless fulfilled
 
         # Dispatch credit_pack_purchased callback after successful fulfillment
         # Note: credits_added callback was already fired by add_credits
-        UsageCredits::Callbacks.dispatch(:credit_pack_purchased,
-          wallet: credit_wallet,
-          amount: pack.total_credits,
-          transaction: credit_transaction,
-          metadata: {
-            credit_pack_name: pack_name,
-            credit_pack: pack,
-            pay_charge: self,
-            price_cents: pack.price_cents
-          }
-        )
+        ActiveRecord.after_all_transactions_commit do
+          UsageCredits::Callbacks.dispatch(:credit_pack_purchased,
+            wallet: wallet,
+            amount: snapshot.fetch(:total_credits),
+            transaction: credit_transaction,
+            metadata: {
+              credit_pack_name: snapshot.fetch(:pack_name).to_sym,
+              credit_pack: UsageCredits.find_pack(snapshot.fetch(:pack_name).to_sym),
+              pay_charge: self,
+              fulfillment: fulfillment,
+              price_cents: snapshot[:price_cents]
+            })
+        end
 
-        Rails.logger.info "Successfully fulfilled credit pack #{pack_name} for charge #{id}"
-      rescue StandardError => e
-        Rails.logger.error "Failed to fulfill credit pack #{pack_name} for charge #{id}: #{e.message}"
+        Rails.logger.info "Successfully fulfilled credit pack #{snapshot.fetch(:pack_name)} for charge #{id}"
+      rescue ActiveRecord::RecordNotUnique
+        # A concurrent delivery committed the unique source row first. Treat
+        # that committed fulfillment as the idempotent winner.
+        return if UsageCredits::Fulfillment.exists?(source: self)
+        raise
+      rescue => e
+        Rails.logger.error "Failed to fulfill credit pack #{pack_identifier} for charge #{id}: #{e.message}"
         raise
       end
     end
@@ -227,29 +273,29 @@ module UsageCredits
 
       # Try database-level filtering first (more efficient)
       begin
-        adapter = ActiveRecord::Base.connection.adapter_name.downcase
-        if adapter.include?("postgres")
-          # PostgreSQL supports the @> JSON containment operator
-          filtered = transactions.where(
-            "metadata @> ?",
-            { refunded_purchase_charge_id: id, credits_refunded: true }.to_json
-          )
-          return filtered.sum { |tx| -tx.amount }
-        elsif adapter.include?("mysql")
-          # MySQL: JSON_EXTRACT returns JSON values, use CAST for proper comparison
-          filtered = transactions.where(
-            "JSON_EXTRACT(metadata, '$.refunded_purchase_charge_id') = CAST(? AS JSON) AND JSON_EXTRACT(metadata, '$.credits_refunded') = CAST('true' AS JSON)",
-            id
-          )
-          return filtered.sum { |tx| -tx.amount }
-        else
-          # SQLite: json_extract returns SQL values (true becomes 1)
-          filtered = transactions.where(
-            "json_extract(metadata, '$.refunded_purchase_charge_id') = ? AND json_extract(metadata, '$.credits_refunded') = ?",
-            id, 1
-          )
-          return filtered.sum { |tx| -tx.amount }
-        end
+        adapter = transactions.connection.adapter_name.downcase
+        filtered =
+          if adapter.include?("postgres")
+            # PostgreSQL supports the @> JSON containment operator
+            transactions.where(
+              "metadata @> ?",
+              {refunded_purchase_charge_id: id, credits_refunded: true}.to_json
+            )
+          elsif adapter.include?("mysql")
+            # MySQL: JSON_EXTRACT returns JSON values, use CAST for proper comparison
+            transactions.where(
+              "JSON_EXTRACT(metadata, '$.refunded_purchase_charge_id') = CAST(? AS JSON) AND JSON_EXTRACT(metadata, '$.credits_refunded') = CAST('true' AS JSON)",
+              id
+            )
+          else
+            # SQLite: json_extract returns SQL values (true becomes 1)
+            transactions.where(
+              "json_extract(metadata, '$.refunded_purchase_charge_id') = ? AND json_extract(metadata, '$.credits_refunded') = ?",
+              id, 1
+            )
+          end
+
+        return filtered.sum { |tx| -tx.amount }
       rescue ActiveRecord::StatementInvalid => e
         Rails.logger.warn "JSON query failed, falling back to Ruby filtering: #{e.message}"
       end
@@ -257,7 +303,11 @@ module UsageCredits
       # Fallback: filter in Ruby (for databases without JSON support)
       # Sum in a single pass to avoid multiple iterations
       transactions.sum do |tx|
-        data = tx.metadata.is_a?(Hash) ? tx.metadata : (JSON.parse(tx.metadata) rescue {})
+        data = tx.metadata.is_a?(Hash) ? tx.metadata : begin
+          JSON.parse(tx.metadata)
+        rescue
+          {}
+        end
         if data["refunded_purchase_charge_id"].to_i == id.to_i && data["credits_refunded"].to_s == "true"
           -tx.amount
         else
@@ -266,30 +316,29 @@ module UsageCredits
       end
     end
 
-    def credits_already_refunded?
-      # Check if any refund was already processed for this charge
-      credits_previously_refunded > 0
-    end
-
-    def fully_refunded?
-      # Check if a full refund (100%) has already been processed
-      pack = UsageCredits.find_pack(pack_identifier&.to_sym)
-      return false unless pack
-      credits_previously_refunded >= pack.total_credits
-    end
-
     def handle_refund!
       # Guard clauses for required data and state
       return unless refunded?
-      return unless pack_identifier
+      return unless pack_identifier.present?
       return unless has_valid_wallet?
       return unless amount.is_a?(Numeric) && amount.positive?
 
-      pack_name = pack_identifier.to_sym
-      pack = UsageCredits.find_pack(pack_name)
+      fulfillment = UsageCredits::Fulfillment.find_by(source: self)
+      # Processor metadata proves what a charge was intended to buy, not that
+      # the corresponding credits were ever issued. A refund can arrive for a
+      # charge whose fulfillment failed (or whose create webhook was never
+      # delivered); clawing that metadata snapshot back would manufacture
+      # credit debt for value the customer never received. Keep the legacy
+      # transaction lookup for pre-1.0 purchases that predate Fulfillment rows.
+      unless fulfillment || credits_already_fulfilled?
+        Rails.logger.error "Cannot refund credits for charge #{id}: no completed credit fulfillment exists"
+        return
+      end
 
-      unless pack
-        Rails.logger.error "Credit pack not found for refund: #{pack_name} for charge #{id}"
+      snapshot = fulfillment&.metadata&.symbolize_keys || credit_pack_snapshot
+      total_purchased_credits = fulfillment&.credits_last_fulfillment || snapshot&.fetch(:total_credits, nil)
+      unless snapshot && total_purchased_credits&.positive?
+        Rails.logger.error "Original credit pack fulfillment is missing for refund on charge #{id}"
         return
       end
 
@@ -299,51 +348,56 @@ module UsageCredits
         return
       end
 
-      # Calculate total credits that SHOULD be refunded based on current refund amount
-      refund_ratio = amount_refunded.to_f / amount.to_f
-      total_credits_to_refund = (pack.total_credits * refund_ratio).ceil
-
-      # Calculate credits already refunded (for incremental/partial refunds)
-      already_refunded = credits_previously_refunded
-
-      # Only deduct the INCREMENTAL amount (difference between what should be refunded and what's already refunded)
-      credits_to_remove = total_credits_to_refund - already_refunded
-
-      # Skip if nothing new to refund
-      if credits_to_remove <= 0
-        Rails.logger.info "Refund for charge #{id} already processed (#{already_refunded} credits already refunded)"
-        return
-      end
-
       begin
-        Rails.logger.info "Processing refund for charge #{id}: #{credits_to_remove} credits (incremental from #{already_refunded} to #{total_credits_to_refund})"
+        wallet = credit_wallet
+        refund_transaction = nil
 
-        credit_wallet.deduct_credits(
-          credits_to_remove,
-          category: "credit_pack_refund",
-          metadata: {
-            refunded_purchase_charge_id: id,
-            credits_refunded: true,
-            refunded_at: Time.current,
-            refund_percentage: refund_ratio,
-            refund_amount_cents: amount_refunded,
-            incremental_credits: credits_to_remove,
-            total_credits_refunded: total_credits_to_refund,
-            **pack.base_metadata
-          }
-        )
+        # Both the cumulative-refund query and the new debit live under the
+        # wallet lock. Concurrent partial/full refund webhooks therefore apply
+        # only the remaining delta, never the same clawback twice.
+        wallet.with_lock do
+          already_refunded = credits_previously_refunded
+          total_credits_to_refund = divide_rounding_up(
+            total_purchased_credits * amount_refunded.to_i,
+            amount.to_i
+          )
+          credits_to_remove = total_credits_to_refund - already_refunded
+
+          if credits_to_remove <= 0
+            Rails.logger.info "Refund for charge #{id} already processed (#{already_refunded} credits already refunded)"
+            next
+          end
+
+          refund_ratio = amount_refunded.to_f / amount.to_f
+          Rails.logger.info "Processing refund for charge #{id}: #{credits_to_remove} credits (incremental from #{already_refunded} to #{total_credits_to_refund})"
+
+          refund_transaction = wallet.send(
+            :deduct_refunded_credits,
+            credits_to_remove,
+            fulfillment: fulfillment,
+            metadata: snapshot.merge(
+              refunded_purchase_charge_id: id,
+              credits_refunded: true,
+              refunded_at: Time.current,
+              refund_percentage: refund_ratio,
+              refund_amount_cents: amount_refunded,
+              incremental_credits: credits_to_remove,
+              total_credits_refunded: total_credits_to_refund
+            )
+          )
+        end
+
+        return unless refund_transaction
 
         Rails.logger.info "Successfully processed refund for charge #{id}"
-      rescue UsageCredits::InsufficientCredits => e
-        Rails.logger.error "Insufficient credits for refund on charge #{id}: #{e.message}"
-        # If negative balance not allowed and user has used credits,
-        # we'll let the error propagate
-        raise
-      rescue StandardError => e
+      rescue => e
         Rails.logger.error "Failed to process refund for charge #{id}: #{e.message}"
         raise
       end
     end
 
+    def divide_rounding_up(numerator, denominator)
+      numerator.div(denominator) + (numerator.remainder(denominator).zero? ? 0 : 1)
+    end
   end
 end

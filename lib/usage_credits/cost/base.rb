@@ -31,12 +31,14 @@ module UsageCredits
       protected
 
       def validate_amount!(amount)
-        unless amount == amount.to_i
-          raise ArgumentError, "Credit amount must be a whole number (got: #{amount})"
-        end
-        if amount.negative?
+        number = Wallets::WholeNumber.parse(amount, name: "Credit amount")
+        if number.negative?
           raise ArgumentError, "Credit amount cannot be negative (got: #{amount})"
         end
+      rescue ArgumentError => error
+        raise if error.message.include?("cannot be negative")
+
+        raise ArgumentError, "Credit amount must be a whole number (got: #{amount})"
       end
     end
   end

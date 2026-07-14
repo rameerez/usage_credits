@@ -17,19 +17,18 @@ module UsageCredits
     # Credit pack purchase button
     def credit_pack_button(pack, options = {})
       button_to options[:path] || credit_pack_purchase_path(pack),
-                class: options[:class] || "credit-pack-button",
-                method: :post,
-                data: {
-                  turbo: false,
-                  pack_name: pack.name,
-                  credits: pack.credits,
-                  bonus_credits: pack.bonus_credits,
-                  price: pack.price_cents
-                } do
+        class: options[:class] || "credit-pack-button",
+        method: :post,
+        data: {
+          turbo: false,
+          pack_name: pack.name,
+          credits: pack.credits,
+          bonus_credits: pack.bonus_credits,
+          price: pack.price_cents
+        } do
         render_credit_pack_button_content(pack)
       end
     end
-
 
     private
 
@@ -40,6 +39,5 @@ module UsageCredits
         content_tag(:span, format_credit_price(pack.price_cents, pack.price_currency), class: "price")
       ].compact, " ")
     end
-
   end
 end

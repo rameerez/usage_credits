@@ -198,7 +198,7 @@ class CreditCalculatorTest < ActiveSupport::TestCase
     money = UsageCredits::CreditCalculator.credits_to_money(credits, 10)
 
     # Should be close (may not be exact due to rounding)
-    assert money >= 990 && money <= 1010
+    assert money.between?(990, 1010)
   end
 
   test "never undercharges with default ceil strategy" do

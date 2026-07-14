@@ -8,10 +8,10 @@ module UsageCredits
     included do
       # Filter to the default "credits" asset_code for backwards compatibility
       has_one :credit_wallet,
-              -> { where(asset_code: "credits") },
-              class_name: "UsageCredits::Wallet",
-              as: :owner,
-              dependent: :destroy
+        -> { where(asset_code: "credits") },
+        class_name: "UsageCredits::Wallet",
+        as: :owner,
+        dependent: :destroy
 
       # NOTE on the alias dance below: `credits_wallet` and `wallet` are aliased
       # to the raw has_one reader *before* `credit_wallet` is redefined to
@@ -26,13 +26,13 @@ module UsageCredits
 
       # More intuitive delegations
       delegate :credits,
-               :credit_history,
-               :has_enough_credits_to?,
-               :estimate_credits_to,
-               :spend_credits_on,
-               :give_credits,
-               to: :ensure_credit_wallet,
-               allow_nil: false # Never return nil for these methods
+        :credit_history,
+        :has_enough_credits_to?,
+        :estimate_credits_to,
+        :spend_credits_on,
+        :give_credits,
+        to: :ensure_credit_wallet,
+        allow_nil: false # Never return nil for these methods
 
       # Fix recursion by properly aliasing the original method
       alias_method :original_credit_wallet, :credit_wallet
@@ -52,7 +52,6 @@ module UsageCredits
           .map { |f| UsageCredits.find_subscription_plan_by_processor_id(f.metadata["plan"]) }
           .compact
       end
-
     end
 
     # Class methods added to the model
@@ -60,15 +59,17 @@ module UsageCredits
       def has_credits(**options)
         include UsageCredits::HasWallet unless included_modules.include?(UsageCredits::HasWallet)
 
-        # Initialize class instance variable instead of class variable
-        @credit_options = options
-
-        # Ensure wallet is created by default unless explicitly disabled
-        @credit_options[:auto_create] = true if @credit_options[:auto_create].nil?
+        # Each class owns an immutable options snapshot. Subclasses inherit it
+        # until they explicitly call `has_credits`, without sharing a mutable
+        # hash with their parent.
+        @credit_options = {auto_create: true}.merge(options.symbolize_keys).freeze
       end
 
       def credit_options
-        @credit_options ||= { auto_create: true }
+        return @credit_options if instance_variable_defined?(:@credit_options)
+        return superclass.credit_options if superclass.respond_to?(:credit_options)
+
+        {auto_create: true}
       end
     end
 
@@ -94,7 +95,7 @@ module UsageCredits
       wallet = UsageCredits::Wallet.create_for_owner!(
         owner: self,
         asset_code: "credits",
-        initial_balance: credit_options[:initial_balance].to_i
+        initial_balance: credit_options[:initial_balance]
       )
 
       self.credit_wallet = wallet

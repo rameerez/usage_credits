@@ -19,9 +19,10 @@ All with a simple DSL that reads just like English.
 
 **Requirements**
 
+- Ruby 3.2+ and Rails 7.2.3.1–8.x. Ruby 3.2 is the security floor because current patched versions of transitive Rails dependencies no longer support Ruby 3.1.
 - An ActiveJob backend (Sidekiq, `solid_queue`, etc.) for subscription credit fulfillment
-- [`pay`](https://github.com/pay-rails/pay) gem for Stripe/PayPal/Lemon Squeezy integration (sell credits, refill subscriptions)
-- [`wallets`](https://github.com/rameerez/wallets) gem (installed automatically as a dependency — it's the ledger core `usage_credits` runs on)
+- [`pay`](https://github.com/pay-rails/pay) 11.6.2–11.x for payment integration. Pay 11.6.2 is the security floor because it fixes [GHSA-mjgf-xj26-9qf9](https://github.com/pay-rails/pay/security/advisories/GHSA-mjgf-xj26-9qf9).
+- [`wallets`](https://github.com/rameerez/wallets) 0.3.x (installed automatically as the ledger core)
 
 ## 👨‍💻 Example
 
@@ -556,11 +557,11 @@ This happens automatically thanks to our Pay Subscription extension (changes to 
 Handled:
 - Subscription create, renew, cancel, upgrade, downgrade, non-credit transitions
 - Pending downgrade application on renewal
+- Processor pauses and resumes: no credits are minted during an effective pause; scheduled pauses follow Pay's processor lifecycle semantics; plan changes made while paused are atomically reconciled without a bonus before service resumes minting
 - Credit expiration and rollover
 
 Not handled (yet):
 - Plan changes while **trialing** (we only handle `status == "active"`)
-- Paused subscriptions (see TODO in code)
 
 ## Transaction history & audit trail
 
@@ -649,7 +650,7 @@ It's useful if you want to name your credits something else (tokens, virtual cur
 
 ## Beyond credits: wallet-like balances on top of a credits product layer
 
-While this gem is called `usage_credits`, the underlying architecture is still a **production-grade append-only ledger** with row-level locking, FIFO allocation, and full audit trails. That means you can use it for more than just API credits when the product still fits a **single-asset credits model**.
+While this gem is called `usage_credits`, the underlying architecture is still a **production-grade append-oriented ledger API** with row-level locking, expiration-aware allocation, and full transaction trails. That means you can use it for more than just API credits when the product still fits a **single-asset credits model**.
 
 Good fits here:
 - marketplace seller balances in cents
@@ -691,9 +692,7 @@ class User < ApplicationRecord
   has_credits  # Each user gets a wallet
 
   def request_payout(amount_cents)
-    # In production, wrap in wallet.with_lock { } to prevent race conditions
-    raise "Insufficient balance" if credits < amount_cents
-
+    # deduct_credits locks and checks the wallet atomically.
     wallet.deduct_credits(
       amount_cents,
       category: :payout_requested,
@@ -795,12 +794,14 @@ The ledger architecture gives you everything you'd want from a serious internal 
 
 | Feature | How it helps |
 |---------|--------------|
-| Double-entry ledger | Every credit has a corresponding debit source tracked via allocations |
-| Immutable transactions | Append-only — no edits, only new entries (required for financial audit) |
+| Allocation-backed ledger | Every spend records exactly which credit buckets it consumed |
+| Append-oriented operations | Public wallet operations record new transaction rows instead of editing balances in place |
 | Row-level locking | Prevents race conditions and double-spending |
-| FIFO allocation | When spending, oldest credits are used first (important for expiring balances) |
+| Expiration-aware allocation | Soonest-expiring credits are spent first, with oldest-first ties |
 | Balance snapshots | Each transaction records balance before/after for reconciliation |
 | Rich metadata | Store order IDs, user IDs, payment references — whatever you need for audit |
+
+The public API is append-oriented, not tamper-proof: code with model or SQL access can still modify ledger rows, and destroying an owner intentionally cascades through that owner's credit history. Use soft deletion or an application-level destroy restriction when records must be retained, keep database backups, reconcile payment-processor events, and apply the audit controls appropriate to your risk model.
 
 ### A note on multi-currency
 
@@ -850,13 +851,13 @@ That results in a plethora of bugs as soon as time starts rolling and customers 
 
 That only gets you so far.
 
-One problem is the discrepancy between billing periods and fulfillment cycles (you may want to charge your users up front for a whole year if they have a yearly subscription, but you may not want to refill all their credits up front, but month by month) Then if you want expiring credits (so that unused credits don't roll over to the next period), credit packs, etc. you essentially end up needing to build a double-entry ledger system. You need to keep track of every credit-giving and credit-spending operation. The ledger should be immutable by design (append-only), transactions should happen on row-level locks to prevent double-spending, operations should be atomic, etc.
+One problem is the discrepancy between billing periods and fulfillment cycles (you may want to charge your users up front for a whole year if they have a yearly subscription, but you may not want to refill all their credits up front, but month by month). Once you add expiring credits, credit packs, and refunds, you need an allocation-backed transaction ledger that tracks every grant and spend. Writes must be atomic and serialized with row-level locks to prevent double-spending.
 
 That's exactly what I ended up building:
 - `Wallet` is the root of all functionality. All users have a wallet that centralizes everything and keeps track of the available balance – and all credit operations (add/deduct credits) are performed on the wallet.
 - `Transaction` - operations get logged as transactions. The Transaction model is the basis for the ledger system.
 - `Fulfillment` represents a credit-giving action (wether recurring or not). Subscriptions are tied to a Fulfillment record that orchestrates when the actual credit fulfillment should happen, and how often. A Fulfillment object will create one or many positive Transactions.
-- `Allocation` is the basis for our bucket-based FIFO credit spending system. It's what solves the [dragging cost problem](https://x.com/rameerez/status/1884246492837302759) and allows for expiring credits.
+- `Allocation` is the basis for our bucket-based, first-expiring-first-out credit spending system. It's what solves the [dragging cost problem](https://x.com/rameerez/status/1884246492837302759) and allows for expiring credits.
 - `CreditPack` and `CreditSubscriptionPlan` are POROs that model credit-giving objects (one-time purchases for credit packs; recurring subscriptions for subscription plans). They allow for easy configuration through the DSL and store all information on memory.
 - `Operation` represents a credit-spending operation.
 
@@ -867,7 +868,7 @@ Heads up: we acquire a row-level lock when spending credits, to avoid concurrenc
 ### Summary of features
 
 **Core ledger:**
-- Immutable ledger design (transactions are append-only)
+- Append-oriented wallet operations with a complete transaction trail
 - Row-level locks to prevent double-spending even with concurrent usage
 - Secure credit spending (credits will not be deducted if the operation fails)
 - Audit trail / transaction logs (each transaction has metadata on how the credits were spent, and what "credit bucket" they drew from)
@@ -884,7 +885,7 @@ Heads up: we acquire a row-level lock when spending credits, to avoid concurrenc
 - Credits can be expired
 - Credits can be rolled over to the next period
 - Prevents double-fulfillment of credits
-- FIFO bucketed ledger approach for credit spending
+- First-expiring-first-out bucket allocation, with oldest-first ties
 
 ### Numeric extensions
 
@@ -915,12 +916,12 @@ This gem _pollutes_ a bit the `Kernel` namespace by defining 3 top-level methods
 
 Billing systems are extremely complex and full of edge cases. This is a new gem, and it may be missing some edge cases.
 
-Real billing systems usually find edge cases when handling things like:
+Production integrations should still define and test their product policy for things like:
 - Prorated changes
 - Different pricing tiers
 - Usage rollups and aggregation
 - Upgrading and downgrading subscriptions
-- Pausing and resuming subscriptions (especially at edge times)
+- Processor-specific billing/proration modes around subscription transitions
 - Re-activating subscriptions
 - Refunds and credits
 - Failed payments
@@ -931,7 +932,6 @@ Please help us by contributing to add tests to cover all critical paths!
 ## TODO
 
 - Add a first-class reversal/refund helper on top of wallet-level transfers if transfers become a documented primary use case
-- Clarify paused subscription behavior across processors and plan states
 
 ## Testing
 
@@ -939,7 +939,7 @@ Run the test suite with `bundle exec rake test`
 
 ## Development
 
-After checking out the repo, run `bin/setup` to install dependencies. Then, run `rake spec` to run the tests. You can also run `bin/console` for an interactive prompt that will allow you to experiment.
+After checking out the repo, run `bin/setup` to install dependencies. Then, run `bundle exec rake test` to run the tests. You can also run `bin/console` for an interactive prompt that will allow you to experiment.
 
 To install this gem onto your local machine, run `bundle exec rake install`.
 

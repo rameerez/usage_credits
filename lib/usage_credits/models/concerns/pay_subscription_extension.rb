@@ -31,13 +31,12 @@ module UsageCredits
     included do
       # For initial setup and fulfillment, we can't do after_create or on: :create because the subscription first may
       # get created with status "incomplete" and only get updated to status "active" when the payment is cleared
-      after_commit :handle_initial_award_and_fulfillment_setup
+      after_commit :handle_initial_award_and_fulfillment_setup, on: [:create, :update]
 
-      after_commit :update_fulfillment_on_renewal,        if: :subscription_renewed?
-      after_commit :update_fulfillment_on_cancellation,   if: :subscription_canceled?
-      after_commit :handle_plan_change_wrapper
-
-      # TODO: handle paused subscriptions (may still have an "active" status?)
+      after_commit :update_fulfillment_on_renewal, on: :update, if: :subscription_renewed?
+      after_commit :update_fulfillment_on_cancellation, on: :update, if: :subscription_canceled?
+      after_commit :handle_plan_change_wrapper, on: :update
+      after_commit :apply_deferred_plan_change_after_resume, on: :update
     end
 
     # Identify the usage_credits plan object
@@ -47,11 +46,41 @@ module UsageCredits
     end
 
     def provides_credits?
-      credit_subscription_plan.present?
+      subscription_terms.present?
     end
 
     def fulfillment_should_stop_at
-      (ends_at || current_period_end)
+      ends_at || current_period_end
+    end
+
+    # Pay's processor-specific #active? implementation is the source of truth
+    # for grace periods and effective pauses. Pay::Subscription itself does not
+    # implement #paused?, however, so legacy/base-class rows need the equivalent
+    # lifecycle check without calling Pay's otherwise unsafe base #active?.
+    # In particular, Stripe keeps the raw status as "active" while a void pause
+    # is in effect.
+    def eligible_for_usage_credit_fulfillment?(include_trial: false)
+      processor_active = if status == "on_trial"
+        respond_to?(:on_trial?) && on_trial?
+      elsif respond_to?(:paused?)
+        active?
+      else
+        ["trialing", "active"].include?(status) && !ended?
+      end
+
+      return false unless processor_active
+      return false if paused_for_usage_credits?
+
+      include_trial || !trialing_for_credits?
+    end
+
+    # Reconcile the initial/trial award state on demand. The recurring service
+    # uses this at lifecycle boundaries for processors (notably Braintree,
+    # whose status can remain `active` throughout a trial) and to finish a
+    # deferred plan change before any recurring credits can be minted.
+    def sync_usage_credit_fulfillment!
+      handle_initial_award_and_fulfillment_setup
+      apply_deferred_plan_change_after_resume
     end
 
     private
@@ -64,15 +93,13 @@ module UsageCredits
     end
 
     def credits_already_fulfilled?
-      # TODO: There's a race condition where Pay actually updates the subscription two times on initial creation,
-      # leading to us triggering handle_initial_award_and_fulfillment_setup twice too.
-      # Since no Fulfillment record has been created yet, both callbacks will try to create the same Fulfillment object
-      # at about the same time, thus making this check useless (there's nothing written to the DB yet)
-      # For now, we handle it by adding a validation to the Fulfillment model so that there's no two Fulfillment objects
-      # with the same source_id -- so whichever of the two callbacks gets processed first wins, the other just fails.
-      # That's how we prevent double credit awarding for now, but this race condition should be handled more elegantly.
       fulfillment = UsageCredits::Fulfillment.find_by(source: self)
       return false unless fulfillment
+
+      # Deferred terms own resume reconciliation. Treat the fulfillment as
+      # initialized until those terms are atomically installed so the generic
+      # reactivation path cannot mint an unintended extra first cycle.
+      return true if fulfillment.metadata.key?("deferred_plan_change")
 
       # A stopped fulfillment (stops_at in the past) should NOT prevent reactivation
       # This handles: credit → non-credit → credit transitions (after stop date)
@@ -82,7 +109,27 @@ module UsageCredits
       # should also allow reactivation - user changed their mind before the stop took effect
       return false if fulfillment.metadata["stopped_reason"].present?
 
-      true
+      initial_award_completed?(fulfillment)
+    end
+
+    def initial_award_completed?(fulfillment)
+      award_state = fulfillment.metadata["initial_award_state"]
+
+      if trialing_for_credits?
+        # Any existing trial/active initial award makes a trial callback
+        # idempotent. Active subscriptions never move backwards into trial.
+        true
+      elsif status == "active"
+        return true if award_state == "active"
+        return false if award_state == "trial" || fulfillment.metadata["trial"]
+
+        # Pre-1.0 fulfillments do not carry initial_award_state. Conservatively
+        # treat a non-trial legacy row as already active to avoid over-crediting
+        # existing customers during upgrade.
+        true
+      else
+        false
+      end
     end
 
     # Returns an existing fulfillment that is stopped or scheduled to stop
@@ -102,7 +149,8 @@ module UsageCredits
     end
 
     def subscription_renewed?
-      (saved_change_to_ends_at? || saved_change_to_current_period_end?) && status == "active"
+      (saved_change_to_ends_at? || saved_change_to_current_period_end?) &&
+        eligible_for_usage_credit_fulfillment?
     end
 
     # This doesn't get called the exact moment the user cancels its subscription, but at the end of the period,
@@ -114,7 +162,8 @@ module UsageCredits
     end
 
     def plan_changed?
-      return false unless saved_change_to_processor_plan? && status == "active"
+      return false unless saved_change_to_processor_plan?
+      return false unless eligible_for_usage_credit_fulfillment? || paused_for_usage_credits?
 
       # The old plan ID must be present (not nil) - otherwise this is initial subscription creation
       # not a plan change. Initial subscription is handled by handle_initial_award_and_fulfillment_setup.
@@ -125,7 +174,8 @@ module UsageCredits
       # If old plan wasn't a credit plan (not in config), then handle_initial_award_and_fulfillment_setup
       # will handle the "fresh start" case - we don't want to double-award credits.
       old_plan = UsageCredits.configuration.find_subscription_plan_by_processor_id(old_plan_id)
-      return false unless old_plan.present?
+      fulfillment = UsageCredits::Fulfillment.find_by(source: self)
+      return false unless old_plan.present? || fulfillment.present?
 
       # At this point, old plan provided credits. We handle:
       # - Credit → Credit (upgrade/downgrade)
@@ -139,69 +189,119 @@ module UsageCredits
 
     # Immediate awarding of first cycle + set up Fulfillment object for subsequent periods
     def handle_initial_award_and_fulfillment_setup
-      return unless provides_credits?
+      plan = subscription_terms
+      return unless plan
       return unless has_valid_wallet?
 
-      # We only do immediate awarding if the subscription is trialing or active
-      return unless ["trialing", "active"].include?(status)
-
-      # Check if we need to reactivate a stopped fulfillment (credit → non-credit → credit scenario)
-      existing_reactivatable_fulfillment = reactivatable_fulfillment
-      is_reactivation = existing_reactivatable_fulfillment.present?
+      # Pay normalizes trials and pauses differently per processor. Trust its
+      # active predicate instead of the raw status, which remains "active" for
+      # an effective Stripe void pause.
+      return unless eligible_for_usage_credit_fulfillment?(include_trial: true)
 
       # Skip if we already have an ACTIVE fulfillment record
       return if credits_already_fulfilled?
 
-      plan = credit_subscription_plan
       wallet = customer.owner.credit_wallet
 
       # Calculate credit expiration using the shared helper
       credits_expire_at = calculate_credit_expiration(plan, current_period_start)
 
-      Rails.logger.info "Fulfilling #{is_reactivation ? 'reactivation' : 'initial'} credits for subscription #{id}"
-      Rails.logger.info "  Status: #{status}"
-      Rails.logger.info "  Plan: #{plan}"
-
       # Variables to track for callback dispatch after transaction commits
       total_credits_awarded = 0
       last_credit_transaction = nil
+      is_reactivation = false
 
       # Transaction for atomic awarding + fulfillment creation/reactivation
       # Callback is dispatched AFTER this block to ensure credits are persisted
-      ActiveRecord::Base.transaction do
-        transaction_ids = []
+      self.class.transaction do
+        # Lock order for every subscription mutation is subscription →
+        # fulfillment → wallet. Serializing on the Pay row closes duplicate
+        # webhook races and prevents lock-order deadlocks with recurring jobs.
+        return unless lock_current_subscription_version
+        return unless eligible_for_usage_credit_fulfillment?(include_trial: true)
+        existing_fulfillment = UsageCredits::Fulfillment.lock.find_by(source: self)
+        wallet.lock!
+        return if existing_fulfillment&.metadata&.key?("deferred_plan_change")
+        return if existing_fulfillment && initial_award_completed?(existing_fulfillment) && !reactivatable_record?(existing_fulfillment)
 
-        # 1) If this is a trial and not an active subscription: award trial credits, if any
-        if status == "trialing" && plan.trial_credits.positive?
+        is_reactivation = existing_fulfillment.present? && reactivatable_record?(existing_fulfillment)
+        is_trial_activation = existing_fulfillment.present? && status == "active" && !trialing_for_credits? && !is_reactivation
 
-          # Immediate awarding of trial credits
+        Rails.logger.info "Fulfilling #{is_reactivation ? "reactivation" : "initial"} credits for subscription #{id}"
+        Rails.logger.info "  Status: #{status}"
+        Rails.logger.info "  Plan: #{plan}"
+
+        # Create or reactivate the fulfillment before minting so every ledger
+        # row is linked at INSERT time. The enclosing transaction keeps the
+        # temporary zero amount invisible and rolls everything back together.
+        fulfilled_at = Time.current
+        next_fulfillment_at = next_subscription_fulfillment_at(plan)
+        award_state = trialing_for_credits? ? "trial" : "active"
+
+        fulfillment_record = if is_reactivation || is_trial_activation
+          existing_fulfillment.tap do |record|
+            record.update!(
+              credits_last_fulfillment: 0,
+              fulfillment_period: plan.fulfillment_period_display,
+              last_fulfilled_at: fulfilled_at,
+              next_fulfillment_at: next_fulfillment_at,
+              stops_at: fulfillment_should_stop_at,
+              metadata: record.metadata
+                .except(
+                  "trial", "stopped_reason", "stopped_at", "stopped_plan",
+                  "pending_plan_change", "pending_plan_snapshot", "plan_change_at"
+                )
+                .merge(plan_snapshot_metadata(plan))
+                .merge(
+                  "subscription_id" => id,
+                  "initial_award_state" => award_state,
+                  (is_reactivation ? "reactivated_at" : "activated_at") => fulfilled_at
+                )
+            )
+          end
+        else
+          UsageCredits::Fulfillment.create!(
+            wallet: wallet,
+            source: self,
+            fulfillment_type: "subscription",
+            credits_last_fulfillment: 0,
+            fulfillment_period: plan.fulfillment_period_display,
+            last_fulfilled_at: fulfilled_at,
+            next_fulfillment_at: next_fulfillment_at,
+            stops_at: fulfillment_should_stop_at,
+            metadata: {
+              "subscription_id" => id,
+              "initial_award_state" => award_state,
+              "trial" => trialing_for_credits?
+            }.merge(plan_snapshot_metadata(plan))
+          )
+        end
+
+        # If this is a trial and not an active subscription, award trial credits.
+        if trialing_for_credits? && plan.trial_credits.positive?
           last_credit_transaction = wallet.add_credits(plan.trial_credits,
             category: "subscription_trial",
             expires_at: trial_ends_at,
+            fulfillment: fulfillment_record,
             metadata: {
               subscription_id: id,
               reason: is_reactivation ? "reactivation_trial_credits" : "initial_trial_credits",
               plan: processor_plan,
-              fulfilled_at: Time.current
-            }
-          )
-          transaction_ids << last_credit_transaction.id
+              fulfilled_at: fulfilled_at
+            })
           total_credits_awarded += plan.trial_credits
-
         elsif status == "active"
-
           # Awarding of signup bonus, if any (only on initial setup, not reactivation)
           if plan.signup_bonus_credits.positive? && !is_reactivation
             bonus_transaction = wallet.add_credits(plan.signup_bonus_credits,
               category: "subscription_signup_bonus",
+              fulfillment: fulfillment_record,
               metadata: {
                 subscription_id: id,
                 reason: "signup_bonus",
                 plan: processor_plan,
-                fulfilled_at: Time.current
-              }
-            )
-            transaction_ids << bonus_transaction.id
+                fulfilled_at: fulfilled_at
+              })
             total_credits_awarded += plan.signup_bonus_credits
             last_credit_transaction = bonus_transaction
           end
@@ -210,110 +310,74 @@ module UsageCredits
           if plan.credits_per_period.positive?
             credits_transaction = wallet.add_credits(plan.credits_per_period,
               category: "subscription_credits",
-              expires_at: credits_expire_at,  # This will be nil if credit rollover is enabled
+              expires_at: credits_expire_at,
+              fulfillment: fulfillment_record,
               metadata: {
                 subscription_id: id,
                 reason: is_reactivation ? "reactivation" : "first_cycle",
                 plan: processor_plan,
-                fulfilled_at: Time.current
-              }
-            )
-            transaction_ids << credits_transaction.id
+                fulfilled_at: fulfilled_at
+              })
             total_credits_awarded += plan.credits_per_period
             last_credit_transaction = credits_transaction
           end
         end
 
-        # 2) Create or reactivate Fulfillment record for subsequent awarding
-        # Use current_period_start as the base time, falling back to Time.current
-        period_start = if trial_ends_at && status == "trialing"
-                      trial_ends_at
-                    else
-                      current_period_start || Time.current
-                    end
-
-        # Ensure next_fulfillment_at is in the future
-        next_fulfillment_at = period_start + plan.parsed_fulfillment_period
-        next_fulfillment_at = Time.current + plan.parsed_fulfillment_period if next_fulfillment_at <= Time.current
-
-        if is_reactivation
-          # Reactivate the existing stopped/scheduled-to-stop fulfillment
-          # Merge metadata to preserve any custom keys while updating core fields
-          # Use string keys consistently to avoid duplicates after JSON serialization
-          existing_reactivatable_fulfillment.update!(
-            credits_last_fulfillment: total_credits_awarded,
-            fulfillment_period: plan.fulfillment_period_display,
-            last_fulfilled_at: Time.current,
-            next_fulfillment_at: next_fulfillment_at,
-            stops_at: fulfillment_should_stop_at,
-            metadata: existing_reactivatable_fulfillment.metadata
-              .except("stopped_reason", "stopped_at", "pending_plan_change", "plan_change_at")
-              .merge(
-                "subscription_id" => id,
-                "plan" => processor_plan,
-                "reactivated_at" => Time.current
-              )
-          )
-
-          Rails.logger.info "Reactivated fulfillment #{existing_reactivatable_fulfillment.id} for subscription #{id}"
-        else
-          # Create new fulfillment
-          # Use string keys consistently to avoid duplicates after JSON serialization
-          UsageCredits::Fulfillment.create!(
-            wallet: wallet,
-            source: self,
-            fulfillment_type: "subscription",
-            credits_last_fulfillment: total_credits_awarded,
-            fulfillment_period: plan.fulfillment_period_display,
-            last_fulfilled_at: Time.current,
-            next_fulfillment_at: next_fulfillment_at,
-            stops_at: fulfillment_should_stop_at, # Pre-emptively set when the fulfillment will stop, in case we miss a future event (like sub cancellation)
-            metadata: {
-              "subscription_id" => id,
-              "plan" => processor_plan,
-            }
-          )
-
-          Rails.logger.info "Initial fulfillment for subscription #{id} finished"
-        end
-
-        # Link created transactions to the fulfillment object for traceability
-        fulfillment_record = UsageCredits::Fulfillment.find_by(source: self)
-        UsageCredits::Transaction.where(id: transaction_ids).update_all(fulfillment_id: fulfillment_record&.id) if transaction_ids.any?
+        fulfillment_record.update!(credits_last_fulfillment: total_credits_awarded)
+        Rails.logger.info "Fulfillment #{fulfillment_record.id} updated for subscription #{id}"
       end
 
       # Dispatch callback AFTER transaction commits - ensures credits are persisted
       if total_credits_awarded > 0
-        UsageCredits::Callbacks.dispatch(:subscription_credits_awarded,
-          wallet: wallet,
-          amount: total_credits_awarded,
-          transaction: last_credit_transaction,
-          metadata: {
-            subscription_plan_name: plan.name,
-            subscription: plan,
-            pay_subscription: self,
-            fulfillment_period: plan.fulfillment_period_display,
-            is_reactivation: is_reactivation,
-            status: status
-          }
-        )
+        ActiveRecord.after_all_transactions_commit do
+          UsageCredits::Callbacks.dispatch(:subscription_credits_awarded,
+            wallet: wallet,
+            amount: total_credits_awarded,
+            transaction: last_credit_transaction,
+            metadata: {
+              subscription_plan_name: plan.name,
+              subscription: plan.callback_plan,
+              pay_subscription: self,
+              fulfillment_period: plan.fulfillment_period_display,
+              is_reactivation: is_reactivation,
+              status: status
+            })
+        end
       end
-
     rescue => e
       Rails.logger.error "Failed to fulfill initial credits for subscription #{id}: #{e.message}"
       raise
+    end
+
+    def reactivatable_record?(fulfillment)
+      (fulfillment.stops_at.present? && fulfillment.stops_at <= Time.current) ||
+        fulfillment.metadata["stopped_reason"].present?
+    end
+
+    def next_subscription_fulfillment_at(plan)
+      # Trial credits hand off at the actual processor trial boundary. Once
+      # active, credit cadence is intentionally independent of billing cadence
+      # (for example a monthly charge can grant credits daily).
+      trial_boundary = trial_ends_at || current_period_end
+      return trial_boundary if trialing_for_credits? && trial_boundary.present? && trial_boundary > Time.current
+
+      period_start = [current_period_start || Time.current, Time.current].max
+      candidate = period_start + plan.parsed_fulfillment_period
+      (candidate > Time.current) ? candidate : Time.current + plan.parsed_fulfillment_period
     end
 
     # Handle subscription renewal (we received a new payment for another billing period)
     # Each time the subscription renews and ends_at moves forward,
     # we keep awarding credits because Fulfillment#stops_at also moves forward
     def update_fulfillment_on_renewal
-      return unless provides_credits? && has_valid_wallet?
+      return unless has_valid_wallet?
 
       fulfillment = UsageCredits::Fulfillment.find_by(source: self)
       return unless fulfillment
 
-      ActiveRecord::Base.transaction do
+      self.class.transaction do
+        return unless lock_current_subscription_version
+        fulfillment.lock!
         # Check if there's a pending plan change to apply
         if fulfillment.metadata["pending_plan_change"].present?
           apply_pending_plan_change(fulfillment)
@@ -324,32 +388,65 @@ module UsageCredits
         Rails.logger.info "Fulfillment #{fulfillment.id} stops_at updated to #{fulfillment.stops_at}"
       rescue => e
         Rails.logger.error "Failed to extend fulfillment period for subscription #{id}: #{e.message}"
-        raise ActiveRecord::Rollback
+        raise
       end
     end
 
-
     # If the subscription is canceled, let's set the Fulfillment's stops_at so that the job won't keep awarding
     def update_fulfillment_on_cancellation
-      plan = credit_subscription_plan
-      return unless plan && has_valid_wallet?
+      return unless has_valid_wallet?
 
       fulfillment = UsageCredits::Fulfillment.find_by(source: self)
       return unless fulfillment
 
-      ActiveRecord::Base.transaction do
+      self.class.transaction do
+        return unless lock_current_subscription_version
+        fulfillment.lock!
+        wallet = fulfillment.wallet
+        wallet.lock!
+
+        active_plan_id = fulfillment.metadata["plan"]
+        configured_plan = UsageCredits.configuration.find_subscription_plan_by_processor_id(active_plan_id)
+        terms = terms_from_fulfillment(
+          fulfillment,
+          expected_plan_id: active_plan_id,
+          configured_plan: configured_plan
+        ) || UsageCredits::SubscriptionTerms.from_plan(configured_plan, processor_plan_id: active_plan_id)
+
         # Subscription cancelled, so stop awarding credits in the future
-        fulfillment.update!(stops_at: fulfillment_should_stop_at)
+        fulfillment_attributes = {stops_at: fulfillment_should_stop_at}
+        if terms&.expire_credits_on_cancel
+          expires_at = cancellation_credit_expiration_at(terms)
+          expire_fulfillment_credits!(wallet, fulfillment, expires_at)
+          fulfillment_attributes[:metadata] = fulfillment.metadata.merge(
+            "cancellation_credit_expiration_at" => expires_at,
+            "cancellation_credit_expiration_applied_at" => Time.current
+          )
+        end
+
+        fulfillment.update!(fulfillment_attributes)
         Rails.logger.info "Fulfillment #{fulfillment.id} stops_at set to #{fulfillment.stops_at} due to cancellation"
       rescue => e
         Rails.logger.error "Failed to stop credit fulfillment for subscription #{id}: #{e.message}"
-        raise ActiveRecord::Rollback
+        raise
       end
+    end
 
-      # TODO: we can also expire already awarded credits here (without making the ledger mutable – we'll need to
-      # check if the plan expires credits or not, and if rollover we may need to add a negative transaction to offset
-      # the remaining balance)
+    def cancellation_credit_expiration_at(terms)
+      effective_cancellation_at = fulfillment_should_stop_at || Time.current
+      effective_cancellation_at + terms.credit_expiration_period_seconds.seconds
+    end
 
+    def expire_fulfillment_credits!(wallet, fulfillment, expires_at)
+      transactions = wallet.transactions.credits.where(fulfillment: fulfillment)
+      expiry = transactions.klass.arel_table[:expires_at]
+      transactions
+        .where(expiry.eq(nil).or(expiry.gt(expires_at)))
+        .update_all(expires_at: expires_at, updated_at: Time.current)
+
+      # Keep the persisted cache aligned for consumers that query the column
+      # directly. The public balance is still derived from ledger rows.
+      wallet.send(:refresh_cached_balance!)
     end
 
     # Wrapper to check condition and call handle_plan_change
@@ -389,21 +486,34 @@ module UsageCredits
       Rails.logger.info "  Looking up current plan: #{current_plan_id}"
       Rails.logger.info "  Looking up new plan: #{new_plan_id}"
 
-      current_plan = UsageCredits.configuration.find_subscription_plan_by_processor_id(current_plan_id)
+      current_plan = terms_from_fulfillment(fulfillment, expected_plan_id: current_plan_id) ||
+        terms_from_config(current_plan_id)
       new_plan = UsageCredits.configuration.find_subscription_plan_by_processor_id(new_plan_id)
 
       Rails.logger.info "  Current plan found: #{current_plan&.name} (#{current_plan&.credits_per_period} credits)"
       Rails.logger.info "  New plan found: #{new_plan&.name} (#{new_plan&.credits_per_period} credits)"
 
+      # A processor can change plans while service is paused. Persist the new
+      # immutable terms, but never mint an upgrade until service resumes. A
+      # later resume callback atomically installs the deferred terms; the next
+      # normal fulfillment then uses them.
+      if paused_for_usage_credits?
+        defer_plan_change_until_resume(fulfillment, new_plan)
+        return
+      end
+
       # Handle downgrade to a non-credit plan: schedule fulfillment stop for end of period
-      if new_plan.nil? && current_plan.present?
+      if new_plan.nil? && current_plan_id.present?
         handle_downgrade_to_non_credit_plan(fulfillment)
         return
       end
 
       return unless new_plan  # Neither current nor new plan provides credits - nothing to do
 
-      ActiveRecord::Base.transaction do
+      self.class.transaction do
+        return unless lock_current_subscription_version
+        return unless eligible_for_usage_credit_fulfillment?
+        fulfillment.lock!
         # FIRST: Check if returning to current plan (canceling a pending change)
         # This must come first! Returning to current plan = no credits, just clear pending
         # This matches Stripe's billing: no new charge means no new credits
@@ -430,12 +540,12 @@ module UsageCredits
         else
           # Same credits amount, different plan - update metadata immediately
           Rails.logger.info "  Action: Same credits, different plan - updating metadata only"
-          update_fulfillment_plan_metadata(fulfillment, new_plan_id)
+          update_fulfillment_plan_metadata(fulfillment, new_plan)
         end
       rescue => e
         Rails.logger.error "Failed to handle plan change for subscription #{id}: #{e.message}"
         Rails.logger.error e.backtrace.join("\n")
-        raise ActiveRecord::Rollback
+        raise
       end
 
       Rails.logger.info "  Plan change completed successfully"
@@ -451,9 +561,9 @@ module UsageCredits
       Rails.logger.info "    [UPGRADE] New plan period: #{new_plan.fulfillment_period_display}"
 
       # Calculate expiration using shared helper (uses current_period_end for upgrades)
-      credits_expire_at = calculate_credit_expiration(new_plan, current_period_end)
+      credits_expire_at = calculate_credit_expiration(new_plan, Time.current)
 
-      Rails.logger.info "    [UPGRADE] Credits expire at: #{credits_expire_at || 'never (rollover enabled)'}"
+      Rails.logger.info "    [UPGRADE] Credits expire at: #{credits_expire_at || "never (rollover enabled)"}"
 
       # Calculate next fulfillment time based on the NEW plan's period
       # This ensures the fulfillment schedule matches the new plan's cadence
@@ -463,13 +573,14 @@ module UsageCredits
       # The callback should only fire after ALL operations succeed
       upgrade_transaction = nil
 
-      ActiveRecord::Base.transaction do
+      fulfillment.class.transaction do
         # Grant full new plan credits immediately
         # Use string keys consistently to avoid duplicates after JSON serialization
         upgrade_transaction = wallet.add_credits(
           new_plan.credits_per_period,
           category: "subscription_upgrade",
           expires_at: credits_expire_at,
+          fulfillment: fulfillment,
           metadata: {
             "subscription_id" => id,
             "plan" => processor_plan,
@@ -489,27 +600,30 @@ module UsageCredits
         # to ensure future fulfillments happen on the correct schedule
         # Use string keys consistently to avoid duplicates after JSON serialization
         fulfillment.update!(
+          credits_last_fulfillment: new_plan.credits_per_period,
+          last_fulfilled_at: Time.current,
           fulfillment_period: new_plan.fulfillment_period_display,
           next_fulfillment_at: next_fulfillment_at,
           metadata: fulfillment.metadata
-            .except("pending_plan_change", "plan_change_at")
-            .merge("plan" => processor_plan)
+            .except("pending_plan_change", "pending_plan_snapshot", "plan_change_at")
+            .merge(plan_snapshot_metadata(new_plan))
         )
       end
 
       # Dispatch callback AFTER transaction commits - ensures credits are persisted
-      UsageCredits::Callbacks.dispatch(:subscription_credits_awarded,
-        wallet: wallet,
-        amount: new_plan.credits_per_period,
-        transaction: upgrade_transaction,
-        metadata: {
-          subscription_plan_name: new_plan.name,
-          subscription: new_plan,
-          pay_subscription: self,
-          fulfillment_period: new_plan.fulfillment_period_display,
-          reason: "plan_upgrade"
-        }
-      )
+      ActiveRecord.after_all_transactions_commit do
+        UsageCredits::Callbacks.dispatch(:subscription_credits_awarded,
+          wallet: wallet,
+          amount: new_plan.credits_per_period,
+          transaction: upgrade_transaction,
+          metadata: {
+            subscription_plan_name: new_plan.name,
+            subscription: new_plan,
+            pay_subscription: self,
+            fulfillment_period: new_plan.fulfillment_period_display,
+            reason: "plan_upgrade"
+          })
+      end
 
       Rails.logger.info "    [UPGRADE] Credits awarded successfully"
       Rails.logger.info "    [UPGRADE] New balance: #{wallet.reload.balance}"
@@ -529,6 +643,7 @@ module UsageCredits
       fulfillment.update!(
         metadata: fulfillment.metadata.merge(
           "pending_plan_change" => processor_plan,
+          "pending_plan_snapshot" => plan_snapshot_metadata(new_plan),
           "plan_change_at" => schedule_time
         )
       )
@@ -543,13 +658,16 @@ module UsageCredits
       # Ensure schedule_time is never in the past
       schedule_time = [current_period_end || Time.current, Time.current].max
 
-      ActiveRecord::Base.transaction do
+      self.class.transaction do
+        return unless lock_current_subscription_version
+        fulfillment.lock!
         # Use string keys consistently to avoid duplicates after JSON serialization
         fulfillment.update!(
           stops_at: schedule_time,
           metadata: fulfillment.metadata.merge(
             "stopped_reason" => "downgrade_to_non_credit_plan",
-            "stopped_at" => schedule_time
+            "stopped_at" => schedule_time,
+            "stopped_plan" => processor_plan
           )
         )
 
@@ -557,15 +675,21 @@ module UsageCredits
       rescue => e
         Rails.logger.error "Failed to handle downgrade to non-credit plan for subscription #{id}: #{e.message}"
         Rails.logger.error e.backtrace.join("\n")
-        raise ActiveRecord::Rollback
+        raise
       end
     end
 
-    def update_fulfillment_plan_metadata(fulfillment, new_plan_id)
-      # Use string keys consistently to avoid duplicates after JSON serialization
-      fulfillment.update!(
-        metadata: fulfillment.metadata.merge("plan" => new_plan_id)
-      )
+    def update_fulfillment_plan_metadata(fulfillment, new_plan)
+      attributes = {
+        metadata: fulfillment.metadata.merge(plan_snapshot_metadata(new_plan))
+      }
+
+      if fulfillment.fulfillment_period != new_plan.fulfillment_period_display
+        attributes[:fulfillment_period] = new_plan.fulfillment_period_display
+        attributes[:next_fulfillment_at] = Time.current + new_plan.parsed_fulfillment_period
+      end
+
+      fulfillment.update!(attributes)
     end
 
     # Clear any pending plan change metadata
@@ -574,32 +698,108 @@ module UsageCredits
       return unless fulfillment.metadata["pending_plan_change"].present?
 
       fulfillment.update!(
-        metadata: fulfillment.metadata.except("pending_plan_change", "plan_change_at")
+        metadata: fulfillment.metadata.except("pending_plan_change", "pending_plan_snapshot", "plan_change_at")
       )
 
       Rails.logger.info "Subscription #{id} pending plan change cleared (returned to current plan)"
     end
 
+    def defer_plan_change_until_resume(fulfillment, new_plan)
+      self.class.transaction do
+        return unless lock_current_subscription_version
+        return unless paused_for_usage_credits?
+        fulfillment.lock!
+
+        if new_plan.nil?
+          fulfillment.update!(
+            stops_at: Time.current,
+            metadata: fulfillment.metadata
+              .except("deferred_plan_change", "deferred_plan_snapshot")
+              .merge(
+                "stopped_reason" => "paused_change_to_non_credit_plan",
+                "stopped_at" => Time.current,
+                "stopped_plan" => processor_plan
+              )
+          )
+        elsif fulfillment.metadata["plan"] == processor_plan && !reactivatable_record?(fulfillment)
+          fulfillment.update!(
+            metadata: fulfillment.metadata.except("deferred_plan_change", "deferred_plan_snapshot")
+          )
+        else
+          fulfillment.update!(
+            metadata: fulfillment.metadata.merge(
+              "deferred_plan_change" => processor_plan,
+              "deferred_plan_snapshot" => plan_snapshot_metadata(new_plan)
+            )
+          )
+        end
+      end
+    end
+
+    def apply_deferred_plan_change_after_resume
+      return unless eligible_for_usage_credit_fulfillment?
+
+      fulfillment = UsageCredits::Fulfillment.find_by(source: self)
+      return unless fulfillment&.metadata&.key?("deferred_plan_change")
+
+      self.class.transaction do
+        return unless lock_current_subscription_version
+        return unless eligible_for_usage_credit_fulfillment?
+        fulfillment.lock!
+
+        plan_id = fulfillment.metadata["deferred_plan_change"]
+        snapshot = fulfillment.metadata["deferred_plan_snapshot"]
+        unless plan_id.to_s == processor_plan.to_s && snapshot&.fetch("plan", nil).to_s == plan_id.to_s
+          raise UsageCredits::InvalidOperation,
+            "Deferred plan terms for Pay::Subscription #{id} do not match its current processor plan"
+        end
+
+        fulfillment.update!(
+          stops_at: fulfillment_should_stop_at,
+          fulfillment_period: snapshot.fetch("fulfillment_period"),
+          metadata: fulfillment.metadata
+            .except(
+              "deferred_plan_change",
+              "deferred_plan_snapshot",
+              "pending_plan_change",
+              "pending_plan_snapshot",
+              "plan_change_at",
+              "stopped_reason",
+              "stopped_at",
+              "stopped_plan"
+            )
+            .merge(snapshot)
+        )
+      end
+    end
+
     def apply_pending_plan_change(fulfillment)
       pending_plan = fulfillment.metadata["pending_plan_change"]
+      pending_snapshot = fulfillment.metadata["pending_plan_snapshot"]
+      pending_snapshot = nil unless pending_snapshot&.fetch("plan", nil) == pending_plan
+      configured_plan = UsageCredits.configuration.find_subscription_plan_by_processor_id(pending_plan)
 
       # Validate that the pending plan still exists in configuration
       # This handles the edge case where an admin removes a plan after a user scheduled a downgrade
-      unless UsageCredits.configuration.find_subscription_plan_by_processor_id(pending_plan)
+      unless configured_plan || pending_snapshot.present?
         Rails.logger.error "Cannot apply pending plan change for subscription #{id}: plan '#{pending_plan}' not found in configuration"
         # Clear the invalid pending change to prevent repeated failures
         fulfillment.update!(
-          metadata: fulfillment.metadata.except("pending_plan_change", "plan_change_at")
+          metadata: fulfillment.metadata.except("pending_plan_change", "pending_plan_snapshot", "plan_change_at")
         )
         return
       end
 
-      # Update to the new plan and clear the pending change
-      # Use string keys consistently to avoid duplicates after JSON serialization
+      snapshot = pending_snapshot.presence || plan_snapshot_metadata(configured_plan, plan_id: pending_plan)
+      period = snapshot.fetch("fulfillment_period")
+
+      # Update all cadence and quantity fields, not only the display metadata.
       fulfillment.update!(
+        fulfillment_period: period,
+        next_fulfillment_at: Time.current + UsageCredits::PeriodParser.parse_persisted_period(period),
         metadata: fulfillment.metadata
-          .except("pending_plan_change", "plan_change_at")
-          .merge("plan" => pending_plan)
+          .except("pending_plan_change", "pending_plan_snapshot", "plan_change_at")
+          .merge(snapshot)
       )
 
       Rails.logger.info "Applied pending plan change for subscription #{id}: now on #{pending_plan}"
@@ -631,5 +831,97 @@ module UsageCredits
       effective_base + fulfillment_period + effective_grace
     end
 
+    def lock_current_subscription_version
+      current = self.class.lock.find_by(id: id)
+      return false unless current
+
+      %i[
+        updated_at status processor_plan current_period_start current_period_end
+        trial_ends_at ends_at pause_starts_at pause_behavior pause_resumes_at metadata
+      ].all? do |attribute|
+        !has_attribute?(attribute) || current.public_send(attribute) == public_send(attribute)
+      end
+    end
+
+    def paused_for_usage_credits?
+      return true if status == "paused"
+
+      pause_started = respond_to?(:pause_starts_at) && pause_starts_at.present? && pause_starts_at <= Time.current
+      return true if pause_started
+
+      respond_to?(:paused?) && paused? &&
+        (!respond_to?(:on_grace_period?) || !on_grace_period?)
+    end
+
+    def trialing_for_credits?
+      return true if ["on_trial", "trialing"].include?(status)
+
+      transitioned_to_active = saved_change_to_status? && ["on_trial", "trialing"].include?(status_before_last_save)
+      return false if transitioned_to_active
+      return on_trial? if respond_to?(:on_trial?)
+
+      false
+    end
+
+    def plan_snapshot_metadata(plan, plan_id: processor_plan)
+      cancellation_expiration_seconds =
+        if plan.respond_to?(:credit_expiration_period_seconds)
+          plan.credit_expiration_period_seconds
+        else
+          plan.credit_expiration_period&.to_i || 0
+        end
+
+      {
+        "plan" => plan_id,
+        "plan_name" => plan.name,
+        "credits_per_period" => plan.credits_per_period,
+        "signup_bonus_credits" => plan.signup_bonus_credits,
+        "trial_credits" => plan.trial_credits,
+        "fulfillment_period" => plan.fulfillment_period_display,
+        "rollover_enabled" => plan.rollover_enabled,
+        "expire_credits_on_cancel" => plan.expire_credits_on_cancel,
+        "credit_expiration_period" => cancellation_expiration_seconds
+      }
+    end
+
+    def subscription_terms
+      configured_plan = credit_subscription_plan
+      fulfillment = UsageCredits::Fulfillment.find_by(source: self)
+
+      terms = terms_from_fulfillment(fulfillment, expected_plan_id: processor_plan, configured_plan: configured_plan)
+      return terms if terms
+
+      data = (metadata || {}).with_indifferent_access
+      metadata_plan = data[:processor_plan].presence
+      if data[:purchase_type] == "credit_subscription" && (metadata_plan.nil? || metadata_plan.to_s == processor_plan.to_s)
+        terms = terms_from_metadata(data, configured_plan: configured_plan)
+        return terms if terms
+      end
+
+      UsageCredits::SubscriptionTerms.from_plan(configured_plan, processor_plan_id: processor_plan)
+    end
+
+    def terms_from_fulfillment(fulfillment, expected_plan_id:, configured_plan: nil)
+      return unless fulfillment&.fulfillment_type == "subscription"
+      return unless fulfillment.metadata["plan"].to_s == expected_plan_id.to_s
+
+      terms_from_metadata(fulfillment.metadata, configured_plan: configured_plan, processor_plan_id: expected_plan_id)
+    end
+
+    def terms_from_config(plan_id)
+      plan = UsageCredits.configuration.find_subscription_plan_by_processor_id(plan_id)
+      UsageCredits::SubscriptionTerms.from_plan(plan, processor_plan_id: plan_id)
+    end
+
+    def terms_from_metadata(data, configured_plan:, processor_plan_id: processor_plan)
+      UsageCredits::SubscriptionTerms.from_metadata(
+        data,
+        processor_plan_id: processor_plan_id,
+        configured_plan: configured_plan
+      )
+    rescue ArgumentError => e
+      Rails.logger.error "Invalid subscription terms for Pay::Subscription #{id}: #{e.message}"
+      nil
+    end
   end
 end

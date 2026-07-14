@@ -839,8 +839,32 @@ module UsageCredits
         updated_at status processor_plan current_period_start current_period_end
         trial_ends_at ends_at pause_starts_at pause_behavior pause_resumes_at metadata
       ].all? do |attribute|
-        !has_attribute?(attribute) || current.public_send(attribute) == public_send(attribute)
+        !has_attribute?(attribute) || database_equivalent_attribute?(
+          attribute,
+          current.public_send(attribute),
+          public_send(attribute)
+        )
       end
+    end
+
+    # Processor timestamps can carry nanoseconds while Rails' timestamp
+    # columns persist microseconds. Comparing the raw callback object against
+    # the locked row would therefore reject the exact state that was just
+    # saved on adapters/platforms that leave the extra nanoseconds in memory.
+    # Preserve strict comparisons for every non-temporal value, and compare
+    # temporal values at the column's effective database precision.
+    def database_equivalent_attribute?(attribute, persisted_value, callback_value)
+      return true if persisted_value == callback_value
+
+      type = self.class.type_for_attribute(attribute.to_s)
+      return false unless [:datetime, :time].include?(type.type)
+      return false if persisted_value.nil? || callback_value.nil?
+
+      column_precision = self.class.columns_hash.fetch(attribute.to_s).precision
+      precision = (column_precision || 6).clamp(0, 9)
+      scale = 10**precision
+
+      (persisted_value.to_r * scale).floor == (callback_value.to_r * scale).floor
     end
 
     def paused_for_usage_credits?

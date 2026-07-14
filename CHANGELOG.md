@@ -22,6 +22,7 @@
 - `expire_after` now applies the snapshotted cancellation policy to credits created by that subscription, including after the configured plan is removed; unrelated credits are never shortened.
 - Persisted fulfillment cadence is parsed through the same strict duration parser as configuration and is never permitted below one second, preventing malformed metadata or a zero-period retry loop.
 - Recurring Pay-backed fulfillment locks and re-checks the subscription before minting, fails closed for dangling Pay sources (including processor-specific STI type names) and unresolved plan transitions, and never awards while the processor subscription is trialing, paused, incomplete, or canceled.
+- The locked subscription freshness check canonicalizes processor timestamps to the database column precision. Sub-microsecond values from processor SDKs can no longer make a just-committed callback look stale and silently suppress the initial credit award.
 - Effective processor pauses use Pay's processor-specific lifecycle predicate rather than raw status (Stripe can remain `"active"` while paused). Plan changes made during a pause are snapshotted without minting, reconciled before the first resumed fulfillment even if an after-commit callback was interrupted, and rejected fail-closed if the persisted terms are inconsistent.
 - Fresh and upgrade migrations add row-local ledger constraints and abort before schema changes when legacy rows violate amount, allocation, transfer, wallet, or fulfillment invariants.
 - Rails 7.2's transaction callback API is now required to prevent rolled-back ledger events.
@@ -36,7 +37,7 @@
 
 ### Tests
 
-- The suite now contains 805 runs / 2,176 assertions, including adversarial coverage for concurrent fulfillment/refund delivery, stale processor records, processor pauses/resumes, deferred-plan reconciliation, destroy callbacks, immutable commercial terms, cancellation expiration, malformed persisted cadence, interrupted upgrades, and database constraints.
+- The suite now contains 806 runs / 2,179 assertions, including adversarial coverage for concurrent fulfillment/refund delivery, stale processor records, processor timestamp precision, processor pauses/resumes, deferred-plan reconciliation, destroy callbacks, immutable commercial terms, cancellation expiration, malformed persisted cadence, interrupted upgrades, and database constraints.
 - Compatibility coverage includes Ruby 3.2 across both the Rails 7.2 and Rails 8.1 boundaries, Ruby 3.3/3.4/4.0 across Rails 7.2/8.1 and both the Pay 11.6.2 security floor and latest compatible Pay release, plus clean migrations and the full suite on SQLite, PostgreSQL, and MySQL.
 - CI audits every supported dependency bundle against the latest `ruby-advisory-db` before release.
 

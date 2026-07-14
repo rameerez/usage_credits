@@ -887,6 +887,33 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     assert_nil UsageCredits::Fulfillment.find_by(source: subscription)
   end
 
+  test "database timestamp precision does not suppress a current processor callback" do
+    user = User.create!(email: "timestamp-precision-#{SecureRandom.hex(4)}@example.com", name: "Timestamp Precision")
+    wallet = user.credit_wallet
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :stripe,
+      processor_id: "cus_timestamp_precision_#{SecureRandom.hex(4)}"
+    )
+    period_start = Time.current.change(nsec: 123_456_789)
+
+    subscription = nil
+    assert_difference -> { wallet.reload.credits }, 600 do
+      subscription = Pay::Stripe::Subscription.create!(
+        customer: customer,
+        name: "default",
+        processor_id: "sub_timestamp_precision_#{SecureRandom.hex(4)}",
+        processor_plan: "stripe_pause_pro",
+        status: "active",
+        quantity: 1,
+        current_period_start: period_start,
+        current_period_end: period_start + 1.month
+      )
+    end
+
+    assert UsageCredits::Fulfillment.exists?(source: subscription)
+  end
+
   test "fulfillment record prevents duplicate credit awards" do
     subscription = pay_subscriptions(:active_subscription)
     wallet = subscription.customer.owner.credit_wallet

@@ -8,7 +8,7 @@ module UsageCredits
   #   - Usage-credits specific transaction categories
   #   - Operation charge descriptions and formatting
 
-  class Transaction < Wallets::Transaction
+  class Transaction < Wallets::TransactionBase
     # =========================================
     # Embeddability Configuration
     # =========================================

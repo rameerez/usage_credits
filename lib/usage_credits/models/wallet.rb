@@ -9,7 +9,7 @@ module UsageCredits
   #   - Fulfillment tracking for subscriptions and credit packs
   #   - Usage-credits specific callbacks (credits_added, credits_deducted, etc.)
 
-  class Wallet < Wallets::Wallet
+  class Wallet < Wallets::WalletBase
     # =========================================
     # Embeddability Configuration
     # =========================================

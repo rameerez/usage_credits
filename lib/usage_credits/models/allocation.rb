@@ -7,7 +7,7 @@ module UsageCredits
   #
   # This class extends Wallets::Allocation with usage_credits table configuration.
 
-  class Allocation < Wallets::Allocation
+  class Allocation < Wallets::AllocationBase
     # =========================================
     # Embeddability Configuration
     # =========================================

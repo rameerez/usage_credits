@@ -7,7 +7,7 @@ module UsageCredits
   #
   # This class extends Wallets::Transfer with usage_credits table configuration.
 
-  class Transfer < Wallets::Transfer
+  class Transfer < Wallets::TransferBase
     # =========================================
     # Embeddability Configuration
     # =========================================

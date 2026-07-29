@@ -13,7 +13,7 @@ class CreateUsageCreditsTables < ActiveRecord::Migration<%= migration_version %>
       t.timestamps
     end
 
-    add_index :usage_credits_wallets, [:owner_type, :owner_id, :asset_code], unique: true, name: "index_usage_credits_wallets_on_owner_and_asset"
+    add_index :usage_credits_wallets, [ :owner_type, :owner_id, :asset_code ], unique: true, name: "index_usage_credits_wallets_on_owner_and_asset"
 
     create_table :usage_credits_transfers, id: primary_key_type do |t|
       t.references :from_wallet, null: false, type: foreign_key_type, foreign_key: { to_table: :usage_credits_wallets }
@@ -97,14 +97,14 @@ class CreateUsageCreditsTables < ActiveRecord::Migration<%= migration_version %>
     # Transaction indexes
     add_index :usage_credits_transactions, :category
     add_index :usage_credits_transactions, :expires_at
-    add_index :usage_credits_transactions, [:expires_at, :id], name: "index_usage_credits_transactions_on_expires_at_and_id"
-    add_index :usage_credits_transactions, [:wallet_id, :amount], name: "index_usage_credits_transactions_on_wallet_id_and_amount"
+    add_index :usage_credits_transactions, [ :expires_at, :id ], name: "index_usage_credits_transactions_on_expires_at_and_id"
+    add_index :usage_credits_transactions, [ :wallet_id, :amount ], name: "index_usage_credits_transactions_on_wallet_id_and_amount"
 
     # Allocation indexes
-    add_index :usage_credits_allocations, [:transaction_id, :source_transaction_id], name: "index_usage_credits_allocations_on_tx_and_source_tx"
+    add_index :usage_credits_allocations, [ :transaction_id, :source_transaction_id ], name: "index_usage_credits_allocations_on_tx_and_source_tx"
 
     # Transfer indexes
-    add_index :usage_credits_transfers, [:from_wallet_id, :to_wallet_id, :asset_code], name: "index_usage_credits_transfers_on_wallets_and_asset"
+    add_index :usage_credits_transfers, [ :from_wallet_id, :to_wallet_id, :asset_code ], name: "index_usage_credits_transfers_on_wallets_and_asset"
 
     # Fulfillment indexes
     add_index :usage_credits_fulfillments, :next_fulfillment_at
@@ -115,10 +115,10 @@ class CreateUsageCreditsTables < ActiveRecord::Migration<%= migration_version %>
 
   def primary_and_foreign_key_types
     config = Rails.configuration.generators
-    setting = config.options[config.orm][:primary_key_type]
+    setting = config.options[config.orm][ :primary_key_type ]
     primary_key_type = setting || :primary_key
     foreign_key_type = setting || :bigint
-    [primary_key_type, foreign_key_type]
+    [ primary_key_type, foreign_key_type ]
   end
 
   def json_column_type

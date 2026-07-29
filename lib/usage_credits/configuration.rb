@@ -170,9 +170,12 @@ module UsageCredits
       @default_currency = value
     end
 
-    # Set low balance threshold with validation
+    # Set low balance threshold with validation. Accepts plain integers and
+    # the DSL form the initializer template shows (`100.credits`, a
+    # Cost::Fixed) — anything else fails WholeNumber.parse loudly.
     def low_balance_threshold=(value)
       if value
+        value = value.to_i if value.is_a?(UsageCredits::Cost::Fixed)
         value = Wallets::WholeNumber.parse(value, name: "Low balance threshold", allow_string: true)
         raise ArgumentError, "Low balance threshold must be greater than or equal to zero" if value.negative?
       end

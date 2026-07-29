@@ -200,18 +200,18 @@ class UpgradeUsageCreditsToWalletsCore < ActiveRecord::Migration<%= migration_ve
 
   def ensure_no_orphaned_ledger_references!
     checks = [
-      [:usage_credits_transactions, :wallet_id, :usage_credits_wallets],
-      [:usage_credits_fulfillments, :wallet_id, :usage_credits_wallets],
-      [:usage_credits_transactions, :fulfillment_id, :usage_credits_fulfillments],
-      [:usage_credits_allocations, :transaction_id, :usage_credits_transactions],
-      [:usage_credits_allocations, :source_transaction_id, :usage_credits_transactions]
+      [ :usage_credits_transactions, :wallet_id, :usage_credits_wallets ],
+      [ :usage_credits_fulfillments, :wallet_id, :usage_credits_wallets ],
+      [ :usage_credits_transactions, :fulfillment_id, :usage_credits_fulfillments ],
+      [ :usage_credits_allocations, :transaction_id, :usage_credits_transactions ],
+      [ :usage_credits_allocations, :source_transaction_id, :usage_credits_transactions ]
     ]
     if table_exists?(:usage_credits_transfers)
-      checks << [:usage_credits_transfers, :from_wallet_id, :usage_credits_wallets]
-      checks << [:usage_credits_transfers, :to_wallet_id, :usage_credits_wallets]
+      checks << [ :usage_credits_transfers, :from_wallet_id, :usage_credits_wallets ]
+      checks << [ :usage_credits_transfers, :to_wallet_id, :usage_credits_wallets ]
     end
     if table_exists?(:usage_credits_transfers) && column_exists?(:usage_credits_transactions, :transfer_id)
-      checks << [:usage_credits_transactions, :transfer_id, :usage_credits_transfers]
+      checks << [ :usage_credits_transactions, :transfer_id, :usage_credits_transfers ]
     end
 
     orphaned = checks.filter_map do |child_table, foreign_key, parent_table|

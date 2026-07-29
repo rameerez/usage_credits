@@ -1,0 +1,12 @@
+# Team fixtures for coexistence testing
+alpha_team:
+  id: 1
+  name: Alpha Team
+  created_at: <%= 10.days.ago %>
+  updated_at: <%= 10.days.ago %>
+
+beta_team:
+  id: 2
+  name: Beta Team
+  created_at: <%= 5.days.ago %>
+  updated_at: <%= 5.days.ago %>

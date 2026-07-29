@@ -9,11 +9,10 @@ module UsageCredits
   #
   # @see PayChargeExtension for the actual payment processing, credit pack fulfilling and refund handling
   class CreditPack
-
     attr_reader :name,
-                :credits, :bonus_credits,
-                :price_cents, :price_currency,
-                :metadata
+      :credits, :bonus_credits,
+      :price_cents, :price_currency,
+      :metadata
 
     def initialize(name)
       @name = name
@@ -30,17 +29,17 @@ module UsageCredits
 
     # Set the base number of credits
     def gives(amount)
-      @credits = amount.to_i
+      @credits = normalize_whole_number!(amount, "Credits", minimum: 1)
     end
 
     # Set bonus credits (e.g., for promotions)
     def bonus(amount)
-      @bonus_credits = amount.to_i
+      @bonus_credits = normalize_whole_number!(amount, "Bonus credits", minimum: 0)
     end
 
     # Set the price in cents (e.g., 4900 for $49.00)
     def costs(cents)
-      @price_cents = cents
+      @price_cents = normalize_whole_number!(cents, "Price cents", minimum: 1)
     end
     alias_method :cost, :costs
 
@@ -48,7 +47,7 @@ module UsageCredits
     def currency(currency)
       currency = currency.to_s.downcase.to_sym
       unless UsageCredits::Configuration::VALID_CURRENCIES.include?(currency)
-        raise ArgumentError, "Invalid currency. Must be one of: #{UsageCredits::Configuration::VALID_CURRENCIES.join(', ')}"
+        raise ArgumentError, "Invalid currency. Must be one of: #{UsageCredits::Configuration::VALID_CURRENCIES.join(", ")}"
       end
       @price_currency = currency.to_s.upcase
     end
@@ -158,20 +157,22 @@ module UsageCredits
       raise ArgumentError, "User must have a payment processor" unless user.respond_to?(:payment_processor) && user.payment_processor
 
       # Merge custom metadata with base_metadata (base_metadata takes precedence for critical fields)
-      custom_metadata = options.delete(:metadata) || {}
-      merged_metadata = custom_metadata.merge(base_metadata)
+      custom_metadata = merge_hash_options!(options, :metadata)
+      merged_metadata = UsageCredits::ProcessorMetadata.normalize(custom_metadata.merge(base_metadata))
 
       # Handle payment_intent_data specially to preserve metadata
       # We dup to avoid mutating the caller's original hash
-      custom_payment_intent_data = (options.delete(:payment_intent_data) || {}).dup
-      custom_pi_metadata = custom_payment_intent_data.delete(:metadata) || {}
+      custom_payment_intent_data = merge_hash_options!(options, :payment_intent_data)
+      custom_pi_metadata = merge_hash_options!(custom_payment_intent_data, :metadata)
       merged_payment_intent_data = custom_payment_intent_data.merge(
-        metadata: custom_pi_metadata.merge(base_metadata)
+        metadata: UsageCredits::ProcessorMetadata.normalize(custom_pi_metadata.merge(base_metadata))
       )
 
       # Remove protected parameters that could break credit fulfillment
       options.delete(:mode)
+      options.delete("mode")
       options.delete(:line_items)
+      options.delete("line_items")
 
       user.payment_processor.checkout(
         mode: "payment",
@@ -201,6 +202,26 @@ module UsageCredits
         price_cents: price_cents,
         price_currency: price_currency
       }
+    end
+
+    private
+
+    def merge_hash_options!(options, key)
+      values = [options.delete(key.to_s), options.delete(key)].compact
+      values.each_with_object(ActiveSupport::HashWithIndifferentAccess.new) do |value, merged|
+        unless value.respond_to?(:to_h)
+          raise ArgumentError, "#{key} must be hash-like"
+        end
+
+        merged.merge!(value.to_h.with_indifferent_access)
+      end
+    end
+
+    def normalize_whole_number!(amount, name, minimum:)
+      amount = amount.to_i if amount.is_a?(UsageCredits::Cost::Fixed)
+      value = Wallets::WholeNumber.parse(amount, name: name)
+      raise ArgumentError, "#{name} must be at least #{minimum}" if value < minimum
+      value
     end
   end
 end

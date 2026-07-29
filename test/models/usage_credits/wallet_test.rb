@@ -44,7 +44,7 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
     wallet = usage_credits_wallets(:rich_wallet)
     initial_credits = wallet.credits
 
-    wallet.deduct_credits(50, category: "operation_charge", metadata: { test: true })
+    wallet.deduct_credits(50, category: "operation_charge", metadata: {test: true})
 
     assert_equal initial_credits - 50, wallet.credits
   end
@@ -179,6 +179,47 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
     assert transactions.exists?(id: usage_credits_transactions(:expiry_expires_later).id)
   end
 
+  test "expire_fulfillment_credits shortens only matching later expirations and is idempotent" do
+    wallet = usage_credits_wallets(:subscribed_wallet)
+    fulfillment = usage_credits_fulfillments(:active_subscription_fulfillment)
+    subscription_credit = usage_credits_transactions(:subscribed_month1_credit)
+    unrelated_credit = usage_credits_transactions(:subscribed_signup_bonus)
+    shortened_expiration = 10.days.from_now
+
+    assert_equal 1, wallet.expire_fulfillment_credits!(
+      fulfillment: fulfillment,
+      expires_at: shortened_expiration
+    )
+    assert_in_delta shortened_expiration.to_i, subscription_credit.reload.expires_at.to_i, 1
+    assert_nil unrelated_credit.reload.expires_at
+
+    assert_equal 0, wallet.expire_fulfillment_credits!(
+      fulfillment: fulfillment,
+      expires_at: 20.days.from_now
+    )
+    assert_in_delta shortened_expiration.to_i, subscription_credit.reload.expires_at.to_i, 1
+  end
+
+  test "expire_fulfillment_credits rejects an invalid expiration" do
+    wallet = usage_credits_wallets(:subscribed_wallet)
+    fulfillment = usage_credits_fulfillments(:active_subscription_fulfillment)
+
+    error = assert_raises(ArgumentError) do
+      wallet.expire_fulfillment_credits!(fulfillment: fulfillment, expires_at: Object.new)
+    end
+    assert_equal "Expiration date must respond to to_datetime", error.message
+
+    invalid_date = Object.new
+    def invalid_date.to_datetime
+      raise ArgumentError, "not a date"
+    end
+
+    error = assert_raises(ArgumentError) do
+      wallet.expire_fulfillment_credits!(fulfillment: fulfillment, expires_at: invalid_date)
+    end
+    assert_equal "Expiration date must be a valid date or time", error.message
+  end
+
   test "includes never-expiring credits" do
     wallet = usage_credits_wallets(:expiry_wallet)
 
@@ -206,7 +247,7 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
   end
 
   test "respects grace period for expiration" do
-    wallet = usage_credits_wallets(:empty_wallet)
+    wallet = UsageCredits::Wallet.create!(owner: users(:walletless_user), asset_code: "grace_test")
 
     # Add credit that expires very soon (within grace period)
     expires_at = 1.minute.from_now
@@ -281,6 +322,135 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
     assert_equal 100, total_allocated
   end
 
+  test "credit wallet supports direct wallet transfers without transfer callback wiring" do
+    sender = User.create!(email: "sender-#{SecureRandom.hex(4)}@example.com", name: "Sender")
+    recipient = User.create!(email: "recipient-#{SecureRandom.hex(4)}@example.com", name: "Recipient")
+
+    sender.credit_wallet.give_credits(100, reason: "bonus")
+
+    assert_difference -> { UsageCredits::Transfer.count }, 1 do
+      transfer = sender.credit_wallet.transfer_to(
+        recipient.credit_wallet,
+        30,
+        category: :gift,
+        metadata: {source: "test"}
+      )
+
+      assert_equal sender.credit_wallet, transfer.from_wallet
+      assert_equal recipient.credit_wallet, transfer.to_wallet
+      assert_equal 30, transfer.amount
+      assert_instance_of UsageCredits::Transaction, transfer.outbound_transaction
+      assert_instance_of UsageCredits::Transaction, transfer.inbound_transactions.sole
+      assert_equal "transfer_out", transfer.outbound_transaction.category
+      assert_equal "transfer_in", transfer.inbound_transactions.sole.category
+      assert_equal "preserve", transfer.expiration_policy
+    end
+
+    assert_equal 70, sender.credit_wallet.reload.credits
+    assert_equal 30, recipient.credit_wallet.reload.credits
+  end
+
+  test "transfer_credits_to is a full backwards-compatible alias for transfer_to" do
+    sender = User.create!(email: "sender-alias-#{SecureRandom.hex(4)}@example.com", name: "Sender Alias")
+    recipient = User.create!(email: "recipient-alias-#{SecureRandom.hex(4)}@example.com", name: "Recipient Alias")
+    sender.credit_wallet.give_credits(100, reason: "promo", expires_at: 10.days.from_now)
+
+    transfer = sender.credit_wallet.transfer_credits_to(
+      recipient.credit_wallet,
+      30,
+      category: :gift,
+      metadata: {source: "alias-test"},
+      expiration_policy: :none
+    )
+
+    assert_instance_of UsageCredits::Transfer, transfer
+    assert_equal "gift", transfer.category
+    assert_equal "alias-test", transfer.metadata["source"]
+    assert_equal "none", transfer.expiration_policy
+    assert_nil transfer.inbound_transactions.sole.expires_at
+    assert_equal 70, sender.credit_wallet.reload.credits
+    assert_equal 30, recipient.credit_wallet.reload.credits
+  end
+
+  test "both transfer entry points translate invalid transfers without writing ledger rows" do
+    sender = User.create!(email: "sender-invalid-#{SecureRandom.hex(4)}@example.com", name: "Sender Invalid")
+    recipient = User.create!(email: "recipient-invalid-#{SecureRandom.hex(4)}@example.com", name: "Recipient Invalid")
+    sender.credit_wallet.give_credits(100, reason: "bonus")
+    incompatible_wallet = UsageCredits::Wallet.create!(owner: recipient, asset_code: "other")
+
+    %i[transfer_to transfer_credits_to].each do |entry_point|
+      error = nil
+
+      assert_no_difference -> { UsageCredits::Transfer.count } do
+        assert_no_difference -> { UsageCredits::Transaction.count } do
+          error = assert_raises(UsageCredits::InvalidTransfer) do
+            sender.credit_wallet.public_send(entry_point, incompatible_wallet, 30)
+          end
+        end
+      end
+
+      assert_equal "Wallet assets must match", error.message
+    end
+
+    assert_equal 100, sender.credit_wallet.reload.credits
+    assert_equal 0, incompatible_wallet.reload.credits
+  end
+
+  test "both transfer entry points translate insufficient balance without writing ledger rows" do
+    sender = User.create!(email: "sender-insufficient-#{SecureRandom.hex(4)}@example.com", name: "Sender Insufficient")
+    recipient = User.create!(email: "recipient-insufficient-#{SecureRandom.hex(4)}@example.com", name: "Recipient Insufficient")
+    sender.credit_wallet.give_credits(5, reason: "bonus")
+
+    %i[transfer_to transfer_credits_to].each do |entry_point|
+      error = nil
+
+      assert_no_difference -> { UsageCredits::Transfer.count } do
+        assert_no_difference -> { UsageCredits::Transaction.count } do
+          error = assert_raises(UsageCredits::InsufficientCredits) do
+            sender.credit_wallet.public_send(entry_point, recipient.credit_wallet, 30)
+          end
+        end
+      end
+
+      assert_equal "Insufficient balance (5 < 30)", error.message
+    end
+
+    assert_equal 5, sender.credit_wallet.reload.credits
+    assert_equal 0, recipient.credit_wallet.reload.credits
+  end
+
+  test "credit wallet transfers preserve expiration buckets by default" do
+    sender = User.create!(email: "sender-exp-#{SecureRandom.hex(4)}@example.com", name: "Sender Exp")
+    recipient = User.create!(email: "recipient-exp-#{SecureRandom.hex(4)}@example.com", name: "Recipient Exp")
+    earliest_credit = sender.credit_wallet.give_credits(100, reason: "promo", expires_at: 5.days.from_now)
+    later_credit = sender.credit_wallet.give_credits(80, reason: "promo", expires_at: 20.days.from_now)
+
+    transfer = sender.credit_wallet.transfer_to(recipient.credit_wallet, 130, category: :gift)
+    inbound_legs = transfer.inbound_transactions.order(:expires_at, :id).to_a
+
+    assert_equal "preserve", transfer.expiration_policy
+    assert_equal 2, inbound_legs.size
+    assert_nil transfer.inbound_transaction
+    assert_equal [100, 30], inbound_legs.map(&:amount)
+    assert_equal [earliest_credit.expires_at.to_i, later_credit.expires_at.to_i], inbound_legs.map { |tx| tx.expires_at.to_i }
+  end
+
+  test "credit wallet transfer can override expiration policy to none" do
+    sender = User.create!(email: "sender-none-#{SecureRandom.hex(4)}@example.com", name: "Sender None")
+    recipient = User.create!(email: "recipient-none-#{SecureRandom.hex(4)}@example.com", name: "Recipient None")
+    sender.credit_wallet.give_credits(100, reason: "promo", expires_at: 10.days.from_now)
+
+    transfer = sender.credit_wallet.transfer_to(
+      recipient.credit_wallet,
+      30,
+      category: :gift,
+      expiration_policy: :none
+    )
+
+    assert_equal "none", transfer.expiration_policy
+    assert_nil transfer.inbound_transactions.sole.expires_at
+  end
+
   test "partial allocation from multiple sources" do
     wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
 
@@ -319,7 +489,7 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
 
   test "deduct_credits creates transaction with metadata" do
     wallet = usage_credits_wallets(:rich_wallet)
-    metadata = { operation: "test", param: "value" }
+    metadata = {operation: "test", param: "value"}
 
     tx = wallet.deduct_credits(10, category: "operation_charge", metadata: metadata)
 
@@ -414,6 +584,40 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
     end
   end
 
+  test "spend_credits_on evaluates dynamic cost exactly once" do
+    evaluations = 0
+    UsageCredits.configure do |config|
+      config.operation :single_evaluation do
+        costs ->(_params) {
+          evaluations += 1
+          25
+        }
+      end
+    end
+
+    wallet = usage_credits_wallets(:rich_wallet)
+    transaction = wallet.spend_credits_on(:single_evaluation)
+
+    assert_equal 1, evaluations
+    assert_equal 25, transaction.metadata["cost"]
+  end
+
+  test "spend_credits_on executes free operations without a zero-value transaction" do
+    UsageCredits.configure do |config|
+      config.operation(:free_operation) { costs 0.credits }
+    end
+
+    wallet = usage_credits_wallets(:rich_wallet)
+    executed = false
+
+    assert_no_difference -> { wallet.transactions.count } do
+      result = wallet.spend_credits_on(:free_operation) { executed = true }
+      assert_nil result
+    end
+
+    assert executed
+  end
+
   test "spend_credits_on creates transaction with operation metadata" do
     wallet = usage_credits_wallets(:rich_wallet)
 
@@ -432,6 +636,17 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
     assert_raises(UsageCredits::InsufficientCredits) do
       wallet.spend_credits_on(:test_operation)
     end
+  end
+
+  test "spend_credits_on never executes its block when the locked balance is insufficient" do
+    wallet = usage_credits_wallets(:poor_wallet)
+    block_executed = false
+
+    assert_raises(UsageCredits::InsufficientCredits) do
+      wallet.spend_credits_on(:test_operation) { block_executed = true }
+    end
+
+    refute block_executed
   end
 
   test "spend_credits_on raises for unknown operation" do
@@ -567,7 +782,7 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
 
     # Perform multiple sequential operations
     10.times do |i|
-      wallet.deduct_credits(50, category: "operation_charge", metadata: { iteration: i })
+      wallet.deduct_credits(50, category: "operation_charge", metadata: {iteration: i})
     end
 
     assert_equal 500, wallet.reload.credits
@@ -579,11 +794,11 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
 
   # NOTE: Rails doesn't enforce belongs_to presence for polymorphic associations by default
   # The database has NOT NULL constraints, so this is enforced at the DB level
-  #test "requires owner" do
+  # test "requires owner" do
   #  wallet = UsageCredits::Wallet.new
   #  assert_not wallet.valid?
   #  assert_includes wallet.errors[:owner], "must exist"
-  #end
+  # end
 
   test "balance defaults to 0" do
     wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
@@ -623,10 +838,29 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
         wallet.deduct_credits(10, category: "operation_charge", metadata: {})
       end
 
-      # The credits method calculates from remaining positive transactions
-      # With negative balance enabled, it should show 0 or the actual negative
-      # depending on implementation
-      assert wallet.reload.balance <= 0
+      # usage_credits historically floors negative balances to zero for public
+      # balance access, even when negative balances are allowed.
+      assert_equal 0, wallet.reload.credits
+      assert_equal 0, wallet.balance
+    ensure
+      UsageCredits.configuration.allow_negative_balance = original_setting
+    end
+  end
+
+  test "new credits remain fully usable after an unbacked negative debit" do
+    original_setting = UsageCredits.configuration.allow_negative_balance
+
+    begin
+      UsageCredits.configuration.allow_negative_balance = true
+
+      wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+      wallet.give_credits(10, reason: "initial")
+      wallet.deduct_credits(25, category: "operation_charge", metadata: {})
+
+      refill = wallet.give_credits(20, reason: "refill")
+
+      assert_equal 20, wallet.reload.credits
+      assert_equal 20, refill.balance_after
     ensure
       UsageCredits.configuration.allow_negative_balance = original_setting
     end
@@ -679,7 +913,7 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
 
   # NOTE: This test has an ambiguous SQL query that needs table name qualification
   # The current implementation uses a simpler credits calculation method
-  #test "recalculates balance accurately after many transactions" do
+  # test "recalculates balance accurately after many transactions" do
   #  wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
   #
   #  # Add 50 credits in various amounts
@@ -690,7 +924,7 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
   #
   #  # Balance should be consistent - using the model's credits method
   #  assert_equal wallet.credits, wallet.balance
-  #end
+  # end
 
   test "recalculates balance accurately after many transactions" do
     wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
@@ -699,7 +933,7 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
     25.times { |i| wallet.give_credits((i + 1) * 10, reason: "credit_#{i}") }
 
     # Spend some credits
-    20.times { |i| wallet.deduct_credits(50, category: "operation_charge", metadata: { iteration: i }) }
+    20.times { |i| wallet.deduct_credits(50, category: "operation_charge", metadata: {iteration: i}) }
 
     # Balance should be consistent with the credits calculation
     assert_equal wallet.credits, wallet.balance
@@ -733,7 +967,7 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
   test "handles mixed currency metadata" do
     wallet = UsageCredits::Wallet.create!(
       owner: users(:new_user),
-      metadata: { currency: "USD", region: "US" }
+      metadata: {currency: "USD", region: "US"}
     )
 
     assert_equal "USD", wallet.metadata["currency"]

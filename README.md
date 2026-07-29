@@ -7,9 +7,9 @@
 
 `usage_credits` allows your users to have in-app credits / tokens they can use to perform operations.
 
-✨ Perfect for SaaS, AI apps, games, API products, and **marketplace wallets** that want to implement usage-based pricing or track money-like balances.
+✨ Perfect for SaaS, AI apps, games, API products, and **single-asset credit systems** that want to implement usage-based pricing or track money-like balances.
 
-> **Not just for credits!** While the gem is called "usage_credits", it's built on a production-grade double-entry ledger with row-level locking, FIFO allocation, and full audit trails. You can use it for marketplace seller balances, in-app wallets, reward points, or any system that needs to track money-like assets with proper accounting. [See the "Beyond credits" section](#beyond-credits-using-this-gem-for-money-like-wallets-and-payouts) for examples.
+> **Built on top of [`wallets`](https://github.com/rameerez/wallets).** As of `usage_credits` 1.0, `usage_credits` uses `wallets` as its ledger core underneath. If your main problem is multi-asset wallets, transfers, in-game resources, or general balances, use `wallets` directly. Use `usage_credits` when you want the opinionated DX for credits, operations, subscriptions, packs, and payments.
 
 [ 🟢 [Live interactive demo website](https://usagecredits.com/) ] [ 🎥 [Quick video overview](https://x.com/rameerez/status/1890419563189195260) ]
 
@@ -19,8 +19,10 @@ All with a simple DSL that reads just like English.
 
 **Requirements**
 
+- Ruby 3.2+ and Rails 7.2.3.1–8.x. Ruby 3.2 is the security floor because current patched versions of transitive Rails dependencies no longer support Ruby 3.1.
 - An ActiveJob backend (Sidekiq, `solid_queue`, etc.) for subscription credit fulfillment
-- [`pay`](https://github.com/pay-rails/pay) gem for Stripe/PayPal/Lemon Squeezy integration (sell credits, refill subscriptions)
+- [`pay`](https://github.com/pay-rails/pay) 11.6.2–11.x for payment integration. Pay 11.6.2 is the security floor because it fixes [GHSA-mjgf-xj26-9qf9](https://github.com/pay-rails/pay/security/advisories/GHSA-mjgf-xj26-9qf9).
+- [`wallets`](https://github.com/rameerez/wallets) 0.3.x (installed automatically as the ledger core)
 
 ## 👨‍💻 Example
 
@@ -96,6 +98,30 @@ bundle install
 rails generate usage_credits:install
 rails db:migrate
 ```
+
+### Upgrading from pre-1.0
+
+If you're upgrading an existing app from pre-1.0 `usage_credits`, run this instead of the install generator:
+```bash
+rails generate usage_credits:upgrade
+rails db:migrate
+```
+
+The upgrade migration moves your existing ledger onto the [`wallets`](https://github.com/rameerez/wallets) core schema **in place** — all balances, transactions, allocations, and fulfillments are preserved exactly as they are. It:
+
+- Adds an `asset_code` column to wallets (defaults to `"credits"`, so nothing changes for you)
+- Enforces one wallet per owner with a unique index (it first checks your data and aborts with step-by-step instructions if any owner somehow has duplicate wallets, before touching anything)
+- Widens integer amount columns to `bigint`
+- Creates the `usage_credits_transfers` table that powers wallet-to-wallet transfers
+
+A few production notes:
+
+- Back up your database first. The migration is intentionally irreversible; rollback means restoring that backup.
+- Rehearse the migration against a recent production snapshot and measure it before choosing a deployment window.
+- On PostgreSQL, Rails runs the migration in one DDL transaction. The unique-index build, four `bigint` conversions, constraints, foreign keys, and transfer-table changes therefore hold their acquired table locks until the whole migration commits. Writes to **all** `usage_credits_*` ledger tables may be blocked for the combined duration, not only while each individual `bigint` conversion is executing. Use a maintenance window for a large or write-heavy ledger. A genuinely lower-lock rollout requires a DBA-reviewed, application-specific staged migration (including concurrent indexes and separately validated constraints); do not add `disable_ddl_transaction!` to the generated migration casually, because that trades atomicity for partial-schema exposure.
+- MySQL DDL commits step by step. Every mutation is independently guarded, so an interrupted run can be fixed and safely re-run.
+- Deploy the gem update and migration together: the 1.0 models expect the upgraded schema.
+- Fresh installs use descriptive `usage_credits_*` index names. Upgrades deliberately preserve safe legacy index names rather than dropping and rebuilding equivalent indexes, so schema dumps from fresh and upgraded databases can differ by index name while remaining structurally equivalent.
 
 Add `has_credits` your user model (or any model that needs to have credits):
 ```ruby
@@ -422,6 +448,13 @@ subscription_plan :pro do
 end
 ```
 
+Cancellation terms are snapshotted when the subscription is fulfilled, so a
+later initializer change or plan removal cannot rewrite the customer's policy.
+`expire_after` only shortens credits minted by that subscription; manual grants,
+credit packs, and other subscriptions are untouched. When cancellation makes
+those credits expire immediately, any resulting low-balance or depleted
+crossing is dispatched after the cancellation transaction commits.
+
 The first thing to understand is that **credit fulfillment** is decoupled from **billing periods**:
 
 ### Credit fulfillment cycles
@@ -538,11 +571,11 @@ This happens automatically thanks to our Pay Subscription extension (changes to 
 Handled:
 - Subscription create, renew, cancel, upgrade, downgrade, non-credit transitions
 - Pending downgrade application on renewal
+- Processor pauses and resumes: no credits are minted during an effective pause; scheduled pauses follow Pay's processor lifecycle semantics; plan changes made while paused are atomically reconciled without a bonus before service resumes minting
 - Credit expiration and rollover
 
 Not handled (yet):
 - Plan changes while **trialing** (we only handle `status == "active"`)
-- Paused subscriptions (see TODO in code)
 
 ## Transaction history & audit trail
 
@@ -629,9 +662,17 @@ Which will get you:
 
 It's useful if you want to name your credits something else (tokens, virtual currency, tasks, in-app gems, whatever) and you want the name to be consistent.
 
-## Beyond credits: using this gem for money-like wallets and payouts
+## Beyond credits: wallet-like balances on top of a credits product layer
 
-While this gem is called `usage_credits`, the underlying architecture is a **production-grade double-entry ledger** with row-level locking, FIFO allocation, and full audit trails. This makes it suitable for more than just API credits — you can use it as a wallet system for **money-like assets**, **marketplace payouts**, **in-app balances**, and more.
+While this gem is called `usage_credits`, the underlying architecture is still a **production-grade append-oriented ledger API** with row-level locking, expiration-aware allocation, and full transaction trails. That means you can use it for more than just API credits when the product still fits a **single-asset credits model**.
+
+Good fits here:
+- marketplace seller balances in cents
+- internal store credit
+- cashback / reward points
+- telecom-style balances where acquisition/refill matters more than multi-asset modeling
+
+If the real problem is **multi-asset wallets**, **player inventories**, or **wallet-to-wallet transfers as a primary feature**, use [`wallets`](https://github.com/rameerez/wallets) directly instead.
 
 ### Custom transaction categories
 
@@ -665,9 +706,7 @@ class User < ApplicationRecord
   has_credits  # Each user gets a wallet
 
   def request_payout(amount_cents)
-    # In production, wrap in wallet.with_lock { } to prevent race conditions
-    raise "Insufficient balance" if credits < amount_cents
-
+    # deduct_credits locks and checks the wallet atomically.
     wallet.deduct_credits(
       amount_cents,
       category: :payout_requested,
@@ -729,29 +768,78 @@ Now you have:
 end
 ```
 
-### Why this works for money
+### Wallet-level transfers
 
-The gem's architecture gives you everything you'd need for a money-handling system:
+Because `usage_credits` uses `wallets` underneath, the underlying wallet object also supports low-level wallet operations like transfers:
+
+```ruby
+seller.credit_wallet.transfer_to(
+  buyer.credit_wallet,
+  500,
+  category: :refund,
+  metadata: { order_id: 42 }
+)
+```
+
+Transfers preserve expiration buckets by default because they run through the underlying `wallets` ledger. If you need cash-like behavior instead, you can still opt into evergreen receive-side credits at the wallet layer:
+
+```ruby
+seller.credit_wallet.transfer_to(
+  buyer.credit_wallet,
+  500,
+  category: :refund,
+  expiration_policy: :none,
+  metadata: { order_id: 42 }
+)
+```
+
+`transfer_credits_to` is a backwards-compatible alias for `transfer_to`; both
+accept the same expiration options and return a `UsageCredits::Transfer`.
+Transfer domain failures stay inside the `usage_credits` error hierarchy:
+`UsageCredits::InvalidTransfer` for invalid endpoints and
+`UsageCredits::InsufficientCredits` for insufficient balance.
+
+This is intentionally a **wallet-level API**, not the main `usage_credits` DSL. The main product surface of `usage_credits` is still:
+- `give_credits`
+- `spend_credits_on`
+- credit packs
+- subscription fulfillment
+- Pay integration
+
+If transfers, multi-asset balances, and wallet movement are central to your app, that is usually a sign you should use [`wallets`](https://github.com/rameerez/wallets) directly.
+
+### Why this still works for money-like balances
+
+The ledger architecture gives you everything you'd want from a serious internal balance system:
 
 | Feature | How it helps |
 |---------|--------------|
-| Double-entry ledger | Every credit has a corresponding debit source tracked via allocations |
-| Immutable transactions | Append-only — no edits, only new entries (required for financial audit) |
+| Allocation-backed ledger | Every spend records exactly which credit buckets it consumed |
+| Append-oriented operations | Public wallet operations record new transaction rows instead of editing balances in place |
 | Row-level locking | Prevents race conditions and double-spending |
-| FIFO allocation | When spending, oldest credits are used first (important for expiring balances) |
+| Expiration-aware allocation | Soonest-expiring credits are spent first, with oldest-first ties |
 | Balance snapshots | Each transaction records balance before/after for reconciliation |
 | Rich metadata | Store order IDs, user IDs, payment references — whatever you need for audit |
 
+The public API is append-oriented, not tamper-proof: code with model or SQL access can still modify ledger rows, and destroying an owner intentionally cascades through that owner's credit history. Use soft deletion or an application-level destroy restriction when records must be retained, keep database backups, reconcile payment-processor events, and apply the audit controls appropriate to your risk model.
+
 ### A note on multi-currency
 
-Currently, the gem uses a single currency per installation (configured via `config.default_currency`). All amounts are stored as integers (cents) to avoid floating-point issues.
+`usage_credits` is intentionally **single-asset**: every owner gets exactly one credits wallet (asset code `"credits"`). All amounts are stored as integers (for money, usually cents) to avoid floating-point issues.
 
-If you need multi-currency support, you could:
-1. Store amounts in the smallest unit of each currency (cents, pence, etc.)
-2. Use metadata to track the currency per transaction
-3. Handle conversion at the application layer
+If you need one wallet per currency or asset, use [`wallets`](https://github.com/rameerez/wallets) — the dedicated gem for multi-asset support, and the same ledger core `usage_credits` runs on. Both gems coexist cleanly in the same app, each with its own tables. Put `has_wallets` (from `wallets`) on the models that need multi-asset balances, and `has_credits` (from `usage_credits`) on the models that need credits:
 
-Multi-currency wallets (one wallet per currency per user) is on the roadmap for a future version. For now, if you need this, you'd run separate wallet instances or handle it at the application level.
+```ruby
+class User < ApplicationRecord
+  has_credits             # user.credits, user.spend_credits_on(...)
+end
+
+class Team < ApplicationRecord
+  has_wallets             # team.wallet(:eur), team.wallet(:usd), team.wallet(:wood)
+end
+```
+
+One caveat: avoid putting both `has_credits` and `has_wallets` on the *same* model — both define a `wallet` method (the credits wallet vs. the multi-asset lookup), so whichever you include last wins. If you ever do need both on one model, use the unambiguous `credit_wallet` for credits and `find_wallet(:asset)` for the rest.
 
 ### Naming your "credits"
 
@@ -783,13 +871,13 @@ That results in a plethora of bugs as soon as time starts rolling and customers 
 
 That only gets you so far.
 
-One problem is the discrepancy between billing periods and fulfillment cycles (you may want to charge your users up front for a whole year if they have a yearly subscription, but you may not want to refill all their credits up front, but month by month) Then if you want expiring credits (so that unused credits don't roll over to the next period), credit packs, etc. you essentially end up needing to build a double-entry ledger system. You need to keep track of every credit-giving and credit-spending operation. The ledger should be immutable by design (append-only), transactions should happen on row-level locks to prevent double-spending, operations should be atomic, etc.
+One problem is the discrepancy between billing periods and fulfillment cycles (you may want to charge your users up front for a whole year if they have a yearly subscription, but you may not want to refill all their credits up front, but month by month). Once you add expiring credits, credit packs, and refunds, you need an allocation-backed transaction ledger that tracks every grant and spend. Writes must be atomic and serialized with row-level locks to prevent double-spending.
 
 That's exactly what I ended up building:
 - `Wallet` is the root of all functionality. All users have a wallet that centralizes everything and keeps track of the available balance – and all credit operations (add/deduct credits) are performed on the wallet.
 - `Transaction` - operations get logged as transactions. The Transaction model is the basis for the ledger system.
 - `Fulfillment` represents a credit-giving action (wether recurring or not). Subscriptions are tied to a Fulfillment record that orchestrates when the actual credit fulfillment should happen, and how often. A Fulfillment object will create one or many positive Transactions.
-- `Allocation` is the basis for our bucket-based FIFO credit spending system. It's what solves the [dragging cost problem](https://x.com/rameerez/status/1884246492837302759) and allows for expiring credits.
+- `Allocation` is the basis for our bucket-based, first-expiring-first-out credit spending system. It's what solves the [dragging cost problem](https://x.com/rameerez/status/1884246492837302759) and allows for expiring credits.
 - `CreditPack` and `CreditSubscriptionPlan` are POROs that model credit-giving objects (one-time purchases for credit packs; recurring subscriptions for subscription plans). They allow for easy configuration through the DSL and store all information on memory.
 - `Operation` represents a credit-spending operation.
 
@@ -800,7 +888,7 @@ Heads up: we acquire a row-level lock when spending credits, to avoid concurrenc
 ### Summary of features
 
 **Core ledger:**
-- Immutable ledger design (transactions are append-only)
+- Append-oriented wallet operations with a complete transaction trail
 - Row-level locks to prevent double-spending even with concurrent usage
 - Secure credit spending (credits will not be deducted if the operation fails)
 - Audit trail / transaction logs (each transaction has metadata on how the credits were spent, and what "credit bucket" they drew from)
@@ -817,7 +905,7 @@ Heads up: we acquire a row-level lock when spending credits, to avoid concurrenc
 - Credits can be expired
 - Credits can be rolled over to the next period
 - Prevents double-fulfillment of credits
-- FIFO bucketed ledger approach for credit spending
+- First-expiring-first-out bucket allocation, with oldest-first ties
 
 ### Numeric extensions
 
@@ -848,12 +936,12 @@ This gem _pollutes_ a bit the `Kernel` namespace by defining 3 top-level methods
 
 Billing systems are extremely complex and full of edge cases. This is a new gem, and it may be missing some edge cases.
 
-Real billing systems usually find edge cases when handling things like:
+Production integrations should still define and test their product policy for things like:
 - Prorated changes
 - Different pricing tiers
 - Usage rollups and aggregation
 - Upgrading and downgrading subscriptions
-- Pausing and resuming subscriptions (especially at edge times)
+- Processor-specific billing/proration modes around subscription transitions
 - Re-activating subscriptions
 - Refunds and credits
 - Failed payments
@@ -862,7 +950,8 @@ Real billing systems usually find edge cases when handling things like:
 Please help us by contributing to add tests to cover all critical paths!
 
 ## TODO
-No open TODOs here right now. If you find an edge case, please open an issue or PR.
+
+- Add a first-class reversal/refund helper on top of wallet-level transfers if transfers become a documented primary use case
 
 ## Testing
 
@@ -870,7 +959,7 @@ Run the test suite with `bundle exec rake test`
 
 ## Development
 
-After checking out the repo, run `bin/setup` to install dependencies. Then, run `rake spec` to run the tests. You can also run `bin/console` for an interactive prompt that will allow you to experiment.
+After checking out the repo, run `bin/setup` to install dependencies. Then, run `bundle exec rake test` to run the tests. You can also run `bin/console` for an interactive prompt that will allow you to experiment.
 
 To install this gem onto your local machine, run `bundle exec rake install`.
 

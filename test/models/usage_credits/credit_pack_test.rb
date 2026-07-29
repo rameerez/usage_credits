@@ -456,8 +456,8 @@ class UsageCredits::CreditPackTest < ActiveSupport::TestCase
       # Verify metadata contains pack info
       metadata = args[:payment_intent_data][:metadata]
       assert_equal "credit_pack", metadata[:purchase_type]
-      assert_equal :pro, metadata[:pack_name]
-      assert_equal 5000, metadata[:credits]
+      assert_equal "pro", metadata[:pack_name]
+      assert_equal "5000", metadata[:credits]
 
       true
     end
@@ -485,10 +485,10 @@ class UsageCredits::CreditPackTest < ActiveSupport::TestCase
 
       # Verify all pack configuration is included
       assert_equal "credit_pack", metadata[:purchase_type]
-      assert_equal :enterprise, metadata[:pack_name]
-      assert_equal 10_000, metadata[:credits]
-      assert_equal 2_000, metadata[:bonus_credits]
-      assert_equal 19900, metadata[:price_cents]
+      assert_equal "enterprise", metadata[:pack_name]
+      assert_equal "10000", metadata[:credits]
+      assert_equal "2000", metadata[:bonus_credits]
+      assert_equal "19900", metadata[:price_cents]
       assert_equal "USD", metadata[:price_currency]
 
       # Also verify session-level metadata
@@ -567,8 +567,7 @@ class UsageCredits::CreditPackTest < ActiveSupport::TestCase
     user.stub(:payment_processor, mock_payment_processor) do
       pack.create_checkout_session(user,
         success_url: "https://example.com/success",
-        cancel_url: "https://example.com/cancel"
-      )
+        cancel_url: "https://example.com/cancel")
     end
 
     mock_payment_processor.verify
@@ -665,8 +664,7 @@ class UsageCredits::CreditPackTest < ActiveSupport::TestCase
         cancel_url: "https://example.com/cancel",
         allow_promotion_codes: true,
         locale: "fr",
-        billing_address_collection: "required"
-      )
+        billing_address_collection: "required")
     end
 
     mock_payment_processor.verify
@@ -695,10 +693,10 @@ class UsageCredits::CreditPackTest < ActiveSupport::TestCase
 
       # Base metadata must still be present (critical for fulfillment)
       assert_equal "credit_pack", metadata[:purchase_type]
-      assert_equal :starter, metadata[:pack_name]
-      assert_equal 1000, metadata[:credits]
-      assert_equal 0, metadata[:bonus_credits]
-      assert_equal 4900, metadata[:price_cents]
+      assert_equal "starter", metadata[:pack_name]
+      assert_equal "1000", metadata[:credits]
+      assert_equal "0", metadata[:bonus_credits]
+      assert_equal "4900", metadata[:price_cents]
       assert_equal "USD", metadata[:price_currency]
 
       true
@@ -706,8 +704,7 @@ class UsageCredits::CreditPackTest < ActiveSupport::TestCase
 
     user.stub(:payment_processor, mock_payment_processor) do
       pack.create_checkout_session(user,
-        metadata: { custom_key: "custom_value", organization_id: "org_123" }
-      )
+        metadata: {custom_key: "custom_value", organization_id: "org_123"})
     end
 
     mock_payment_processor.verify
@@ -728,8 +725,8 @@ class UsageCredits::CreditPackTest < ActiveSupport::TestCase
 
       # Attempting to override critical fields should fail - base_metadata wins
       assert_equal "credit_pack", metadata[:purchase_type], "purchase_type should not be overridable"
-      assert_equal :starter, metadata[:pack_name], "pack_name should not be overridable"
-      assert_equal 1000, metadata[:credits], "credits should not be overridable"
+      assert_equal "starter", metadata[:pack_name], "pack_name should not be overridable"
+      assert_equal "1000", metadata[:credits], "credits should not be overridable"
 
       true
     end
@@ -738,11 +735,10 @@ class UsageCredits::CreditPackTest < ActiveSupport::TestCase
       # Try to override critical metadata fields (malicious or accidental)
       pack.create_checkout_session(user,
         metadata: {
-          purchase_type: "something_else",
-          pack_name: "hacked",
-          credits: 999999
-        }
-      )
+          "purchase_type" => "something_else",
+          "pack_name" => "hacked",
+          "credits" => 999999
+        })
     end
 
     mock_payment_processor.verify
@@ -767,17 +763,16 @@ class UsageCredits::CreditPackTest < ActiveSupport::TestCase
 
       # Base metadata must still be present
       assert_equal "credit_pack", pi_metadata[:purchase_type]
-      assert_equal :pro, pi_metadata[:pack_name]
-      assert_equal 5000, pi_metadata[:credits]
-      assert_equal 500, pi_metadata[:bonus_credits]
+      assert_equal "pro", pi_metadata[:pack_name]
+      assert_equal "5000", pi_metadata[:credits]
+      assert_equal "500", pi_metadata[:bonus_credits]
 
       true
     end
 
     user.stub(:payment_processor, mock_payment_processor) do
       pack.create_checkout_session(user,
-        payment_intent_data: { metadata: { internal_ref: "ref_123" } }
-      )
+        payment_intent_data: {metadata: {internal_ref: "ref_123"}})
     end
 
     mock_payment_processor.verify
@@ -811,8 +806,7 @@ class UsageCredits::CreditPackTest < ActiveSupport::TestCase
         payment_intent_data: {
           receipt_email: "customer@example.com",
           description: "Thank you!"
-        }
-      )
+        })
     end
 
     mock_payment_processor.verify
@@ -867,8 +861,7 @@ class UsageCredits::CreditPackTest < ActiveSupport::TestCase
     user.stub(:payment_processor, mock_payment_processor) do
       # Try to override line_items (should be ignored)
       pack.create_checkout_session(user,
-        line_items: [{ price: "price_malicious", quantity: 1 }]
-      )
+        line_items: [{price: "price_malicious", quantity: 1}])
     end
 
     mock_payment_processor.verify
@@ -996,7 +989,7 @@ class UsageCredits::CreditPackTest < ActiveSupport::TestCase
     # Create a hash that the caller might want to reuse
     caller_payment_intent_data = {
       receipt_email: "customer@example.com",
-      metadata: { internal_ref: "ref_123", tracking_id: "track_456" }
+      metadata: {internal_ref: "ref_123", tracking_id: "track_456"}
     }
 
     # Store the original state for comparison
@@ -1025,7 +1018,7 @@ class UsageCredits::CreditPackTest < ActiveSupport::TestCase
     # A reusable hash that a caller might use for multiple checkout sessions
     reusable_options = {
       receipt_email: "customer@example.com",
-      metadata: { campaign: "summer_sale" }
+      metadata: {campaign: "summer_sale"}
     }
 
     mock_payment_processor = Minitest::Mock.new
@@ -1044,9 +1037,17 @@ class UsageCredits::CreditPackTest < ActiveSupport::TestCase
     end
 
     # The hash should still have its metadata after both calls
-    assert_equal({ campaign: "summer_sale" }, reusable_options[:metadata],
+    assert_equal({campaign: "summer_sale"}, reusable_options[:metadata],
       "Metadata should still be present after multiple checkout calls")
 
     mock_payment_processor.verify
+  end
+
+  test "credit and price setters reject fractional or non-finite ledger values" do
+    pack = UsageCredits::CreditPack.new(:strict_values)
+
+    assert_raises(ArgumentError) { pack.gives(10.5) }
+    assert_raises(ArgumentError) { pack.bonus(Float::INFINITY) }
+    assert_raises(ArgumentError) { pack.costs(499.5) }
   end
 end

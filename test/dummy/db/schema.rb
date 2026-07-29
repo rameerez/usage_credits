@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.2].define(version: 2025_04_16_000000) do
+ActiveRecord::Schema[7.2].define(version: 2025_04_17_000000) do
   create_table "pay_charges", force: :cascade do |t|
     t.bigint "customer_id", null: false
     t.bigint "subscription_id"
@@ -110,22 +110,29 @@ ActiveRecord::Schema[7.2].define(version: 2025_04_16_000000) do
     t.datetime "updated_at", null: false
   end
 
+  create_table "teams", force: :cascade do |t|
+    t.string "name"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+  end
+
   create_table "usage_credits_allocations", force: :cascade do |t|
     t.bigint "transaction_id", null: false
     t.bigint "source_transaction_id", null: false
-    t.integer "amount", null: false
+    t.bigint "amount", null: false
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
-    t.index ["source_transaction_id"], name: "index_allocations_on_source_transaction_id"
-    t.index ["transaction_id", "source_transaction_id"], name: "index_allocations_on_tx_and_source_tx"
-    t.index ["transaction_id"], name: "index_allocations_on_transaction_id"
+    t.index ["source_transaction_id"], name: "index_usage_credits_allocations_on_source_tx_id"
+    t.index ["transaction_id", "source_transaction_id"], name: "index_usage_credits_allocations_on_tx_and_source_tx"
+    t.index ["transaction_id"], name: "index_usage_credits_allocations_on_transaction_id"
+    t.check_constraint "amount > 0", name: "check_usage_credits_allocations_amount_positive"
   end
 
   create_table "usage_credits_fulfillments", force: :cascade do |t|
     t.bigint "wallet_id", null: false
     t.string "source_type"
     t.bigint "source_id"
-    t.integer "credits_last_fulfillment", null: false
+    t.bigint "credits_last_fulfillment", null: false
     t.string "fulfillment_type", null: false
     t.datetime "last_fulfilled_at"
     t.datetime "next_fulfillment_at"
@@ -136,34 +143,57 @@ ActiveRecord::Schema[7.2].define(version: 2025_04_16_000000) do
     t.datetime "updated_at", null: false
     t.index ["fulfillment_type"], name: "index_usage_credits_fulfillments_on_fulfillment_type"
     t.index ["next_fulfillment_at"], name: "index_usage_credits_fulfillments_on_next_fulfillment_at"
-    t.index ["source_type", "source_id"], name: "index_usage_credits_fulfillments_on_source"
+    t.index ["source_type", "source_id"], name: "index_usage_credits_fulfillments_on_source", unique: true
     t.index ["wallet_id"], name: "index_usage_credits_fulfillments_on_wallet_id"
+    t.check_constraint "credits_last_fulfillment >= 0", name: "check_usage_credits_fulfillments_credits_nonnegative"
   end
 
   create_table "usage_credits_transactions", force: :cascade do |t|
     t.bigint "wallet_id", null: false
-    t.integer "amount", null: false
+    t.bigint "amount", null: false
     t.string "category", null: false
     t.datetime "expires_at"
+    t.bigint "transfer_id"
     t.bigint "fulfillment_id"
     t.json "metadata", default: {}, null: false
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.index ["category"], name: "index_usage_credits_transactions_on_category"
-    t.index ["expires_at", "id"], name: "index_transactions_on_expires_at_and_id"
+    t.index ["expires_at", "id"], name: "index_usage_credits_transactions_on_expires_at_and_id"
     t.index ["expires_at"], name: "index_usage_credits_transactions_on_expires_at"
     t.index ["fulfillment_id"], name: "index_usage_credits_transactions_on_fulfillment_id"
-    t.index ["wallet_id", "amount"], name: "index_transactions_on_wallet_id_and_amount"
+    t.index ["transfer_id"], name: "index_usage_credits_transactions_on_transfer_id"
+    t.index ["wallet_id", "amount"], name: "index_usage_credits_transactions_on_wallet_id_and_amount"
     t.index ["wallet_id"], name: "index_usage_credits_transactions_on_wallet_id"
+    t.check_constraint "amount <> 0", name: "check_usage_credits_transactions_amount_nonzero"
+  end
+
+  create_table "usage_credits_transfers", force: :cascade do |t|
+    t.bigint "from_wallet_id", null: false
+    t.bigint "to_wallet_id", null: false
+    t.string "asset_code", default: "credits", null: false
+    t.bigint "amount", null: false
+    t.string "category", default: "transfer", null: false
+    t.string "expiration_policy", default: "preserve", null: false
+    t.json "metadata", default: {}, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["from_wallet_id", "to_wallet_id", "asset_code"], name: "index_usage_credits_transfers_on_wallets_and_asset"
+    t.index ["from_wallet_id"], name: "index_usage_credits_transfers_on_from_wallet_id"
+    t.index ["to_wallet_id"], name: "index_usage_credits_transfers_on_to_wallet_id"
+    t.check_constraint "amount > 0", name: "check_usage_credits_transfers_amount_positive"
+    t.check_constraint "from_wallet_id <> to_wallet_id", name: "check_usage_credits_transfers_distinct_wallets"
   end
 
   create_table "usage_credits_wallets", force: :cascade do |t|
     t.string "owner_type", null: false
     t.bigint "owner_id", null: false
-    t.integer "balance", default: 0, null: false
+    t.string "asset_code", default: "credits", null: false
+    t.bigint "balance", default: 0, null: false
     t.json "metadata", default: {}, null: false
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.index ["owner_type", "owner_id", "asset_code"], name: "index_usage_credits_wallets_on_owner_and_asset", unique: true
     t.index ["owner_type", "owner_id"], name: "index_usage_credits_wallets_on_owner"
   end
 
@@ -174,10 +204,77 @@ ActiveRecord::Schema[7.2].define(version: 2025_04_16_000000) do
     t.datetime "updated_at", null: false
   end
 
+  create_table "wallets_allocations", force: :cascade do |t|
+    t.bigint "transaction_id", null: false
+    t.bigint "source_transaction_id", null: false
+    t.bigint "amount", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["source_transaction_id"], name: "index_wallets_allocations_on_source_transaction_id"
+    t.index ["transaction_id", "source_transaction_id"], name: "index_wallets_allocations_on_tx_and_source_tx"
+    t.index ["transaction_id"], name: "index_wallets_allocations_on_transaction_id"
+  end
+
+  create_table "wallets_transactions", force: :cascade do |t|
+    t.bigint "wallet_id", null: false
+    t.bigint "amount", null: false
+    t.string "category", null: false
+    t.datetime "expires_at"
+    t.bigint "transfer_id"
+    t.json "metadata", default: {}, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["category"], name: "index_wallets_transactions_on_category"
+    t.index ["expires_at", "id"], name: "index_wallets_transactions_on_expires_at_and_id"
+    t.index ["expires_at"], name: "index_wallets_transactions_on_expires_at"
+    t.index ["transfer_id"], name: "index_wallets_transactions_on_transfer_id"
+    t.index ["wallet_id", "amount"], name: "index_wallets_transactions_on_wallet_id_and_amount"
+    t.index ["wallet_id"], name: "index_wallets_transactions_on_wallet_id"
+  end
+
+  create_table "wallets_transfers", force: :cascade do |t|
+    t.bigint "from_wallet_id", null: false
+    t.bigint "to_wallet_id", null: false
+    t.string "asset_code", null: false
+    t.bigint "amount", null: false
+    t.string "category", default: "transfer", null: false
+    t.string "expiration_policy", default: "preserve", null: false
+    t.json "metadata", default: {}, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["from_wallet_id", "to_wallet_id", "asset_code"], name: "index_wallets_transfers_on_wallets_and_asset"
+    t.index ["from_wallet_id"], name: "index_wallets_transfers_on_from_wallet_id"
+    t.index ["to_wallet_id"], name: "index_wallets_transfers_on_to_wallet_id"
+  end
+
+  create_table "wallets_wallets", force: :cascade do |t|
+    t.string "owner_type", null: false
+    t.bigint "owner_id", null: false
+    t.string "asset_code", null: false
+    t.bigint "balance", default: 0, null: false
+    t.json "metadata", default: {}, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["owner_type", "owner_id", "asset_code"], name: "index_wallets_on_owner_and_asset_code", unique: true
+    t.index ["owner_type", "owner_id"], name: "index_wallets_wallets_on_owner"
+  end
+
   add_foreign_key "pay_charges", "pay_customers", column: "customer_id"
   add_foreign_key "pay_charges", "pay_subscriptions", column: "subscription_id"
   add_foreign_key "pay_payment_methods", "pay_customers", column: "customer_id"
   add_foreign_key "pay_subscriptions", "pay_customers", column: "customer_id"
   add_foreign_key "usage_credits_allocations", "usage_credits_transactions", column: "source_transaction_id"
   add_foreign_key "usage_credits_allocations", "usage_credits_transactions", column: "transaction_id"
+  add_foreign_key "usage_credits_fulfillments", "usage_credits_wallets", column: "wallet_id"
+  add_foreign_key "usage_credits_transactions", "usage_credits_fulfillments", column: "fulfillment_id"
+  add_foreign_key "usage_credits_transactions", "usage_credits_transfers", column: "transfer_id"
+  add_foreign_key "usage_credits_transactions", "usage_credits_wallets", column: "wallet_id"
+  add_foreign_key "usage_credits_transfers", "usage_credits_wallets", column: "from_wallet_id"
+  add_foreign_key "usage_credits_transfers", "usage_credits_wallets", column: "to_wallet_id"
+  add_foreign_key "wallets_allocations", "wallets_transactions", column: "source_transaction_id"
+  add_foreign_key "wallets_allocations", "wallets_transactions", column: "transaction_id"
+  add_foreign_key "wallets_transactions", "wallets_transfers", column: "transfer_id"
+  add_foreign_key "wallets_transactions", "wallets_wallets", column: "wallet_id"
+  add_foreign_key "wallets_transfers", "wallets_wallets", column: "from_wallet_id"
+  add_foreign_key "wallets_transfers", "wallets_wallets", column: "to_wallet_id"
 end

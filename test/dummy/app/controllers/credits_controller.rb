@@ -23,7 +23,7 @@ class CreditsController < ApplicationController
       flash[:alert] = "Not enough credits: #{e.message}"
     rescue UsageCredits::InvalidOperation => e
       flash[:alert] = "Invalid operation: #{e.message}"
-    rescue StandardError => e
+    rescue => e
       flash[:alert] = "Operation failed: #{e.message}"
     end
 
@@ -32,7 +32,7 @@ class CreditsController < ApplicationController
 
   def checkout
     # Mock `pay` payment processor, so instead of creating a checkout session, just create a charge directly
-    current_user.payment_processor.charge(@pack.price_cents, metadata: @pack.base_metadata )
+    current_user.payment_processor.charge(@pack.price_cents, metadata: @pack.base_metadata)
 
     # Redirect to success page
     redirect_to root_path, notice: "Successfully purchased #{@pack.credits} credits!"
@@ -47,8 +47,8 @@ class CreditsController < ApplicationController
     current_user.payment_processor.subscribe(plan: @credits_subscription_plan.plan_id_for(:fake_processor), metadata: @credits_subscription_plan.base_metadata)
 
     redirect_to root_path, notice: "Successfully subscribed!"
-    rescue Pay::Error => e
-      redirect_to root_path, alert: e.message
+  rescue Pay::Error => e
+    redirect_to root_path, alert: e.message
   end
 
   def award_bonus
@@ -82,7 +82,7 @@ class CreditsController < ApplicationController
 
     current_user.give_credits(amount, reason: reason, expires_at: expires_at)
 
-    redirect_to root_path, notice: "Successfully awarded a bonus of #{amount} credits with reason: #{reason}#{expires_at ? " (expires on #{expires_at.strftime("%B %d, %Y at %I:%M %p")})" : ""}"
+    redirect_to root_path, notice: "Successfully awarded a bonus of #{amount} credits with reason: #{reason}#{" (expires on #{expires_at.strftime("%B %d, %Y at %I:%M %p")})" if expires_at}"
   end
 
   private

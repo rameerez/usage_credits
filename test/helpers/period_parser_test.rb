@@ -231,6 +231,26 @@ class UsageCredits::PeriodParserTest < ActiveSupport::TestCase
     assert_includes error.message, "Period must be at least"
   end
 
+  test "parse_persisted_period is independent of a later minimum increase" do
+    UsageCredits.configuration.min_fulfillment_period = 1.month
+
+    assert_equal 1.week, UsageCredits::PeriodParser.parse_persisted_period("1.week")
+    assert UsageCredits::PeriodParser.valid_persisted_period_format?("1.week")
+    refute UsageCredits::PeriodParser.valid_period_format?("1.week")
+  end
+
+  test "parse_persisted_period enforces the absolute safety floor" do
+    assert_raises(ArgumentError) do
+      UsageCredits::PeriodParser.parse_persisted_period("0.seconds")
+    end
+    assert_raises(ArgumentError) do
+      UsageCredits::PeriodParser.parse_persisted_period(0.seconds)
+    end
+
+    refute UsageCredits::PeriodParser.valid_persisted_period_format?("0.seconds")
+    assert_equal 1.second, UsageCredits::PeriodParser.parse_persisted_period("1.second")
+  end
+
   test "parse_period with new time units when configured" do
     UsageCredits.configuration.min_fulfillment_period = 1.second
 

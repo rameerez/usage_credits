@@ -12,6 +12,15 @@ on:
       - "*.md"
       - "LICENSE.txt"
 
+permissions:
+  contents: read
+
+# usage_credits 1.0 depends on wallets 0.3 before that version exists on
+# RubyGems. Every CI lane resolves the exact reviewed Wallets candidate below;
+# remove this source override only after the published dependency is available.
+env:
+  WALLETS_PATH: ${{ github.workspace }}/wallets-core
+
 jobs:
   # Main test suite - tests Ruby versions and Rails/Pay compatibility with SQLite
   sqlite:
@@ -22,21 +31,48 @@ jobs:
       matrix:
         ruby_version: ["3.3", "3.4", "4.0"]
         gemfile:
-          - Gemfile
-          - gemfiles/rails_7.2.gemfile
-          - gemfiles/rails_8.1.gemfile
-          - gemfiles/pay_8.3.gemfile
-          - gemfiles/pay_9.0.gemfile
-          - gemfiles/pay_10.0.gemfile
-          - gemfiles/pay_11.0.gemfile
+          - path: Gemfile
+            label: default
+          - path: gemfiles/rails_7.2.gemfile
+            label: rails-7.2
+          - path: gemfiles/rails_8.1.gemfile
+            label: rails-8.1
+          - path: gemfiles/pay_minimum.gemfile
+            label: pay-minimum
+        include:
+          # Exercise both Rails boundaries on the minimum secure Ruby line.
+          - ruby_version: "3.2"
+            gemfile:
+              path: gemfiles/rails_7.2.gemfile
+              label: rails-7.2
+          - ruby_version: "3.2"
+            gemfile:
+              path: gemfiles/rails_8.1.gemfile
+              label: rails-8.1
+          # Also exercise the literal minimum runtime/dependency pair, not just
+          # each minimum independently in newer combinations.
+          - ruby_version: "3.2"
+            gemfile:
+              path: gemfiles/pay_minimum.gemfile
+              label: pay-minimum
 
     env:
       RAILS_ENV: test
-      BUNDLE_GEMFILE: ${{ github.workspace }}/${{ matrix.gemfile }}
+      BUNDLE_GEMFILE: ${{ github.workspace }}/${{ matrix.gemfile.path }}
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Checkout reviewed wallets 0.3 candidate
+        uses: actions/checkout@v7
+        with:
+          repository: rameerez/wallets
+          ref: 743f57e96a7b48e3bb790e63d5cba2e83f4f057b
+          path: wallets-core
+          persist-credentials: false
 
       - name: Set up Ruby ${{ matrix.ruby_version }}
         uses: ruby/setup-ruby@v1
@@ -44,16 +80,67 @@ jobs:
           ruby-version: ${{ matrix.ruby_version }}
           bundler-cache: true
 
-      - name: Run tests
-        run: bundle exec rake test
+      - name: Prepare database and run tests
+        # Exercise the real migration path in SQLite too so dummy/test schema
+        # drift is caught before release, not only in adapter-specific jobs.
+        run: bundle exec rake db:migrate:reset test
 
       - name: Upload test results
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: test-results-sqlite-ruby-${{ matrix.ruby_version }}-${{ matrix.gemfile }}
+          name: test-results-sqlite-ruby-${{ matrix.ruby_version }}-${{ matrix.gemfile.label }}
           path: test/reports/
           retention-days: 7
+
+  security:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        gemfile:
+          - path: Gemfile
+            label: default
+          - path: gemfiles/rails_7.2.gemfile
+            label: rails-7.2
+          - path: gemfiles/rails_8.1.gemfile
+            label: rails-8.1
+          - path: gemfiles/pay_minimum.gemfile
+            label: pay-minimum
+
+    env:
+      BUNDLE_GEMFILE: ${{ github.workspace }}/${{ matrix.gemfile.path }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Checkout reviewed wallets 0.3 candidate
+        uses: actions/checkout@v7
+        with:
+          repository: rameerez/wallets
+          ref: 743f57e96a7b48e3bb790e63d5cba2e83f4f057b
+          path: wallets-core
+          persist-credentials: false
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+
+      - name: Audit locked dependencies
+        # ruby/setup-ruby may remove an untracked lock after populating its
+        # cache, and bundler-audit does not infer the appraisal lock path from
+        # BUNDLE_GEMFILE. Its --gemfile-lock value is relative to the scan root,
+        # so strip the absolute workspace prefix before auditing.
+        run: |
+          bundle lock
+          lockfile="${BUNDLE_GEMFILE#"$GITHUB_WORKSPACE/"}.lock"
+          bundle exec bundle-audit check --update --gemfile-lock "$lockfile"
 
   # PostgreSQL compatibility tests
   postgres:
@@ -62,7 +149,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ruby_version: ["3.4"]
+        include:
+          - ruby_version: "3.4"
+            gemfile:
+              path: Gemfile
+              label: default
+          # Real-adapter coverage for the literal minimum supported
+          # Ruby/Rails/Pay boundary, not only the modern dependency graph.
+          - ruby_version: "3.2"
+            gemfile:
+              path: gemfiles/rails_7.2.gemfile
+              label: minimum
 
     services:
       postgres:
@@ -82,10 +179,21 @@ jobs:
     env:
       RAILS_ENV: test
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/usage_credits_test
+      BUNDLE_GEMFILE: ${{ github.workspace }}/${{ matrix.gemfile.path }}
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Checkout reviewed wallets 0.3 candidate
+        uses: actions/checkout@v7
+        with:
+          repository: rameerez/wallets
+          ref: 743f57e96a7b48e3bb790e63d5cba2e83f4f057b
+          path: wallets-core
+          persist-credentials: false
 
       - name: Set up Ruby ${{ matrix.ruby_version }}
         uses: ruby/setup-ruby@v1
@@ -104,9 +212,9 @@ jobs:
 
       - name: Upload test results
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: test-results-postgres-ruby-${{ matrix.ruby_version }}
+          name: test-results-postgres-ruby-${{ matrix.ruby_version }}-${{ matrix.gemfile.label }}
           path: test/reports/
           retention-days: 7
 
@@ -117,7 +225,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ruby_version: ["3.4"]
+        include:
+          - ruby_version: "3.4"
+            gemfile:
+              path: Gemfile
+              label: default
+          # Real-adapter coverage for the literal minimum supported
+          # Ruby/Rails/Pay boundary, not only the modern dependency graph.
+          - ruby_version: "3.2"
+            gemfile:
+              path: gemfiles/rails_7.2.gemfile
+              label: minimum
 
     services:
       mysql:
@@ -136,10 +254,21 @@ jobs:
     env:
       RAILS_ENV: test
       DATABASE_URL: mysql2://root:root@127.0.0.1:3306/usage_credits_test
+      BUNDLE_GEMFILE: ${{ github.workspace }}/${{ matrix.gemfile.path }}
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Checkout reviewed wallets 0.3 candidate
+        uses: actions/checkout@v7
+        with:
+          repository: rameerez/wallets
+          ref: 743f57e96a7b48e3bb790e63d5cba2e83f4f057b
+          path: wallets-core
+          persist-credentials: false
 
       - name: Set up Ruby ${{ matrix.ruby_version }}
         uses: ruby/setup-ruby@v1
@@ -158,8 +287,8 @@ jobs:
 
       - name: Upload test results
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: test-results-mysql-ruby-${{ matrix.ruby_version }}
+          name: test-results-mysql-ruby-${{ matrix.ruby_version }}-${{ matrix.gemfile.label }}
           path: test/reports/
           retention-days: 7

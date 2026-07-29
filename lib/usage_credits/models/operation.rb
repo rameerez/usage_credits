@@ -3,11 +3,10 @@
 module UsageCredits
   # A DSL to define an operation that consumes credits when performed.
   class Operation
-
     attr_reader :name,                # Operation identifier (e.g., :process_video)
-                :cost_calculator,     # Lambda or Fixed that calculates credit cost
-                :validation_rules,    # Array of [condition, message] pairs
-                :metadata             # Custom data for your app's use
+      :cost_calculator,     # Lambda or Fixed that calculates credit cost
+      :validation_rules,    # Array of [condition, message] pairs
+      :metadata             # Custom data for your app's use
 
     def initialize(name, &block)
       @name = name
@@ -61,16 +60,9 @@ module UsageCredits
       normalized_params = normalize_params(params)
       validate!(normalized_params)  # Ensure params are valid before calculating
 
-      # Calculate raw cost
-      total = case cost_calculator
-              when Proc
-                result = cost_calculator.call(normalized_params)
-                raise ArgumentError, "Credit amount must be a whole number (got: #{result})" unless result == result.to_i
-                raise ArgumentError, "Credit amount cannot be negative (got: #{result})" if result.negative?
-                result
-              else
-                cost_calculator.calculate(normalized_params)
-              end
+      # `costs` wraps every configured value (including a Proc) in a Cost
+      # object, so there is one calculation/validation path here.
+      total = cost_calculator.calculate(normalized_params)
 
       # Apply configured rounding strategy
       CreditCalculator.apply_rounding(total)
@@ -92,7 +84,7 @@ module UsageCredits
         begin
           result = condition.call(normalized)
           raise InvalidOperation, message unless result
-        rescue StandardError => e
+        rescue => e
           raise InvalidOperation, "Validation error: #{e.message}"
         end
       end
@@ -103,10 +95,12 @@ module UsageCredits
     # =========================================
 
     # Create an audit record of this operation
-    def to_audit_hash(params = {})
+    def to_audit_hash(params = nil, cost: nil, **keyword_params)
+      params = (params || {}).merge(keyword_params)
+
       {
         operation: name,
-        cost: calculate_cost(params),
+        cost: cost.nil? ? calculate_cost(params) : cost,
         params: params,
         metadata: metadata,
         executed_at: Time.current,
@@ -128,19 +122,23 @@ module UsageCredits
 
       # Handle different size specifications
       size = if params[:mb]
-               params[:mb].to_f
-             elsif params[:size_mb]
-               params[:size_mb].to_f
-             elsif params[:size_megabytes]
-               params[:size_megabytes].to_f
-             elsif params[:size]
-               params[:size].to_f / 1.megabyte
-             else
-               0.0
-             end
+        normalize_quantity(params[:mb], :mb)
+      elsif params[:kb]
+        normalize_quantity(params[:kb], :kb) / 1024.0
+      elsif params[:gb]
+        normalize_quantity(params[:gb], :gb) * 1024.0
+      elsif params[:size_mb]
+        normalize_quantity(params[:size_mb], :size_mb)
+      elsif params[:size_megabytes]
+        normalize_quantity(params[:size_megabytes], :size_megabytes)
+      elsif params[:size]
+        normalize_quantity(params[:size], :size) / 1.megabyte
+      else
+        0.0
+      end
 
       # Handle generic unit-based operations
-      units = params[:units].to_f if params[:units]
+      units = normalize_quantity(params[:units], :units) if params[:units]
 
       params.merge(
         size: (size * 1.megabyte).to_i,   # Raw bytes
@@ -149,5 +147,15 @@ module UsageCredits
       )
     end
 
+    def normalize_quantity(value, name)
+      number = Float(value)
+      unless number.finite? && !number.negative?
+        raise ArgumentError, "#{name} must be a finite, non-negative number"
+      end
+
+      number
+    rescue ArgumentError, TypeError
+      raise ArgumentError, "#{name} must be a finite, non-negative number"
+    end
   end
 end

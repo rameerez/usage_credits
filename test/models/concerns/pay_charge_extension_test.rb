@@ -75,7 +75,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
     charge = Pay::Charge.new(
       type: "Pay::Stripe::Charge",
       amount: 4900,
-      object: { "status" => "succeeded", "amount_captured" => 4900 },
+      object: {"status" => "succeeded", "amount_captured" => 4900},
       data: {}  # Empty data to simulate Pay 10+ behavior
     )
 
@@ -86,7 +86,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
     charge = Pay::Charge.new(
       type: "Pay::Stripe::Charge",
       amount: 4900,
-      object: { "status" => "failed", "amount_captured" => 0 },
+      object: {"status" => "failed", "amount_captured" => 0},
       data: {}
     )
 
@@ -98,7 +98,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
       type: "Pay::Stripe::Charge",
       amount: 4900,
       object: {},  # Empty object
-      data: { "status" => "succeeded", "amount_captured" => 4900 }
+      data: {"status" => "succeeded", "amount_captured" => 4900}
     )
 
     assert charge.succeeded?
@@ -109,8 +109,8 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
     charge = Pay::Charge.new(
       type: "Pay::Stripe::Charge",
       amount: 4900,
-      object: { "status" => "failed", "amount_captured" => 0 },
-      data: { "status" => "succeeded", "amount_captured" => 4900 }  # Legacy data should be ignored
+      object: {"status" => "failed", "amount_captured" => 0},
+      data: {"status" => "succeeded", "amount_captured" => 4900}  # Legacy data should be ignored
     )
 
     # Should use object (failed), not data (succeeded)
@@ -121,7 +121,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
     charge = Pay::Charge.new(
       type: "Pay::Stripe::Charge",
       amount: 4900,
-      data: { amount_captured: 4900 }
+      data: {amount_captured: 4900}
     )
 
     assert charge.succeeded?
@@ -136,8 +136,8 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
 
   test "charge_object_data returns object when present (Pay 10+)" do
     charge = Pay::Charge.new(
-      object: { "status" => "succeeded", "id" => "ch_123" },
-      data: { "status" => "failed" }
+      object: {"status" => "succeeded", "id" => "ch_123"},
+      data: {"status" => "failed"}
     )
 
     result = charge.send(:charge_object_data)
@@ -148,7 +148,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
   test "charge_object_data returns data when object is empty (legacy Pay)" do
     charge = Pay::Charge.new(
       object: {},
-      data: { "status" => "succeeded", "id" => "ch_456" }
+      data: {"status" => "succeeded", "id" => "ch_456"}
     )
 
     result = charge.send(:charge_object_data)
@@ -167,7 +167,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
     # Some older Pay versions might have nil instead of empty hash
     charge = Pay::Charge.new(
       object: nil,
-      data: { "status" => "succeeded", "id" => "ch_nil_object" }
+      data: {"status" => "succeeded", "id" => "ch_nil_object"}
     )
 
     result = charge.send(:charge_object_data)
@@ -185,7 +185,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
     charge = Pay::Charge.new(
       type: "Pay::Stripe::Charge",
       amount: 4900,
-      object: { "status" => "pending", "amount_captured" => 0 },
+      object: {"status" => "pending", "amount_captured" => 0},
       data: {}
     )
 
@@ -196,7 +196,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
     charge = Pay::Charge.new(
       type: "Pay::Stripe::Charge",
       amount: 4900,
-      object: { "status" => "canceled", "amount_captured" => 0 },
+      object: {"status" => "canceled", "amount_captured" => 0},
       data: {}
     )
 
@@ -208,7 +208,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
       type: "Pay::Stripe::Charge",
       amount: 4900,
       object: {},
-      data: { "status" => "pending", "amount_captured" => 0 }
+      data: {"status" => "pending", "amount_captured" => 0}
     )
 
     assert_not charge.succeeded?
@@ -219,7 +219,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
     charge = Pay::Charge.new(
       type: "Pay::Stripe::Charge",
       amount: 4900,
-      object: { "amount_captured" => 4900 },  # No status field
+      object: {"amount_captured" => 4900},  # No status field
       data: {}
     )
 
@@ -230,7 +230,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
     charge = Pay::Charge.new(
       type: "Pay::Stripe::Charge",
       amount: 4900,
-      object: { "amount_captured" => 0 },  # No status, no capture
+      object: {"amount_captured" => 0},  # No status, no capture
       data: {}
     )
 
@@ -242,7 +242,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
     charge = Pay::Charge.new(
       type: "Pay::Stripe::Charge",
       amount: 4900,
-      object: { "amount_captured" => 2000 },  # Only partially captured
+      object: {"amount_captured" => 2000},  # Only partially captured
       data: {}
     )
 
@@ -452,6 +452,41 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
     assert_equal 1000, wallet.reload.credits
   end
 
+  test "destroying an eligible unfulfilled charge never awards credits" do
+    user = User.create!(email: "destroy-charge-#{SecureRandom.hex(4)}@example.com", name: "Destroy Charge")
+    wallet = user.credit_wallet
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_destroy_charge_#{SecureRandom.hex(4)}"
+    )
+    charge = Pay::Charge.create!(
+      customer: customer,
+      type: "Pay::Charge",
+      processor_id: "ch_destroy_charge_#{SecureRandom.hex(4)}",
+      amount: 4900,
+      currency: "usd",
+      amount_refunded: 0,
+      metadata: {},
+      data: {status: "succeeded"}
+    )
+
+    # Simulate processor metadata arriving without callbacks, then removal of
+    # the Pay row. A destroy commit must never become a fulfillment trigger.
+    charge.update_columns(
+      metadata: {
+        purchase_type: "credit_pack",
+        pack_name: "starter",
+        credits: 1000,
+        bonus_credits: 0
+      }
+    )
+
+    assert_no_difference [-> { wallet.reload.credits }, -> { UsageCredits::Fulfillment.count }] do
+      charge.destroy!
+    end
+  end
+
   test "charge creates fulfillment record" do
     # Create a fresh user to avoid fixture wallet conflicts
     user = User.create!(email: "fulfill2_test@example.com", name: "Fulfill2 Test User")
@@ -477,7 +512,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
           credits: 1000,
           price_cents: 4900
         },
-        data: { status: "succeeded" }
+        data: {status: "succeeded"}
       )
 
       fulfillment = UsageCredits::Fulfillment.find_by(source: charge)
@@ -485,6 +520,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
       assert_equal "credit_pack", fulfillment.fulfillment_type
       assert_equal 1000, fulfillment.credits_last_fulfillment
       assert_nil fulfillment.next_fulfillment_at  # One-time, not recurring
+      assert_equal fulfillment, user.credit_wallet.transactions.find_by!(category: "credit_pack_purchase").fulfillment
     end
   end
 
@@ -513,7 +549,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
           bonus_credits: 100,
           price_cents: 2900
         },
-        data: { status: "succeeded" }
+        data: {status: "succeeded"}
       )
     end
   end
@@ -541,7 +577,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
         credits: 1000,
         price_cents: 4900
       },
-      data: { status: "succeeded" }
+      data: {status: "succeeded"}
     )
 
     transaction = wallet.transactions.find_by(category: "credit_pack_purchase")
@@ -574,8 +610,8 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
         processor_id: "ch_nonpack_test",
         amount: 1999,
         currency: "usd",
-        metadata: { product: "other_product" },
-        data: { status: "succeeded" }
+        metadata: {product: "other_product"},
+        data: {status: "succeeded"}
       )
     end
   end
@@ -598,8 +634,8 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
         processor_id: "ch_no_pack_name",
         amount: 4900,
         currency: "usd",
-        metadata: { purchase_type: "credit_pack" },  # Missing pack_name
-        data: { status: "succeeded" }
+        metadata: {purchase_type: "credit_pack"},  # Missing pack_name
+        data: {status: "succeeded"}
       )
     end
   end
@@ -631,7 +667,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
           pack_name: "starter",
           credits: 1000
         },
-        data: { status: "succeeded" }
+        data: {status: "succeeded"}
       )
     end
   end
@@ -659,7 +695,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
           pack_name: "starter",
           credits: 1000
         },
-        data: { status: "failed", amount_captured: 0 }
+        data: {status: "failed", amount_captured: 0}
       )
     end
   end
@@ -688,7 +724,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
           pack_name: "starter",
           credits: 1000
         },
-        data: { status: "succeeded", refunded: true }
+        data: {status: "succeeded", refunded: true}
       )
     end
   end
@@ -720,7 +756,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
         pack_name: "starter",
         credits: 1000
       },
-      data: { status: "succeeded" }
+      data: {status: "succeeded"}
     )
 
     # Credits should now be 1000
@@ -754,7 +790,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
         pack_name: "starter",
         credits: 1000
       },
-      data: { status: "succeeded" }
+      data: {status: "succeeded"}
     )
 
     # After creation, should be fulfilled
@@ -772,7 +808,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
   # PACK VALIDATION
   # ========================================
 
-  test "charge with unknown pack name is ignored" do
+  test "charge is fulfilled from its checkout snapshot after pack removal" do
     # Use fixture user with existing wallet
     user = users(:new_user)
     wallet = user.credit_wallet
@@ -783,7 +819,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
       processor_id: "cus_test_unknown_pack"
     )
 
-    assert_no_difference -> { wallet.reload.credits } do
+    assert_difference -> { wallet.reload.credits }, 1000 do
       Pay::Charge.create!(
         customer: customer,
         type: "Pay::Charge",
@@ -793,14 +829,17 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
         metadata: {
           purchase_type: "credit_pack",
           pack_name: "nonexistent_pack",
-          credits: 1000
+          credits: 1000,
+          bonus_credits: 0,
+          price_cents: 4900,
+          price_currency: "USD"
         },
-        data: { status: "succeeded" }
+        data: {status: "succeeded"}
       )
     end
   end
 
-  test "charge with mismatched credits is ignored" do
+  test "charge honors checkout quantities when the configured pack later changes" do
     # Use fixture user with existing wallet
     user = users(:new_user)
     wallet = user.credit_wallet
@@ -811,7 +850,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
       processor_id: "cus_test_mismatch"
     )
 
-    assert_no_difference -> { wallet.reload.credits } do
+    assert_difference -> { wallet.reload.credits }, 999 do
       Pay::Charge.create!(
         customer: customer,
         type: "Pay::Charge",
@@ -821,11 +860,19 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
         metadata: {
           purchase_type: "credit_pack",
           pack_name: "starter",
-          credits: 999  # Starter pack should give 1000
+          credits: 999,
+          bonus_credits: 0
         },
-        data: { status: "succeeded" }
+        data: {status: "succeeded"}
       )
     end
+  end
+
+  test "fractional numeric checkout quantities are rejected instead of truncated" do
+    charge = pay_charges(:completed_charge)
+    charge.metadata["credits"] = 10.5
+
+    assert_nil charge.send(:credit_pack_snapshot)
   end
 
   # ========================================
@@ -856,7 +903,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
         pack_name: "starter",
         credits: 1000
       },
-      data: { status: "succeeded" }
+      data: {status: "succeeded"}
     )
 
     assert_equal 1000, wallet.reload.credits
@@ -890,7 +937,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
         pack_name: "starter",
         credits: 1000
       },
-      data: { status: "succeeded" }
+      data: {status: "succeeded"}
     )
 
     charge.update!(amount_refunded: 4900)
@@ -902,6 +949,76 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
     assert_equal true, refund_tx.metadata["credits_refunded"]
     assert_equal 1.0, refund_tx.metadata["refund_percentage"]
     assert_equal 4900, refund_tx.metadata["refund_amount_cents"]
+    assert_equal UsageCredits::Fulfillment.find_by!(source: charge), refund_tx.fulfillment
+  end
+
+  test "refund uses the purchased fulfillment snapshot after configuration changes" do
+    user = User.create!(email: "refund_snapshot@example.com", name: "Refund Snapshot User")
+    wallet = user.credit_wallet
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_refund_snapshot"
+    )
+    charge = Pay::Charge.create!(
+      customer: customer,
+      type: "Pay::Charge",
+      processor_id: "ch_refund_snapshot",
+      amount: 4900,
+      currency: "usd",
+      metadata: {
+        purchase_type: "credit_pack",
+        pack_name: "starter",
+        credits: 1000,
+        bonus_credits: 0,
+        price_cents: 4900
+      },
+      data: {status: "succeeded"}
+    )
+
+    UsageCredits.configure do |config|
+      config.credit_pack :starter do
+        gives 5000.credits
+        costs 199.dollars
+      end
+    end
+
+    assert_difference -> { wallet.reload.credits }, -1000 do
+      charge.update!(amount_refunded: 4900)
+    end
+  end
+
+  test "refund does not create debt when the purchase was never fulfilled" do
+    user = User.create!(email: "unfulfilled_refund@example.com", name: "Unfulfilled Refund User")
+    wallet = user.credit_wallet
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_unfulfilled_refund"
+    )
+
+    charge = Pay::Charge.create!(
+      customer: customer,
+      type: "Pay::Stripe::Charge",
+      processor_id: "ch_unfulfilled_refund",
+      amount: 4900,
+      currency: "usd",
+      amount_refunded: 0,
+      metadata: {
+        purchase_type: "credit_pack",
+        pack_name: "starter",
+        credits: 1000,
+        bonus_credits: 0
+      },
+      object: {status: "failed", amount_captured: 0},
+      data: {}
+    )
+
+    assert_not UsageCredits::Fulfillment.exists?(source: charge)
+    assert_no_difference -> { wallet.reload.transactions.count } do
+      charge.update!(amount_refunded: 4900)
+    end
+    assert_equal 0, wallet.reload.credits
   end
 
   # ========================================
@@ -931,7 +1048,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
         pack_name: "starter",
         credits: 1000
       },
-      data: { status: "succeeded" }
+      data: {status: "succeeded"}
     )
 
     assert_equal 1000, wallet.reload.credits
@@ -966,7 +1083,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
         pack_name: "starter",
         credits: 1000
       },
-      data: { status: "succeeded" }
+      data: {status: "succeeded"}
     )
 
     # Refund 30% (1470 cents) should deduct ceil(1000 * 0.3) = 300 credits
@@ -998,7 +1115,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
         pack_name: "starter",
         credits: 1000
       },
-      data: { status: "succeeded" }
+      data: {status: "succeeded"}
     )
 
     initial_credits = wallet.reload.credits
@@ -1016,7 +1133,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
   # REFUND HANDLING - EDGE CASES
   # ========================================
 
-  test "refund when credits already spent raises InsufficientCredits" do
+  test "refund after credits are spent records debt that future credits repay" do
     # Create a fresh user to avoid fixture wallet conflicts
     user = User.create!(email: "insufficient@example.com", name: "Insufficient User")
     wallet = user.credit_wallet  # Auto-created wallet
@@ -1039,7 +1156,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
         pack_name: "starter",
         credits: 1000
       },
-      data: { status: "succeeded" }
+      data: {status: "succeeded"}
     )
 
     # Verify credits were added
@@ -1049,10 +1166,20 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
     wallet.deduct_credits(1000, category: "operation_charge", metadata: {})
     assert_equal 0, wallet.reload.credits
 
-    # Try to refund - should raise InsufficientCredits
-    assert_raises(UsageCredits::InsufficientCredits) do
-      charge.update!(amount_refunded: 4900)
-    end
+    # The cash refund has already happened at the processor. Its ledger
+    # reversal must therefore persist even if the purchased credits were used.
+    assert_nothing_raised { charge.update!(amount_refunded: 4900) }
+
+    refund_transaction = wallet.transactions.find_by!(category: "credit_pack_refund")
+    assert_equal(-1000, refund_transaction.amount)
+    assert_equal 1000, refund_transaction.unbacked_amount
+    assert_equal 0, wallet.reload.credits
+
+    wallet.give_credits(600, reason: "later_grant")
+    assert_equal 0, wallet.reload.credits
+
+    wallet.give_credits(500, reason: "later_grant")
+    assert_equal 100, wallet.reload.credits
   end
 
   test "refund without pack_name is ignored" do
@@ -1074,8 +1201,8 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
       amount: 4900,
       currency: "usd",
       amount_refunded: 0,
-      metadata: { purchase_type: "credit_pack" },  # Missing pack_name
-      data: { status: "succeeded" }
+      metadata: {purchase_type: "credit_pack"},  # Missing pack_name
+      data: {status: "succeeded"}
     )
 
     # Try to refund - should be ignored
@@ -1108,7 +1235,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
         pack_name: "starter",
         credits: 1000
       },
-      data: { status: "succeeded" }
+      data: {status: "succeeded"}
     )
 
     # Try to refund - should be ignored (no wallet to deduct from)
@@ -1140,7 +1267,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
         pack_name: "starter",
         credits: 1000
       },
-      data: { status: "succeeded" }
+      data: {status: "succeeded"}
     )
 
     # Verify credits were added
@@ -1179,7 +1306,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
         pack_name: "starter",
         credits: 1000
       },
-      data: { status: "succeeded" }
+      data: {status: "succeeded"}
     )
 
     # Process refund
@@ -1192,40 +1319,6 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
     assert_no_difference -> { wallet.reload.credits } do
       charge.send(:handle_refund!)
     end
-  end
-
-  test "credits_already_refunded? detects processed refund" do
-    # Create a fresh user to avoid fixture wallet conflicts
-    user = User.create!(email: "refund_check@example.com", name: "Refund Check User")
-    user.credit_wallet  # Ensure wallet exists
-
-    customer = Pay::Customer.create!(
-      owner: user,
-      processor: :fake_processor,
-      processor_id: "cus_test_refund_check"
-    )
-
-    charge = Pay::Charge.create!(
-      customer: customer,
-      type: "Pay::Charge",
-      processor_id: "ch_refund_check",
-      amount: 4900,
-      currency: "usd",
-      amount_refunded: 0,
-      metadata: {
-        purchase_type: "credit_pack",
-        pack_name: "starter",
-        credits: 1000
-      },
-      data: { status: "succeeded" }
-    )
-
-    # Before refund
-    assert_not charge.send(:credits_already_refunded?)
-
-    # After refund
-    charge.update!(amount_refunded: 4900)
-    assert charge.send(:credits_already_refunded?)
   end
 
   # ========================================

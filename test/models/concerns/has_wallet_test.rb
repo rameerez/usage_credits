@@ -40,6 +40,10 @@ class HasWalletTest < ActiveSupport::TestCase
   # AUTOMATIC WALLET CREATION
   # ========================================
 
+  test "default asset code is the single credits asset" do
+    assert_equal "credits", UsageCredits::DEFAULT_ASSET_CODE
+  end
+
   test "wallet is automatically created on user creation" do
     user = User.create!(email: "autowallet@example.com", name: "Auto Wallet User")
 
@@ -62,6 +66,23 @@ class HasWalletTest < ActiveSupport::TestCase
     assert_equal false, test_class.credit_options[:auto_create]
   end
 
+  test "auto-create disabled reads an existing wallet after a cached miss" do
+    test_class = Class.new(User) do
+      def self.name
+        "TestUserNoAutoWalletWithExistingRow"
+      end
+
+      has_credits auto_create: false
+    end
+
+    user = test_class.create!(email: "no-auto-#{SecureRandom.hex(4)}@example.com", name: "No Auto")
+    assert_nil user.credit_wallet
+
+    wallet = UsageCredits::Wallet.create_for_owner!(owner: user, asset_code: "credits")
+
+    assert_equal wallet, user.credit_wallet
+  end
+
   test "wallet is created with default balance of zero" do
     user = User.create!(email: "defaultbal@example.com", name: "Default Balance User")
 
@@ -80,6 +101,75 @@ class HasWalletTest < ActiveSupport::TestCase
 
     # Verify the configuration is set
     assert_equal 100, test_class.credit_options[:initial_balance]
+  end
+
+  test "initial_balance is applied through a manual_adjustment transaction" do
+    test_class = Class.new(User) do
+      def self.name
+        "TestUserWithInitialBalanceLedgerBootstrap"
+      end
+
+      has_credits initial_balance: 100
+    end
+
+    user = test_class.create!(email: "initial-balance-#{SecureRandom.hex(4)}@example.com", name: "Initial Balance User")
+    wallet = user.credit_wallet
+
+    assert_equal 100, user.credits
+    assert_equal 1, wallet.transactions.count
+    assert_equal "manual_adjustment", wallet.transactions.first.category
+    assert_equal "initial_balance", wallet.transactions.first.metadata["reason"]
+  end
+
+  test "fractional initial_balance is rejected instead of truncated" do
+    test_class = Class.new(User) do
+      def self.name
+        "TestUserWithFractionalInitialBalance"
+      end
+
+      has_credits initial_balance: 10.5
+    end
+
+    email = "fractional-#{SecureRandom.hex(4)}@example.com"
+    error = assert_raises(ArgumentError) do
+      test_class.create!(email: email, name: "Fractional")
+    end
+
+    assert_includes error.message, "whole number"
+    assert_nil User.find_by(email: email)
+  end
+
+  test "credit options are immutable snapshots" do
+    test_class = Class.new(User) do
+      self.table_name = "users"
+      has_credits initial_balance: 25
+    end
+
+    assert_predicate test_class.credit_options, :frozen?
+    assert_raises(FrozenError) { test_class.credit_options[:initial_balance] = 100 }
+  end
+
+  test "usage credits wallet create_for_owner applies initial_balance via manual_adjustment once" do
+    wallet = UsageCredits::Wallet.create_for_owner!(
+      owner: users(:new_user),
+      asset_code: :credits,
+      initial_balance: 60
+    )
+
+    assert_no_difference -> { UsageCredits::Wallet.where(owner: users(:new_user), asset_code: "credits").count } do
+      same_wallet = UsageCredits::Wallet.create_for_owner!(
+        owner: users(:new_user),
+        asset_code: "CREDITS",
+        initial_balance: 999
+      )
+
+      assert_equal wallet.id, same_wallet.id
+    end
+
+    assert_equal 60, wallet.reload.balance
+    assert_equal 1, wallet.transactions.count
+    assert_equal "manual_adjustment", wallet.transactions.sole.category
+    assert_equal "initial_balance", wallet.transactions.sole.metadata["reason"]
   end
 
   # ========================================
@@ -125,6 +215,12 @@ class HasWalletTest < ActiveSupport::TestCase
     assert_equal user.credit_wallet, user.wallet
   end
 
+  test "does not expose plural credit_wallets association" do
+    user = users(:rich_user)
+
+    refute_respond_to user, :credit_wallets
+  end
+
   # ========================================
   # WALLET AUTO-CREATION (ensure_credit_wallet)
   # ========================================
@@ -161,6 +257,32 @@ class HasWalletTest < ActiveSupport::TestCase
 
     # original_credit_wallet should NOT auto-create
     assert_nil user.original_credit_wallet
+  end
+
+  test "ensure_credit_wallet reuses an existing wallet through the core lookup without querying the association first" do
+    test_class = Class.new(User) do
+      def self.name
+        "TestUserWithExistingWalletLookup"
+      end
+
+      has_credits initial_balance: 80
+    end
+
+    user = test_class.create!(email: "lookup-#{SecureRandom.hex(4)}@example.com", name: "Lookup User")
+    existing_wallet = user.credit_wallet
+
+    user.association(:credit_wallet).reset
+    user.expects(:original_credit_wallet).never
+
+    assert_no_difference -> { UsageCredits::Wallet.where(owner: user, asset_code: "credits").count } do
+      wallet = user.send(:ensure_credit_wallet)
+
+      assert_equal existing_wallet.id, wallet.id
+    end
+
+    assert_equal 80, existing_wallet.reload.balance
+    assert_equal 1, existing_wallet.transactions.count
+    assert_equal "manual_adjustment", existing_wallet.transactions.sole.category
   end
 
   # ========================================
@@ -296,6 +418,28 @@ class HasWalletTest < ActiveSupport::TestCase
 
     assert_equal false, options[:auto_create]
     assert_equal 500, options[:initial_balance]
+  end
+
+  test "credit options are inherited and can be overridden by subclasses" do
+    parent_class = Class.new(User) do
+      def self.name
+        "TestUserCreditOptionsParent"
+      end
+
+      has_credits auto_create: false, initial_balance: 500
+    end
+    child_class = Class.new(parent_class) do
+      def self.name
+        "TestUserCreditOptionsChild"
+      end
+    end
+
+    assert_equal({auto_create: false, initial_balance: 500}, child_class.credit_options)
+
+    child_class.has_credits initial_balance: 25
+
+    assert_equal({auto_create: true, initial_balance: 25}, child_class.credit_options)
+    assert_equal({auto_create: false, initial_balance: 500}, parent_class.credit_options)
   end
 
   # ========================================

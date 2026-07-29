@@ -90,6 +90,24 @@ class UsageCredits::OperationTest < ActiveSupport::TestCase
     assert_equal 100, operation.calculate_cost(units: 100)
   end
 
+  test "calculates variable costs for kilobytes and gigabytes" do
+    per_kilobyte = UsageCredits::Operation.new(:per_kb) do
+      costs 1.credit_per(:kb)
+    end
+    per_gigabyte = UsageCredits::Operation.new(:per_gb) do
+      costs 3.credits_per(:gb)
+    end
+
+    assert_equal 2, per_kilobyte.calculate_cost(kb: 2)
+    assert_equal 6, per_gigabyte.calculate_cost(gb: 2)
+    assert_equal 3, per_gigabyte.calculate_cost(size: 1.gigabyte)
+  end
+
+  test "rejects unsupported variable cost units at definition time" do
+    error = assert_raises(ArgumentError) { 1.credit_per(:minute) }
+    assert_includes error.message, "Unknown unit"
+  end
+
   test "variable cost with zero units returns zero" do
     operation = UsageCredits::Operation.new(:send_emails) do
       costs 5.credits_per(:units)
@@ -298,7 +316,7 @@ class UsageCredits::OperationTest < ActiveSupport::TestCase
 
     assert_equal :audited_op, audit[:operation]
     assert_equal 25, audit[:cost]
-    assert_equal({ file_id: 123 }, audit[:params])
+    assert_equal({file_id: 123}, audit[:params])
     assert_equal "processing", audit[:metadata]["category"]
     assert_not_nil audit[:executed_at]
     assert_equal UsageCredits::VERSION, audit[:gem_version]
@@ -332,6 +350,51 @@ class UsageCredits::OperationTest < ActiveSupport::TestCase
 
     # 2.9 MB should round down to 2
     assert_equal 2, operation.calculate_cost(mb: 2.9)
+  end
+
+  test "rounds the multiplied cost instead of rounding units first" do
+    UsageCredits.configure do |config|
+      config.rounding_strategy = :floor
+    end
+
+    operation = UsageCredits::Operation.new(:floor_rate_test) do
+      costs 2.credits_per(:mb)
+    end
+
+    # floor(2 credits * 2.9 MB) = floor(5.8), not 2 * floor(2.9).
+    assert_equal 5, operation.calculate_cost(mb: 2.9)
+  end
+
+  test "applies rounding once across a compound cost" do
+    UsageCredits.configure do |config|
+      config.rounding_strategy = :ceil
+    end
+
+    operation = UsageCredits::Operation.new(:compound_rounding_test) do
+      costs 1.credit_per(:mb) + 1.credit_per(:units)
+    end
+
+    # ceil(0.2 + 0.2) = 1; rounding each component would overcharge 2.
+    assert_equal 1, operation.calculate_cost(mb: 0.2, units: 0.2)
+  end
+
+  test "cost calculators preserve raw fractions until the operation rounding boundary" do
+    per_megabyte = 1.credit_per(:mb)
+    compound = per_megabyte + 1.credit_per(:units)
+
+    assert_in_delta 0.2, per_megabyte.calculate(mb: 0.2)
+    assert_in_delta 0.4, compound.calculate(mb: 0.2, units: 0.2)
+  end
+
+  test "fixed and dynamic costs share canonical amount validation errors" do
+    fixed_error = assert_raises(ArgumentError) { UsageCredits::Cost::Fixed.new(-1) }
+    dynamic_operation = UsageCredits::Operation.new(:invalid_dynamic_cost) do
+      costs ->(_params) { -1 }
+    end
+    dynamic_error = assert_raises(ArgumentError) { dynamic_operation.calculate_cost }
+
+    assert_equal "Credit amount cannot be negative (got: -1)", fixed_error.message
+    assert_equal fixed_error.message, dynamic_error.message
   end
 
   test "round rounding strategy uses standard rounding" do
@@ -386,5 +449,44 @@ class UsageCredits::OperationTest < ActiveSupport::TestCase
     assert_raises(UsageCredits::InvalidOperation) do
       operation.calculate_cost({})
     end
+  end
+
+  test "rejects negative, non-finite, and non-numeric quantities" do
+    operation = UsageCredits::Operation.new(:quantity_validation) do
+      costs 2.credits_per(:mb)
+    end
+
+    [-1, Float::INFINITY, Float::NAN, "not-a-number"].each do |quantity|
+      error = assert_raises(ArgumentError) { operation.calculate_cost(mb: quantity) }
+      assert_includes error.message, "finite, non-negative"
+    end
+  end
+
+  test "rejects non-finite dynamic costs and rates with a stable argument error" do
+    [Float::INFINITY, Float::NAN].each do |value|
+      assert_raises(ArgumentError) { value.credits }
+      assert_raises(ArgumentError) { value.credits_per(:mb) }
+
+      operation = UsageCredits::Operation.new(:non_finite_dynamic) do
+        costs ->(_params) { value }
+      end
+      assert_raises(ArgumentError) { operation.calculate_cost }
+    end
+  end
+
+  test "audit hash accepts an already calculated cost without reevaluating it" do
+    evaluations = 0
+    operation = UsageCredits::Operation.new(:single_audit_cost) do
+      costs ->(_params) {
+        evaluations += 1
+        12
+      }
+    end
+
+    cost = operation.calculate_cost
+    audit = operation.to_audit_hash({}, cost: cost)
+
+    assert_equal 1, evaluations
+    assert_equal 12, audit[:cost]
   end
 end

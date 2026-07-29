@@ -215,9 +215,8 @@ class WalletCallbacksIntegrationTest < ActiveSupport::TestCase
       current_period_end: 1.month.from_now
     )
 
-    # Wait for initial setup callback
+    # Ignore the initial setup callback; this assertion targets the upgrade.
     events.clear
-    initial_balance = @user.credit_wallet.reload.credits
 
     # Check if fulfillment was created
     fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)

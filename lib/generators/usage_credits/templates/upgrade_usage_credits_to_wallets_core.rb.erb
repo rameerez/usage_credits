@@ -1,0 +1,592 @@
+# frozen_string_literal: true
+
+# Upgrades a pre-1.0 usage_credits install to the wallets-backed ledger core.
+#
+# Every DDL step is independently guarded so this migration can resume after
+# an interrupted MySQL deployment. Data-integrity preflights run before the
+# first schema mutation. The migration is intentionally irreversible: restore
+# the required pre-deploy backup to roll back this release.
+#
+# PostgreSQL runs this migration inside one DDL transaction. Locks acquired by
+# the index build, bigint conversions, constraints, foreign keys, and transfer
+# schema are held until the entire migration commits. Rehearse on a production
+# snapshot and schedule a maintenance window for a large/write-heavy ledger.
+# Do not casually add disable_ddl_transaction!: a lower-lock rollout needs an
+# application-specific staged plan for concurrent indexes and later constraint
+# validation, and necessarily exposes a partially upgraded schema between steps.
+class UpgradeUsageCreditsToWalletsCore < ActiveRecord::Migration<%= migration_version %>
+  REQUIRED_TABLES = %i[
+    usage_credits_wallets
+    usage_credits_transactions
+    usage_credits_allocations
+    usage_credits_fulfillments
+  ].freeze
+
+  OWNER_ASSET_INDEX = "index_usage_credits_wallets_on_owner_and_asset"
+  FULFILLMENT_SOURCE_INDEX = "index_usage_credits_fulfillments_on_source"
+  TRANSFER_WALLETS_INDEX = "index_usage_credits_transfers_on_wallets_and_asset"
+  TRANSACTION_TRANSFER_INDEX = "index_usage_credits_transactions_on_transfer_id"
+  PAY_SOURCE_TABLES = {
+    "Pay::Charge" => :pay_charges,
+    "Pay::Subscription" => :pay_subscriptions
+  }.freeze
+
+  def up
+    ensure_usage_credits_installed!
+    ensure_existing_transfer_schema!
+    ensure_reserved_index_names!
+    ensure_no_duplicate_wallets!
+    ensure_no_duplicate_fulfillment_sources!
+    ensure_complete_fulfillment_sources!
+    ensure_no_orphaned_ledger_references!
+    ensure_no_orphaned_pay_sources!
+    ensure_ledger_invariants!
+
+    wallet_key_type = primary_key_type_for(:usage_credits_wallets)
+    ensure_ledger_reference_types!(wallet_key_type)
+
+    unless column_exists?(:usage_credits_wallets, :asset_code)
+      add_column :usage_credits_wallets, :asset_code, :string, null: false, default: "credits"
+    end
+
+    ensure_unique_index!(
+      :usage_credits_wallets,
+      %i[owner_type owner_id asset_code],
+      name: OWNER_ASSET_INDEX
+    )
+
+    ensure_bigint_column!(:usage_credits_wallets, :balance, null: false, default: 0)
+    ensure_bigint_column!(:usage_credits_transactions, :amount, null: false)
+    ensure_bigint_column!(:usage_credits_allocations, :amount, null: false)
+    ensure_bigint_column!(:usage_credits_fulfillments, :credits_last_fulfillment, null: false)
+
+    ensure_check_constraint!(
+      :usage_credits_transactions,
+      "amount <> 0",
+      name: "check_usage_credits_transactions_amount_nonzero"
+    )
+    ensure_check_constraint!(
+      :usage_credits_allocations,
+      "amount > 0",
+      name: "check_usage_credits_allocations_amount_positive"
+    )
+    ensure_check_constraint!(
+      :usage_credits_fulfillments,
+      "credits_last_fulfillment >= 0",
+      name: "check_usage_credits_fulfillments_credits_nonnegative"
+    )
+
+    ensure_ledger_foreign_keys!(wallet_key_type)
+    ensure_transfers_table!(wallet_key_type)
+    ensure_transfer_reference!
+
+    ensure_unique_index!(
+      :usage_credits_fulfillments,
+      %i[source_type source_id],
+      name: FULFILLMENT_SOURCE_INDEX
+    )
+  end
+
+  def down
+    raise ActiveRecord::IrreversibleMigration,
+      "usage_credits 1.0 cannot be downgraded in place. Restore the backup taken before upgrading."
+  end
+
+  private
+
+  def ensure_usage_credits_installed!
+    missing = REQUIRED_TABLES.reject { |table| table_exists?(table) }
+    return if missing.empty?
+
+    if missing == REQUIRED_TABLES
+      raise <<~MESSAGE
+        No usage_credits tables found. This migration upgrades an existing pre-1.0
+        install. For new apps, run `rails generate usage_credits:install` instead.
+      MESSAGE
+    end
+
+    raise <<~MESSAGE
+      Cannot upgrade an incomplete usage_credits schema. Missing table(s):
+        #{missing.join(', ')}
+
+      Restore the missing pre-1.0 tables (and their data) from backup before
+      retrying. No schema changes have been applied.
+    MESSAGE
+  end
+
+  def ensure_no_duplicate_wallets!
+    grouping = %w[owner_type owner_id]
+    grouping << "asset_code" if column_exists?(:usage_credits_wallets, :asset_code)
+
+    duplicates = connection.select_rows(<<~SQL.squish)
+      SELECT #{grouping.join(', ')}, COUNT(*)
+      FROM usage_credits_wallets
+      GROUP BY #{grouping.join(', ')}
+      HAVING COUNT(*) > 1
+      ORDER BY #{grouping.join(', ')}
+    SQL
+
+    return if duplicates.empty?
+
+    listed = duplicates.first(10).map do |row|
+      owner_type, owner_id, asset_code, count =
+        if grouping.include?("asset_code")
+          row
+        else
+          [row[0], row[1], nil, row[2]]
+        end
+      asset = asset_code ? " / #{asset_code}" : ""
+      "  - #{owner_type}##{owner_id}#{asset} (#{count} wallets)"
+    end
+    listed << "  ...and #{duplicates.size - 10} more" if duplicates.size > 10
+
+    raise <<~MESSAGE
+      Cannot upgrade: #{duplicates.size} owner(s) have more than one usage_credits wallet:
+
+      #{listed.join("\n")}
+
+      These are financially ambiguous and must be reviewed before adding the
+      unique owner/asset constraint. For each owner, choose the canonical wallet,
+      move its transactions and fulfillments, recompute the cached balance from
+      the merged ledger, verify allocations, and only then delete the duplicate.
+
+      No schema changes have been applied yet. Back up the database, resolve the
+      duplicates in a reviewed script, and run `rails db:migrate` again.
+    MESSAGE
+  end
+
+  def ensure_no_duplicate_fulfillment_sources!
+    duplicates = connection.select_rows(<<~SQL.squish)
+      SELECT source_type, source_id, COUNT(*)
+      FROM usage_credits_fulfillments
+      WHERE source_type IS NOT NULL AND source_id IS NOT NULL
+      GROUP BY source_type, source_id
+      HAVING COUNT(*) > 1
+      ORDER BY source_type, source_id
+    SQL
+
+    return if duplicates.empty?
+
+    listed = duplicates.first(10).map { |type, id, count| "  - #{type}##{id} (#{count} fulfillments)" }
+    listed << "  ...and #{duplicates.size - 10} more" if duplicates.size > 10
+
+    raise <<~MESSAGE
+      Cannot upgrade: #{duplicates.size} payment source(s) have duplicate fulfillments:
+
+      #{listed.join("\n")}
+
+      One payment source may mint credits only once. Reconcile each source against
+      its linked ledger transactions and processor record, retain the correct
+      fulfillment, and remove only proven duplicates. No schema changes have been
+      applied; run `rails db:migrate` again after reconciliation.
+    MESSAGE
+  end
+
+  def ensure_complete_fulfillment_sources!
+    count = connection.select_value(<<~SQL.squish).to_i
+      SELECT COUNT(*)
+      FROM usage_credits_fulfillments
+      WHERE (source_type IS NULL AND source_id IS NOT NULL)
+         OR (source_type IS NOT NULL AND source_id IS NULL)
+    SQL
+    return if count.zero?
+
+    raise <<~MESSAGE
+      Cannot upgrade: #{count} fulfillment(s) have an incomplete polymorphic
+      source (only source_type or source_id is present). Reconcile these rows
+      before retrying. No schema changes have been applied.
+    MESSAGE
+  end
+
+  def ensure_no_orphaned_ledger_references!
+    checks = [
+      [ :usage_credits_transactions, :wallet_id, :usage_credits_wallets ],
+      [ :usage_credits_fulfillments, :wallet_id, :usage_credits_wallets ],
+      [ :usage_credits_transactions, :fulfillment_id, :usage_credits_fulfillments ],
+      [ :usage_credits_allocations, :transaction_id, :usage_credits_transactions ],
+      [ :usage_credits_allocations, :source_transaction_id, :usage_credits_transactions ]
+    ]
+    if table_exists?(:usage_credits_transfers)
+      checks << [ :usage_credits_transfers, :from_wallet_id, :usage_credits_wallets ]
+      checks << [ :usage_credits_transfers, :to_wallet_id, :usage_credits_wallets ]
+    end
+    if table_exists?(:usage_credits_transfers) && column_exists?(:usage_credits_transactions, :transfer_id)
+      checks << [ :usage_credits_transactions, :transfer_id, :usage_credits_transfers ]
+    end
+
+    orphaned = checks.filter_map do |child_table, foreign_key, parent_table|
+      count = orphan_count(child_table, foreign_key, parent_table)
+      "  - #{child_table}.#{foreign_key}: #{count}" if count.positive?
+    end
+    return if orphaned.empty?
+
+    raise <<~MESSAGE
+      Cannot upgrade because orphaned ledger references were found:
+
+      #{orphaned.join("\n")}
+
+      Restore or reconcile the missing parent rows before retrying. The upgrade
+      adds foreign keys to make this corruption impossible going forward. No
+      schema changes have been applied.
+    MESSAGE
+  end
+
+  def ensure_no_orphaned_pay_sources!
+    orphaned = PAY_SOURCE_TABLES.filter_map do |source_type, parent_table|
+      source_count = scalar_count(<<~SQL)
+        SELECT COUNT(*)
+        FROM usage_credits_fulfillments
+        WHERE source_type = #{connection.quote(source_type)}
+          AND source_id IS NOT NULL
+      SQL
+      next if source_count.zero?
+
+      unless table_exists?(parent_table)
+        next "  - #{source_type}: #{source_count} (missing #{parent_table})"
+      end
+
+      count = polymorphic_orphan_count(source_type, parent_table)
+      "  - #{source_type}: #{count}" if count.positive?
+    end
+    return if orphaned.empty?
+
+    raise <<~MESSAGE
+      Cannot upgrade because fulfillment payment sources are missing:
+
+      #{orphaned.join("\n")}
+
+      Restore or reconcile each Pay charge/subscription before retrying. A
+      dangling subscription source could otherwise mint credits without a
+      processor record to prove that the customer is still entitled to them.
+      No schema changes have been applied.
+    MESSAGE
+  end
+
+  def ensure_ledger_invariants!
+    violations = {
+      "zero-amount transactions" => scalar_count(<<~SQL),
+        SELECT COUNT(*) FROM usage_credits_transactions WHERE amount = 0
+      SQL
+      "non-positive allocations" => scalar_count(<<~SQL),
+        SELECT COUNT(*) FROM usage_credits_allocations WHERE amount <= 0
+      SQL
+      "allocations with invalid debit/credit direction or different wallets" => scalar_count(<<~SQL),
+        SELECT COUNT(*)
+        FROM usage_credits_allocations allocations
+        INNER JOIN usage_credits_transactions spends
+          ON spends.id = allocations.transaction_id
+        INNER JOIN usage_credits_transactions sources
+          ON sources.id = allocations.source_transaction_id
+        WHERE spends.amount >= 0
+           OR sources.amount <= 0
+           OR spends.wallet_id <> sources.wallet_id
+      SQL
+      "over-allocated credit sources" => scalar_count(<<~SQL),
+        SELECT COUNT(*)
+        FROM (
+          SELECT allocations.source_transaction_id
+          FROM usage_credits_allocations allocations
+          INNER JOIN usage_credits_transactions sources
+            ON sources.id = allocations.source_transaction_id
+          GROUP BY allocations.source_transaction_id, sources.amount
+          HAVING SUM(allocations.amount) > sources.amount
+        ) ledger_violations
+      SQL
+      "over-allocated debit transactions" => scalar_count(<<~SQL),
+        SELECT COUNT(*)
+        FROM (
+          SELECT allocations.transaction_id
+          FROM usage_credits_allocations allocations
+          INNER JOIN usage_credits_transactions spends
+            ON spends.id = allocations.transaction_id
+          GROUP BY allocations.transaction_id, spends.amount
+          HAVING SUM(allocations.amount) > -spends.amount
+        ) ledger_violations
+      SQL
+      "negative fulfillment credit snapshots" => scalar_count(<<~SQL)
+        SELECT COUNT(*)
+        FROM usage_credits_fulfillments
+        WHERE credits_last_fulfillment < 0
+      SQL
+    }
+
+    if table_exists?(:usage_credits_transfers)
+      violations["invalid interrupted transfers"] = scalar_count(<<~SQL)
+        SELECT COUNT(*)
+        FROM usage_credits_transfers
+        WHERE amount <= 0 OR from_wallet_id = to_wallet_id
+      SQL
+    end
+
+    violations.delete_if { |_description, count| count.zero? }
+    return if violations.empty?
+
+    listed = violations.map { |description, count| "  - #{description}: #{count}" }
+    raise <<~MESSAGE
+      Cannot upgrade because the existing ledger violates wallets accounting invariants:
+
+      #{listed.join("\n")}
+
+      Reconcile every listed row against the surrounding transactions and payment
+      records before retrying. Automatically coercing these values could create or
+      destroy customer credit. No schema changes have been applied.
+    MESSAGE
+  end
+
+  def scalar_count(sql)
+    connection.select_value(sql.squish).to_i
+  end
+
+  def orphan_count(child_table, foreign_key, parent_table)
+    child = connection.quote_table_name(child_table)
+    parent = connection.quote_table_name(parent_table)
+    foreign_column = connection.quote_column_name(foreign_key)
+    parent_key = connection.quote_column_name(connection.primary_key(parent_table))
+
+    connection.select_value(<<~SQL.squish).to_i
+      SELECT COUNT(*)
+      FROM #{child} child
+      LEFT JOIN #{parent} parent ON parent.#{parent_key} = child.#{foreign_column}
+      WHERE child.#{foreign_column} IS NOT NULL
+        AND parent.#{parent_key} IS NULL
+    SQL
+  end
+
+  def polymorphic_orphan_count(source_type, parent_table)
+    fulfillments = connection.quote_table_name(:usage_credits_fulfillments)
+    parent = connection.quote_table_name(parent_table)
+    source_id = connection.quote_column_name(:source_id)
+    parent_key = connection.quote_column_name(connection.primary_key(parent_table))
+
+    connection.select_value(<<~SQL.squish).to_i
+      SELECT COUNT(*)
+      FROM #{fulfillments} fulfillments
+      LEFT JOIN #{parent} parent ON parent.#{parent_key} = fulfillments.#{source_id}
+      WHERE fulfillments.source_type = #{connection.quote(source_type)}
+        AND fulfillments.#{source_id} IS NOT NULL
+        AND parent.#{parent_key} IS NULL
+    SQL
+  end
+
+  def ensure_bigint_column!(table, column, **options)
+    current = column_for(table, column)
+    raise "Cannot upgrade: missing #{table}.#{column}" unless current
+    return if current.sql_type.to_s.downcase.include?("bigint")
+
+    change_column table, column, :bigint, **options
+  end
+
+  def ensure_existing_transfer_schema!
+    transaction_reference_exists = column_exists?(:usage_credits_transactions, :transfer_id)
+    unless table_exists?(:usage_credits_transfers)
+      return unless transaction_reference_exists
+
+      raise <<~MESSAGE.squish
+        Cannot resume upgrade: usage_credits_transactions.transfer_id exists but
+        usage_credits_transfers does not. Restore or remove the incomplete
+        reference before retrying; no new schema changes have been applied.
+      MESSAGE
+    end
+
+    required_columns = %w[
+      id from_wallet_id to_wallet_id asset_code amount category
+      expiration_policy metadata created_at updated_at
+    ]
+    missing = required_columns.reject { |column| column_exists?(:usage_credits_transfers, column) }
+    return if missing.empty?
+
+    raise <<~MESSAGE.squish
+      Cannot resume upgrade: usage_credits_transfers is incomplete (missing:
+      #{missing.join(', ')}). Repair or remove the interrupted table before
+      retrying; no new schema changes have been applied.
+    MESSAGE
+  end
+
+  def ensure_reserved_index_names!
+    expectations = [
+      [:usage_credits_wallets, OWNER_ASSET_INDEX, %w[owner_type owner_id asset_code]],
+      [:usage_credits_fulfillments, FULFILLMENT_SOURCE_INDEX, %w[source_type source_id]]
+    ]
+    if table_exists?(:usage_credits_transfers)
+      expectations << [:usage_credits_transfers, TRANSFER_WALLETS_INDEX, %w[from_wallet_id to_wallet_id asset_code]]
+    end
+    if column_exists?(:usage_credits_transactions, :transfer_id)
+      expectations << [:usage_credits_transactions, TRANSACTION_TRANSFER_INDEX, %w[transfer_id]]
+    end
+
+    expectations.each do |table, name, expected_columns|
+      index = connection.indexes(table).find { |candidate| candidate.name == name }
+      next if index.nil? || index.columns == expected_columns
+
+      raise <<~MESSAGE.squish
+        Cannot upgrade: index #{name} on #{table} is reserved for
+        (#{expected_columns.join(', ')}) but currently covers
+        (#{index.columns.join(', ')}). Rename or remove the conflicting index
+        before retrying; no schema changes have been applied.
+      MESSAGE
+    end
+  end
+
+  def ensure_ledger_reference_types!(wallet_key_type)
+    ensure_reference_type!(:usage_credits_transactions, :wallet_id, wallet_key_type)
+    ensure_reference_type!(:usage_credits_fulfillments, :wallet_id, wallet_key_type)
+
+    transaction_key_type = primary_key_type_for(:usage_credits_transactions)
+    ensure_reference_type!(:usage_credits_allocations, :transaction_id, transaction_key_type)
+    ensure_reference_type!(:usage_credits_allocations, :source_transaction_id, transaction_key_type)
+
+    fulfillment_key_type = primary_key_type_for(:usage_credits_fulfillments)
+    ensure_reference_type!(:usage_credits_transactions, :fulfillment_id, fulfillment_key_type)
+
+    return unless table_exists?(:usage_credits_transfers)
+
+    ensure_reference_type!(:usage_credits_transfers, :from_wallet_id, wallet_key_type)
+    ensure_reference_type!(:usage_credits_transfers, :to_wallet_id, wallet_key_type)
+    if column_exists?(:usage_credits_transactions, :transfer_id)
+      ensure_reference_type!(
+        :usage_credits_transactions,
+        :transfer_id,
+        primary_key_type_for(:usage_credits_transfers)
+      )
+    end
+  end
+
+  def ensure_ledger_foreign_keys!(wallet_key_type)
+    ensure_foreign_key!(:usage_credits_transactions, :usage_credits_wallets, column: :wallet_id)
+    ensure_foreign_key!(:usage_credits_fulfillments, :usage_credits_wallets, column: :wallet_id)
+
+    ensure_foreign_key!(:usage_credits_allocations, :usage_credits_transactions, column: :transaction_id)
+    ensure_foreign_key!(:usage_credits_allocations, :usage_credits_transactions, column: :source_transaction_id)
+
+    ensure_foreign_key!(:usage_credits_transactions, :usage_credits_fulfillments, column: :fulfillment_id)
+  end
+
+  def ensure_transfers_table!(wallet_key_type)
+    unless table_exists?(:usage_credits_transfers)
+      create_table :usage_credits_transfers, id: wallet_key_type do |t|
+        t.references :from_wallet, null: false, type: wallet_key_type
+        t.references :to_wallet, null: false, type: wallet_key_type
+        t.string :asset_code, null: false, default: "credits"
+        t.bigint :amount, null: false
+        t.string :category, null: false, default: "transfer"
+        t.string :expiration_policy, null: false, default: "preserve"
+        t.send(json_column_type, :metadata, null: false, default: json_column_default)
+
+        t.timestamps
+      end
+    end
+
+    ensure_reference_type!(:usage_credits_transfers, :from_wallet_id, wallet_key_type)
+    ensure_reference_type!(:usage_credits_transfers, :to_wallet_id, wallet_key_type)
+
+    ensure_check_constraint!(
+      :usage_credits_transfers,
+      "amount > 0",
+      name: "check_usage_credits_transfers_amount_positive"
+    )
+    ensure_check_constraint!(
+      :usage_credits_transfers,
+      "from_wallet_id <> to_wallet_id",
+      name: "check_usage_credits_transfers_distinct_wallets"
+    )
+
+    ensure_foreign_key!(
+      :usage_credits_transfers,
+      :usage_credits_wallets,
+      column: :from_wallet_id
+    )
+    ensure_foreign_key!(
+      :usage_credits_transfers,
+      :usage_credits_wallets,
+      column: :to_wallet_id
+    )
+
+    unless index_exists?(:usage_credits_transfers, %i[from_wallet_id to_wallet_id asset_code])
+      add_index :usage_credits_transfers,
+        %i[from_wallet_id to_wallet_id asset_code],
+        name: TRANSFER_WALLETS_INDEX
+    end
+  end
+
+  def ensure_transfer_reference!
+    transfer_key_type = primary_key_type_for(:usage_credits_transfers)
+
+    unless column_exists?(:usage_credits_transactions, :transfer_id)
+      add_column :usage_credits_transactions, :transfer_id, transfer_key_type
+    end
+
+    ensure_reference_type!(:usage_credits_transactions, :transfer_id, transfer_key_type)
+
+    unless index_exists?(:usage_credits_transactions, :transfer_id)
+      add_index :usage_credits_transactions, :transfer_id, name: TRANSACTION_TRANSFER_INDEX
+    end
+
+    ensure_foreign_key!(
+      :usage_credits_transactions,
+      :usage_credits_transfers,
+      column: :transfer_id
+    )
+  end
+
+  def ensure_unique_index!(table, columns, name:)
+    expected_columns = columns.map(&:to_s)
+    existing = connection.indexes(table).find { |index| index.columns == expected_columns }
+    return if existing&.unique
+
+    remove_index table, name: existing.name if existing
+    add_index table, columns, unique: true, name: name
+  end
+
+  def ensure_foreign_key!(from_table, to_table, column:)
+    return if foreign_key_exists?(from_table, to_table, column: column)
+
+    add_foreign_key from_table, to_table, column: column
+  end
+
+  def ensure_check_constraint!(table, expression, name:)
+    return if check_constraint_exists?(table, name: name)
+
+    add_check_constraint table, expression, name: name
+  end
+
+  def ensure_reference_type!(table, column, expected_type)
+    actual_type = reference_type_for(column_for(table, column))
+    return if actual_type == expected_type
+
+    raise <<~MESSAGE.squish
+      Cannot upgrade: #{table}.#{column} is #{actual_type.inspect}, but the
+      referenced primary key is #{expected_type.inspect}. Correct this type
+      mismatch before retrying; no automatic cast is safe for ledger keys.
+    MESSAGE
+  end
+
+  def primary_key_type_for(table)
+    primary_key = connection.primary_key(table)
+    column = column_for(table, primary_key)
+    raise "Cannot determine primary key type for #{table}" unless column
+
+    reference_type_for(column)
+  end
+
+  def reference_type_for(column)
+    return :uuid if column.type == :uuid
+    return :bigint if column.sql_type.to_s.downcase.include?("bigint")
+    return :integer if column.type == :integer
+
+    column.type
+  end
+
+  def column_for(table, column)
+    connection.columns(table).find { |candidate| candidate.name == column.to_s }
+  end
+
+  def json_column_type
+    return :jsonb if connection.adapter_name.downcase.include?("postgresql")
+    :json
+  end
+
+  def json_column_default
+    return nil if connection.adapter_name.downcase.include?("mysql")
+    {}
+  end
+end

@@ -49,6 +49,27 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
         signup_bonus 200.credits
         unused_credits :expire
       end
+
+      config.subscription_plan :stripe_pause_pro do
+        processor_plan(:stripe, "stripe_pause_pro")
+        gives 500.credits.every(:month)
+        signup_bonus 100.credits
+        unused_credits :expire
+      end
+
+      config.subscription_plan :stripe_pause_premium do
+        processor_plan(:stripe, "stripe_pause_premium")
+        gives 2000.credits.every(:month)
+        signup_bonus 200.credits
+        unused_credits :expire
+      end
+
+      config.subscription_plan :lemon_trial do
+        processor_plan(:lemon_squeezy, "lemon_trial")
+        gives 500.credits.every(:month)
+        trial_includes 75.credits
+        unused_credits :expire
+      end
     end
   end
 
@@ -135,6 +156,182 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     end
   end
 
+  test "effective Stripe pause blocks initial credits even though raw status is active" do
+    wallet, customer = stripe_subscription_context("initial-paused")
+    subscription = nil
+
+    assert_no_difference [-> { wallet.reload.credits }, -> { UsageCredits::Fulfillment.count }] do
+      subscription = create_stripe_subscription(
+        customer,
+        processor_plan: "stripe_pause_pro",
+        pause_behavior: "void",
+        pause_starts_at: 1.minute.ago
+      )
+    end
+
+    assert_equal "active", subscription.status
+    assert_not subscription.active?
+    assert_not subscription.eligible_for_usage_credit_fulfillment?(include_trial: true)
+  end
+
+  test "scheduled Stripe pause remains eligible until its effective time" do
+    wallet, customer = stripe_subscription_context("scheduled-pause")
+    subscription = nil
+
+    assert_difference -> { wallet.reload.credits }, 600 do
+      subscription = create_stripe_subscription(
+        customer,
+        processor_plan: "stripe_pause_pro",
+        pause_behavior: "void",
+        pause_starts_at: 1.day.from_now
+      )
+    end
+
+    assert subscription.active?
+    assert subscription.eligible_for_usage_credit_fulfillment?
+    assert UsageCredits::Fulfillment.exists?(source: subscription)
+  end
+
+  test "processor on_trial status receives only its trial credits" do
+    token = SecureRandom.hex(4)
+    user = User.create!(email: "lemon-trial-#{token}@example.com", name: "Lemon Trial")
+    wallet = user.credit_wallet
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :lemon_squeezy,
+      processor_id: "cus_lemon_trial_#{token}"
+    )
+    subscription = nil
+
+    assert_difference -> { wallet.reload.credits }, 75 do
+      subscription = Pay::LemonSqueezy::Subscription.create!(
+        customer: customer,
+        name: "default",
+        processor_id: "sub_lemon_trial_#{token}",
+        processor_plan: "lemon_trial",
+        status: "on_trial",
+        quantity: 1,
+        trial_ends_at: 1.week.from_now
+      )
+    end
+
+    assert subscription.eligible_for_usage_credit_fulfillment?(include_trial: true)
+    assert_not subscription.eligible_for_usage_credit_fulfillment?
+    assert_equal "trial", UsageCredits::Fulfillment.find_by!(source: subscription).metadata["initial_award_state"]
+    assert_equal 0, wallet.transactions.where(category: "subscription_credits").count
+  end
+
+  test "plan change during Stripe pause is deferred without minting and applied on resume" do
+    wallet, customer = stripe_subscription_context("paused-plan-change")
+    subscription = create_stripe_subscription(customer, processor_plan: "stripe_pause_pro")
+    fulfillment = UsageCredits::Fulfillment.find_by!(source: subscription)
+
+    assert_equal 600, wallet.reload.credits
+
+    subscription.update_columns(
+      pause_behavior: "void",
+      pause_starts_at: 1.minute.ago,
+      updated_at: Time.current
+    )
+    subscription.reload
+
+    assert_no_difference -> { wallet.reload.credits } do
+      subscription.update!(processor_plan: "stripe_pause_premium")
+    end
+
+    fulfillment.reload
+    assert_equal "stripe_pause_pro", fulfillment.metadata["plan"]
+    assert_equal "stripe_pause_premium", fulfillment.metadata["deferred_plan_change"]
+    assert_equal 0, wallet.transactions.where(category: "subscription_upgrade").count
+
+    assert_no_difference -> { wallet.reload.credits } do
+      subscription.update!(pause_behavior: nil, pause_starts_at: nil)
+    end
+
+    fulfillment.reload
+    assert_equal "stripe_pause_premium", fulfillment.metadata["plan"]
+    assert_equal 2000, fulfillment.metadata["credits_per_period"]
+    assert_nil fulfillment.metadata["deferred_plan_change"]
+    assert_equal 0, wallet.transactions.where(category: "subscription_upgrade").count
+
+    fulfillment.update_columns(
+      last_fulfilled_at: 1.month.ago,
+      next_fulfillment_at: 1.second.ago
+    )
+    assert subscription.reload.eligible_for_usage_credit_fulfillment?
+    assert fulfillment.reload.due_for_fulfillment?
+    assert_difference -> { wallet.reload.credits }, 2000 do
+      UsageCredits::FulfillmentService.new(fulfillment.reload).process
+    end
+  end
+
+  test "multiple plan changes while paused preserve one deferred source of truth" do
+    wallet, customer = stripe_subscription_context("paused-multiple-plan-changes")
+    subscription = create_stripe_subscription(customer, processor_plan: "stripe_pause_pro")
+    fulfillment = UsageCredits::Fulfillment.find_by!(source: subscription)
+
+    subscription.update_columns(
+      pause_behavior: "void",
+      pause_starts_at: 1.minute.ago,
+      updated_at: Time.current
+    )
+
+    assert_no_difference -> { wallet.reload.credits } do
+      subscription.update!(processor_plan: "non_credit_plan")
+      subscription.update!(processor_plan: "stripe_pause_premium")
+    end
+
+    fulfillment.reload
+    assert fulfillment.stopped?
+    assert_equal "stripe_pause_premium", fulfillment.metadata["deferred_plan_change"]
+    assert_equal "stripe_pause_premium", fulfillment.metadata.dig("deferred_plan_snapshot", "plan")
+
+    assert_no_difference -> { wallet.reload.credits } do
+      subscription.update!(pause_behavior: nil, pause_starts_at: nil)
+    end
+
+    fulfillment.reload
+    assert_not fulfillment.stopped?
+    assert_equal "stripe_pause_premium", fulfillment.metadata["plan"]
+    assert_equal 2000, fulfillment.metadata["credits_per_period"]
+    assert_nil fulfillment.metadata["deferred_plan_change"]
+    assert_nil fulfillment.metadata["stopped_reason"]
+    assert_nil fulfillment.metadata["stopped_plan"]
+  end
+
+  test "unrelated subscription updates skip deferred resume reconciliation" do
+    _wallet, customer = stripe_subscription_context("unrelated-update")
+    subscription = create_stripe_subscription(customer, processor_plan: "stripe_pause_pro")
+
+    subscription.expects(:apply_deferred_plan_change_after_resume).never
+    subscription.update!(quantity: 2)
+  end
+
+  test "destroying a subscription does not run credit lifecycle callbacks" do
+    user = User.create!(email: "destroy-subscription-#{SecureRandom.hex(4)}@example.com", name: "Destroy Subscription")
+    wallet = user.credit_wallet
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_destroy_subscription_#{SecureRandom.hex(4)}"
+    )
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_destroy_subscription_#{SecureRandom.hex(4)}",
+      processor_plan: "pro_plan_monthly",
+      status: "incomplete",
+      quantity: 1
+    )
+
+    callback = -> { raise "credit lifecycle callback ran after destroy" }
+    subscription.stub(:handle_initial_award_and_fulfillment_setup, callback) do
+      assert_no_difference [-> { wallet.reload.credits }, -> { UsageCredits::Fulfillment.count }] do
+        subscription.destroy!
+      end
+    end
+  end
+
   test "active subscription awards signup bonus separately" do
     # Create a fresh user to avoid fixture wallet conflicts
     user = User.create!(email: "sub_bonus@example.com", name: "Sub Bonus User")
@@ -185,6 +382,71 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     sub_credit_tx = wallet.transactions.find_by(category: "subscription_credits")
     assert_not_nil sub_credit_tx
     assert_equal 500, sub_credit_tx.amount
+  end
+
+  test "active subscription honors validated checkout terms after plan removal" do
+    user = User.create!(email: "snapshot-active-#{SecureRandom.hex(4)}@example.com", name: "Snapshot Active")
+    wallet = user.credit_wallet
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_snapshot_active_#{SecureRandom.hex(4)}"
+    )
+
+    assert_difference -> { wallet.reload.credits }, 320 do
+      subscription = Pay::Subscription.create!(
+        customer: customer,
+        name: "default",
+        processor_id: "sub_snapshot_active_#{SecureRandom.hex(4)}",
+        processor_plan: "retired_plan",
+        status: "active",
+        quantity: 1,
+        metadata: {
+          purchase_type: "credit_subscription",
+          processor_plan: "retired_plan",
+          subscription_name: "retired",
+          credits_per_period: "300",
+          signup_bonus_credits: "20",
+          trial_credits: "10",
+          fulfillment_period: "1.month",
+          rollover_enabled: "false"
+        }
+      )
+
+      fulfillment = UsageCredits::Fulfillment.find_by!(source: subscription)
+      assert_equal 300, fulfillment.metadata["credits_per_period"]
+      assert_equal "retired_plan", fulfillment.metadata["plan"]
+    end
+  end
+
+  test "trial activation uses persisted terms after configuration removal" do
+    user = User.create!(email: "snapshot-trial-#{SecureRandom.hex(4)}@example.com", name: "Snapshot Trial")
+    wallet = user.credit_wallet
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_snapshot_trial_#{SecureRandom.hex(4)}"
+    )
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_snapshot_trial_#{SecureRandom.hex(4)}",
+      processor_plan: "pro_plan_monthly",
+      status: "trialing",
+      quantity: 1,
+      trial_ends_at: 7.days.from_now
+    )
+
+    assert_equal 50, wallet.reload.credits
+    UsageCredits.reset!
+
+    assert_difference -> { wallet.reload.credits }, 600 do
+      subscription.update!(status: "active")
+    end
+
+    fulfillment = UsageCredits::Fulfillment.find_by!(source: subscription)
+    assert_equal "active", fulfillment.metadata["initial_award_state"]
+    assert_equal 500, fulfillment.metadata["credits_per_period"]
   end
 
   test "active subscription sets credit expiration for non-rollover plans" do
@@ -326,6 +588,49 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     assert_not_nil wallet.transactions.find_by(category: "subscription_trial")
   end
 
+  test "trial activation awards signup and first paid-period credits exactly once" do
+    user = User.create!(email: "trial_activation@example.com", name: "Trial Activation User")
+    wallet = user.credit_wallet
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_trial_activation"
+    )
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_trial_activation",
+      processor_plan: "pro_plan_monthly",
+      status: "trialing",
+      trial_ends_at: 7.days.from_now,
+      quantity: 1
+    )
+    fulfillment = UsageCredits::Fulfillment.find_by!(source: subscription)
+
+    assert_equal 50, wallet.reload.credits
+    assert_equal "trial", fulfillment.metadata["initial_award_state"]
+
+    assert_difference -> { wallet.reload.credits }, 600 do
+      assert_no_difference -> { UsageCredits::Fulfillment.count } do
+        subscription.update!(
+          status: "active",
+          current_period_start: Time.current,
+          current_period_end: 1.month.from_now
+        )
+      end
+    end
+
+    fulfillment.reload
+    assert_equal "active", fulfillment.metadata["initial_award_state"]
+    assert_not fulfillment.metadata.key?("trial")
+    assert_equal 1, wallet.transactions.where(category: "subscription_signup_bonus").count
+    assert_equal 1, wallet.transactions.where(category: "subscription_credits").count
+
+    assert_no_difference -> { wallet.reload.credits } do
+      subscription.send(:handle_initial_award_and_fulfillment_setup)
+    end
+  end
+
   # ========================================
   # SUBSCRIPTION STATUS TRANSITIONS
   # ========================================
@@ -443,6 +748,145 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     assert fulfillment.stopped?
   end
 
+  test "cancellation applies snapshotted credit expiration after plan removal" do
+    UsageCredits.configure do |config|
+      config.subscription_plan :cancel_expiring do
+        processor_plan(:fake_processor, "cancel_expiring_plan")
+        gives 100.credits.every(:month)
+        unused_credits :rollover
+        expire_after 2.days
+      end
+    end
+
+    user = User.create!(email: "cancel-expiring-#{SecureRandom.hex(4)}@example.com", name: "Cancel Expiring")
+    wallet = user.credit_wallet
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_cancel_expiring_#{SecureRandom.hex(4)}"
+    )
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_cancel_expiring_#{SecureRandom.hex(4)}",
+      processor_plan: "cancel_expiring_plan",
+      status: "active",
+      quantity: 1
+    )
+    credit_transaction = wallet.transactions.find_by!(category: "subscription_credits")
+    fulfillment = UsageCredits::Fulfillment.find_by!(source: subscription)
+    assert_nil credit_transaction.expires_at
+
+    # Commercial terms must come from the fulfillment snapshot, not mutable
+    # process configuration, when a delayed cancellation webhook arrives.
+    UsageCredits.reset!
+    cancellation_at = 1.day.from_now
+    subscription.update!(status: "canceled", ends_at: cancellation_at)
+
+    expected_expiration = cancellation_at + 2.days
+    assert_in_delta expected_expiration.to_i, credit_transaction.reload.expires_at.to_i, 1
+    assert_in_delta expected_expiration.to_i,
+      fulfillment.reload.metadata["cancellation_credit_expiration_at"].to_time.to_i,
+      1
+    assert_equal 100, wallet.reload.credits
+
+    travel_to expected_expiration + 1.second do
+      assert_equal 0, wallet.reload.credits
+    end
+  end
+
+  test "cancellation can expire subscription credits immediately without touching unrelated credits" do
+    low_balance_events = []
+    depleted_events = []
+
+    UsageCredits.configure do |config|
+      config.subscription_plan :cancel_immediately do
+        processor_plan(:fake_processor, "cancel_immediately_plan")
+        gives 100.credits.every(:month)
+        unused_credits :rollover
+        expire_after nil
+      end
+
+      config.low_balance_threshold = 50
+      config.on_low_balance_reached { |context| low_balance_events << context }
+      config.on_balance_depleted { |context| depleted_events << context }
+    end
+
+    user = User.create!(email: "cancel-now-#{SecureRandom.hex(4)}@example.com", name: "Cancel Now")
+    wallet = user.credit_wallet
+    wallet.give_credits(25, reason: "manual")
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_cancel_now_#{SecureRandom.hex(4)}"
+    )
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_cancel_now_#{SecureRandom.hex(4)}",
+      processor_plan: "cancel_immediately_plan",
+      status: "active",
+      quantity: 1
+    )
+    subscription_credit = wallet.transactions.find_by!(category: "subscription_credits")
+    manual_credit = wallet.transactions.find_by!(category: "manual_adjustment")
+    assert_equal 125, wallet.reload.credits
+
+    canceled_at = Time.current
+    subscription.update!(status: "canceled", ends_at: canceled_at)
+
+    assert subscription_credit.reload.expires_at <= Time.current
+    assert_nil manual_credit.reload.expires_at
+    assert_equal 25, wallet.reload.credits
+    assert_equal 1, low_balance_events.size
+    assert_equal 125, low_balance_events.sole.previous_balance
+    assert_equal 25, low_balance_events.sole.new_balance
+    assert_empty depleted_events
+  end
+
+  test "immediate cancellation expiration dispatches low balance and depleted callbacks" do
+    low_balance_events = []
+    depleted_events = []
+
+    UsageCredits.configure do |config|
+      config.subscription_plan :cancel_to_zero do
+        processor_plan(:fake_processor, "cancel_to_zero_plan")
+        gives 100.credits.every(:month)
+        unused_credits :rollover
+        expire_after nil
+      end
+
+      config.low_balance_threshold = 50
+      config.on_low_balance_reached { |context| low_balance_events << context }
+      config.on_balance_depleted { |context| depleted_events << context }
+    end
+
+    user = User.create!(email: "cancel-zero-#{SecureRandom.hex(4)}@example.com", name: "Cancel Zero")
+    wallet = user.credit_wallet
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_cancel_zero_#{SecureRandom.hex(4)}"
+    )
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_cancel_zero_#{SecureRandom.hex(4)}",
+      processor_plan: "cancel_to_zero_plan",
+      status: "active",
+      quantity: 1
+    )
+    assert_equal 100, wallet.reload.credits
+
+    subscription.update!(status: "canceled", ends_at: Time.current)
+
+    assert_equal 0, wallet.reload.credits
+    assert_equal 1, low_balance_events.size
+    assert_equal 1, depleted_events.size
+    assert_equal [100, 0], [low_balance_events.sole.previous_balance, low_balance_events.sole.new_balance]
+    assert_equal [100, 0], [depleted_events.sole.previous_balance, depleted_events.sole.new_balance]
+  end
+
   # ========================================
   # DOUBLE FULFILLMENT PREVENTION
   # ========================================
@@ -473,6 +917,63 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     assert_no_difference -> { wallet.reload.credits } do
       subscription.send(:handle_initial_award_and_fulfillment_setup)
     end
+  end
+
+  test "stale active callback cannot mint after a newer cancellation" do
+    user = User.create!(email: "stale-sub-#{SecureRandom.hex(4)}@example.com", name: "Stale Subscription")
+    wallet = user.credit_wallet
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :fake_processor,
+      processor_id: "cus_stale_sub_#{SecureRandom.hex(4)}"
+    )
+    subscription = Pay::Subscription.create!(
+      customer: customer,
+      name: "default",
+      processor_id: "sub_stale_#{SecureRandom.hex(4)}",
+      processor_plan: "pro_plan_monthly",
+      status: "incomplete",
+      quantity: 1
+    )
+    stale_callback_record = Pay::Subscription.find(subscription.id)
+    stale_callback_record.status = "active"
+
+    Pay::Subscription.where(id: subscription.id).update_all(
+      status: "canceled",
+      updated_at: 1.second.from_now
+    )
+
+    assert_no_difference -> { wallet.reload.credits } do
+      stale_callback_record.send(:handle_initial_award_and_fulfillment_setup)
+    end
+    assert_nil UsageCredits::Fulfillment.find_by(source: subscription)
+  end
+
+  test "database timestamp precision does not suppress a current processor callback" do
+    user = User.create!(email: "timestamp-precision-#{SecureRandom.hex(4)}@example.com", name: "Timestamp Precision")
+    wallet = user.credit_wallet
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :stripe,
+      processor_id: "cus_timestamp_precision_#{SecureRandom.hex(4)}"
+    )
+    period_start = Time.current.change(nsec: 123_456_789)
+
+    subscription = nil
+    assert_difference -> { wallet.reload.credits }, 600 do
+      subscription = Pay::Stripe::Subscription.create!(
+        customer: customer,
+        name: "default",
+        processor_id: "sub_timestamp_precision_#{SecureRandom.hex(4)}",
+        processor_plan: "stripe_pause_pro",
+        status: "active",
+        quantity: 1,
+        current_period_start: period_start,
+        current_period_end: period_start + 1.month
+      )
+    end
+
+    assert UsageCredits::Fulfillment.exists?(source: subscription)
   end
 
   test "fulfillment record prevents duplicate credit awards" do
@@ -916,7 +1417,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     )
 
     fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
-    initial_next_fulfillment = fulfillment.next_fulfillment_at
+    fulfillment.next_fulfillment_at
 
     # Upgrade to premium (same period, different credits)
     travel_to 5.seconds.from_now do
@@ -1044,7 +1545,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
 
     fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
     assert_not_nil fulfillment
-    original_stops_at = fulfillment.stops_at
+    fulfillment.stops_at
 
     # Downgrade to a non-credit plan (not defined in our test setup)
     subscription.update!(processor_plan: "basic_plan_no_credits")
@@ -1507,7 +2008,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
 
     # When subscription is created, old_plan_id is nil
     # plan_changed? should return false, not trigger upgrade logic
-    subscription = Pay::Subscription.create!(
+    Pay::Subscription.create!(
       customer: customer,
       name: "default",
       processor_id: "sub_regression_guard",
@@ -1536,7 +2037,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
 
   test "REGRESSION: downgrade from credit plan to non-credit plan triggers plan change" do
     user = User.create!(email: "regression_noncredit@example.com", name: "Regression NonCredit")
-    wallet = user.credit_wallet
+    user.credit_wallet
 
     customer = Pay::Customer.create!(
       owner: user,
@@ -1556,7 +2057,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
 
     fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
     assert_not_nil fulfillment
-    original_stops_at = fulfillment.stops_at
+    fulfillment.stops_at
 
     # THE BUG: Without the fix, downgrading to non-credit plan wouldn't trigger
     # handle_plan_change because provides_credits? would return false
@@ -1634,7 +2135,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
       quantity: 1
     )
 
-    initial_credits = wallet.reload.credits  # 600 (500 + 100 bonus)
+    wallet.reload.credits  # 600 (500 + 100 bonus)
     fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
 
     # Change to weekly plan (same credits, different period)
@@ -1651,7 +2152,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
 
   test "cancellation with pending downgrade works correctly" do
     user = User.create!(email: "cancel_pending@example.com", name: "Cancel Pending")
-    wallet = user.credit_wallet
+    user.credit_wallet
 
     customer = Pay::Customer.create!(
       owner: user,
@@ -1731,7 +2232,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     # switching them back unexpectedly. Upgrade should clear pending downgrades.
 
     user = User.create!(email: "upgrade_clears_pending@example.com", name: "Upgrade Clears Pending")
-    wallet = user.credit_wallet
+    user.credit_wallet
 
     customer = Pay::Customer.create!(
       owner: user,
@@ -1790,7 +2291,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     # The plan change would only take effect when the subscription becomes active.
 
     user = User.create!(email: "trial_downgrade@example.com", name: "Trial Downgrade")
-    wallet = user.credit_wallet
+    user.credit_wallet
 
     customer = Pay::Customer.create!(
       owner: user,
@@ -1883,7 +2384,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
 
   test "fulfillment metadata stays consistent through multiple changes" do
     user = User.create!(email: "metadata_consistent@example.com", name: "Metadata Consistent")
-    wallet = user.credit_wallet
+    user.credit_wallet
 
     customer = Pay::Customer.create!(
       owner: user,
@@ -1921,7 +2422,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
 
   test "pending plan change metadata is cleared after application" do
     user = User.create!(email: "pending_clear@example.com", name: "Pending Clear")
-    wallet = user.credit_wallet
+    user.credit_wallet
 
     customer = Pay::Customer.create!(
       owner: user,
@@ -2005,7 +2506,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
       processor_id: "cus_tx_initial"
     )
 
-    subscription = Pay::Subscription.create!(
+    Pay::Subscription.create!(
       customer: customer,
       name: "default",
       processor_id: "sub_tx_initial",
@@ -2033,7 +2534,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
 
   test "renewal during scheduled downgrade applies change correctly" do
     user = User.create!(email: "concurrent_renew@example.com", name: "Concurrent Renew")
-    wallet = user.credit_wallet
+    user.credit_wallet
 
     customer = Pay::Customer.create!(
       owner: user,
@@ -2142,7 +2643,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
 
   test "downgrade handles missing current_period_end gracefully" do
     user = User.create!(email: "no_period_end@example.com", name: "No Period End")
-    wallet = user.credit_wallet
+    user.credit_wallet
 
     customer = Pay::Customer.create!(
       owner: user,
@@ -2223,7 +2724,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
       quantity: 1
     )
 
-    initial_credits = wallet.reload.credits
+    wallet.reload.credits
 
     # Destroy wallet
     wallet.destroy!
@@ -2416,7 +2917,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     end
 
     user = User.create!(email: "lateral_after_downgrade@example.com", name: "Lateral After Downgrade")
-    wallet = user.credit_wallet
+    user.credit_wallet
 
     customer = Pay::Customer.create!(
       owner: user,
@@ -2475,7 +2976,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
       current_period_end: 30.days.from_now
     )
 
-    initial_credits = wallet.reload.credits  # 2200 (2000 + 200 bonus)
+    wallet.reload.credits  # 2200 (2000 + 200 bonus)
     fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)
 
     # Schedule downgrade to pro (500 credits)
@@ -2507,7 +3008,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     # When a downgrade is scheduled but not yet applied, the fulfillment job
     # should still award credits from the CURRENT plan (not the pending plan)
     user = User.create!(email: "fulfillment_timing@example.com", name: "Fulfillment Timing")
-    wallet = user.credit_wallet
+    user.credit_wallet
 
     customer = Pay::Customer.create!(
       owner: user,
@@ -2546,7 +3047,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
   test "multiple plan changes preserve subscription_id in metadata" do
     # Ensure subscription_id is never lost during plan change chaos
     user = User.create!(email: "preserve_sub_id@example.com", name: "Preserve Sub ID")
-    wallet = user.credit_wallet
+    user.credit_wallet
 
     customer = Pay::Customer.create!(
       owner: user,
@@ -2608,7 +3109,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
 
     # Create subscription with current_period_start in the past (simulating reactivation)
     # In reality, this happens when a subscription is paused and then resumed
-    subscription = Pay::Subscription.create!(
+    Pay::Subscription.create!(
       customer: customer,
       name: "default",
       processor_id: "sub_past_period_start",
@@ -2663,7 +3164,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
       current_period_end: 30.days.from_now
     )
 
-    initial_credits = wallet.reload.credits
+    wallet.reload.credits
 
     # Schedule a downgrade to the temp plan
     subscription.update!(processor_plan: "temp_plan_monthly")
@@ -2733,11 +3234,11 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     3.times do |i|
       # Schedule downgrade
       subscription.update!(processor_plan: "pro_plan_monthly")
-      assert_equal 2600, wallet.reload.credits, "Downgrade #{i+1} should not change credits"
+      assert_equal 2600, wallet.reload.credits, "Downgrade #{i + 1} should not change credits"
 
       # Try to "upgrade" back to premium (should be BLOCKED - same plan in metadata)
       subscription.update!(processor_plan: "premium_plan_monthly")
-      assert_equal 2600, wallet.reload.credits, "Return to premium #{i+1} should NOT grant credits"
+      assert_equal 2600, wallet.reload.credits, "Return to premium #{i + 1} should NOT grant credits"
     end
 
     # Verify only 1 upgrade transaction ever occurred
@@ -2993,5 +3494,36 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     upgrade_count = wallet.transactions.where(category: "subscription_upgrade").count
     assert_equal 0, upgrade_count,
       "ANTI-GAMING CRITICAL: No upgrade when comparing against current (not pending)"
+  end
+
+  private
+
+  def stripe_subscription_context(label)
+    token = SecureRandom.hex(4)
+    user = User.create!(
+      email: "#{label}-#{token}@example.com",
+      name: "Stripe Pause Test"
+    )
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: :stripe,
+      processor_id: "cus_#{label.tr("-", "_")}_#{token}"
+    )
+
+    [user.credit_wallet, customer]
+  end
+
+  def create_stripe_subscription(customer, processor_plan:, **attributes)
+    token = SecureRandom.hex(4)
+    Pay::Stripe::Subscription.create!({
+      customer: customer,
+      name: "default",
+      processor_id: "sub_stripe_pause_#{token}",
+      processor_plan: processor_plan,
+      status: "active",
+      quantity: 1,
+      current_period_start: Time.current,
+      current_period_end: 1.month.from_now
+    }.merge(attributes))
   end
 end

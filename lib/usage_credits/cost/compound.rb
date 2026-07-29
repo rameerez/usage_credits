@@ -12,8 +12,9 @@ module UsageCredits
       end
 
       def calculate(params = {})
-        total = costs.sum { |cost| cost.calculate(params) }
-        CreditCalculator.apply_rounding(total)
+        # Components stay unrounded until Operation#calculate_cost applies the
+        # configured strategy once to the final sum.
+        costs.sum { |cost| cost.calculate(params) }
       end
 
       def +(other)

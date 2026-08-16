@@ -232,7 +232,7 @@ module UsageCredits
         # To finish, let's return the transaction that has been just created so we can reference it in parts of the code
         # Useful, for example, to update the transaction's `fulfillment` reference in the subscription extension
         # after the credits have been awarded and the Fulfillment object has been created, we need to store it
-        return transaction
+        transaction
       end
     end
 

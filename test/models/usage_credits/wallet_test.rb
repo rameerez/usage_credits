@@ -65,6 +65,16 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
     end
   end
 
+  test "add_credits persists the transaction and balance after the call returns" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+
+    transaction = wallet.add_credits(100, metadata: { reason: "persistence_check" })
+
+    assert UsageCredits::Transaction.exists?(transaction.id)
+    assert_equal 100, wallet.reload.balance
+    assert_equal 100, UsageCredits::Wallet.find(wallet.id).credits
+  end
+
   test "give_credits with expiration date" do
     wallet = usage_credits_wallets(:rich_wallet)
     expires_at = 30.days.from_now

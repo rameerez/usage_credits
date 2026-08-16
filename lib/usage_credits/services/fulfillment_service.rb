@@ -31,7 +31,7 @@ module UsageCredits
         @fulfillment.lock! # row lock to avoid double awarding
 
         # re-check if it's still due, in case time changed or another process already updated it
-        return unless @fulfillment.due_for_fulfillment?
+        next unless @fulfillment.due_for_fulfillment?
 
         credits = calculate_credits
         give_credits(credits)

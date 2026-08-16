@@ -410,7 +410,7 @@ module UsageCredits
         if current_plan_id == new_plan_id
           Rails.logger.info "  Action: Returning to current plan (clearing pending change)"
           clear_pending_plan_change(fulfillment)
-          return
+          next
         end
 
         # Now compare credits to determine upgrade vs downgrade

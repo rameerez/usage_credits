@@ -506,6 +506,33 @@ subscription_plan :basic do
 end
 ```
 
+#### Using `pricing_plans`? Declare your prices once
+
+If you also use [`pricing_plans`](https://github.com/rameerez/pricing_plans), your Stripe prices already live in `config/initializers/pricing_plans.rb`. Don't copy them here: point the subscription plan at its pricing plan instead.
+
+```ruby
+# config/initializers/pricing_plans.rb
+plan :pro do
+  stripe_price month: "price_pro_monthly", year: "price_pro_yearly", quarter: "price_pro_quarterly"
+end
+
+# config/initializers/usage_credits.rb
+subscription_plan :pro do
+  pricing_plan                        # Take the Stripe prices of pricing_plans' :pro plan
+  gives 10_000.credits.every(:month)
+  unused_credits :expire
+end
+```
+
+Every Stripe price of the pricing plan counts, whatever you named its keys (a single `stripe_price "price_x"` works too), so a subscriber on any of them gets their credits. Pass a key when the names differ: `pricing_plan :pro_2026`.
+
+A few things to know:
+
+- **Initializer order doesn't matter.** Prices are read from `pricing_plans` every time a subscription is matched, never copied at boot, so `pricing_plans.rb` can load before or after `usage_credits.rb`.
+- **One source of truth.** A plan that uses `pricing_plan` can't also declare `stripe_price`; that raises `UsageCredits::ConfigurationError`. Keep every price, including legacy ones for grandfathered subscribers, in the pricing plan. `pricing_plans` up to 0.7.x accepts any key for them, but its next version only accepts `id`, `day`, `week`, `month`, `quarter` and `year`, so there a legacy price needs a spare interval key. Plan IDs for other processors (`processor_plan :paddle, ...`) still work alongside it.
+- **Broken links fail loudly.** If `pricing_plans` isn't installed, or has no plan with that key, your app raises `UsageCredits::ConfigurationError` at boot (and on any lookup) instead of silently refilling nothing. A pricing plan with no Stripe price in the current environment only logs a warning at boot, since build steps like `assets:precompile` often run without credentials.
+- `pricing_plans` stays optional: `usage_credits` never requires it. The only thing it reads is `PricingPlans::Registry.plan(key).stripe_price`.
+
 ### Specify a fulfillment period
 
 Next, specify how many credits a user subscribed to this plan gets, and when they get them.

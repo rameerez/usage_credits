@@ -73,6 +73,7 @@ require "usage_credits/jobs/fulfillment_job"
 module UsageCredits
   # Custom error classes
   class Error < StandardError; end
+  class ConfigurationError < Error; end
   class InsufficientCredits < Error; end
   class InvalidOperation < Error; end
   class InvalidTransfer < Error; end

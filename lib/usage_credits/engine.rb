@@ -23,6 +23,11 @@ module UsageCredits
       end
     end
 
+    # Runs after every initializer, so pricing_plans.rb and usage_credits.rb can load in any order
+    config.after_initialize do
+      UsageCredits.configuration.validate_pricing_plan_links!
+    end
+
     initializer "usage_credits.action_view" do
       ActiveSupport.on_load :action_view do
         require "usage_credits/helpers/credits_helper"

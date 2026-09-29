@@ -303,6 +303,24 @@ module UsageCredits
       true
     end
 
+    # Resolve every `pricing_plan` link once all initializers have run, so a
+    # missing gem or plan fails at boot instead of on the first paid webhook.
+    # A linked plan without Stripe prices only warns: build steps like
+    # `assets:precompile` often boot without the credentials that hold them.
+    def validate_pricing_plan_links!
+      @credit_subscription_plans.each_value do |plan|
+        next unless plan.pricing_plan_key
+        next if plan.stripe_price_from_pricing_plan
+
+        Rails.logger.warn(
+          "[UsageCredits] Subscription plan '#{plan.name}' takes its Stripe prices from pricing plan " \
+          "'#{plan.pricing_plan_key}', which has no Stripe price. No Stripe subscription will match it, " \
+          "so Stripe subscribers won't get its credits."
+        )
+      end
+      true
+    end
+
     private
 
     def validate_currency!

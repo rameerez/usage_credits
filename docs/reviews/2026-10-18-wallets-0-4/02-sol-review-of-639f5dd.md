@@ -1,6 +1,6 @@
 # Re-review of the fixes (Codex Sol, 2026-10-18, at commit 639f5dd, PR #30)
 
-Scope: `git diff e36eb8d..639f5dd`, the answer to review 01 (`spend_credits_on`, cancellation expiry and the refund debit inside the core's mutation context and their own savepoints; regenerated dummy schema with a drift test and a CI step; Trilogy as MySQL in the migrations and the Pay charge lookups; two-connection race tests). Verdict: BLOCK on one remaining stale read, the refund amount; fixed in the next commit and re-reviewed (03).
+Scope: `git diff e36eb8d..639f5dd`, the answer to review 01 (`spend_credits_on`, cancellation expiry and the refund debit inside the core's mutation context and their own savepoints; regenerated dummy schema with a drift test and a CI step; Trilogy as MySQL in the migrations and the Pay charge lookups; two-connection race tests). Verdict: BLOCK on one remaining stale read, the refund amount; fixed in commit 983fcfc and re-reviewed (03).
 
 ## Blocking
 

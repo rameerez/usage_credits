@@ -24,6 +24,7 @@ class UsageCredits::CurrentReadsTest < ActiveSupport::TestCase
     skip "SQLite serializes writers: no transaction can read, wait, then write" if sqlite?
 
     @owners = []
+    @pay_customers = [] # Pay does not destroy a customer with its owner
     UsageCredits.configure do |config|
       config.operation(:sixty_credit_task) { costs 60.credits }
       config.operation(:twenty_five_credit_task) { costs 25.credits }
@@ -35,6 +36,7 @@ class UsageCredits::CurrentReadsTest < ActiveSupport::TestCase
   end
 
   teardown do
+    @pay_customers&.each(&:destroy!) # and their charges with them
     @owners&.each { |owner| owner.reload.destroy! }
   end
 
@@ -139,6 +141,7 @@ class UsageCredits::CurrentReadsTest < ActiveSupport::TestCase
     # clawback, or A claws the same 250 credits back again.
     wallet = new_wallet
     customer = Pay::Customer.create!(owner: wallet.owner, processor: :fake_processor, processor_id: "cus_refund_#{SecureRandom.hex(4)}")
+    @pay_customers << customer
     charge = Pay::Charge.create!(
       customer: customer,
       type: "Pay::Charge",

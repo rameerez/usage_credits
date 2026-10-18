@@ -804,6 +804,42 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
     assert charge.send(:credits_already_fulfilled?)
   end
 
+  # Rails' Trilogy adapter talks to MySQL under its own name. Both JSON
+  # lookups must ask MySQL's JSON functions under it: through SQLite's branch,
+  # `json_extract(...) = 1` would never match MySQL's JSON `true`, so a
+  # fulfilled purchase would look unfulfilled and every refund webhook would
+  # see nothing refunded before it and claw the credits back again. Only
+  # MySQL can answer MySQL's statement: SQLite accepts it and answers it its
+  # own way, so only the choice of branch is checked there, and on PostgreSQL
+  # the failed statement would abort the whole transaction, fallback included.
+  test "under Trilogy the fulfilment and refund lookups use MySQL's JSON comparison" do
+    skip "a MySQL statement aborts PostgreSQL's transaction" if ActiveRecord::Base.connection.adapter_name.match?(/postgres/i)
+
+    user = User.create!(email: "trilogy_lookups@example.com", name: "Trilogy Lookups User")
+    customer = Pay::Customer.create!(owner: user, processor: :fake_processor, processor_id: "cus_test_trilogy_lookups")
+    charge = Pay::Charge.create!(customer: customer, type: "Pay::Charge", processor_id: "ch_trilogy_lookups", amount: 4900, currency: "usd", data: {status: "pending"})
+    # The ledger rows a fulfilled purchase and a quarter refund leave, without
+    # a fulfillment record, so the fulfilled lookup has to ask the transactions.
+    user.credit_wallet.transactions.create!(amount: 1000, category: "credit_pack_purchase", metadata: {purchase_charge_id: charge.id, credits_fulfilled: true})
+    user.credit_wallet.transactions.create!(amount: -250, category: "credit_pack_refund", metadata: {refunded_purchase_charge_id: charge.id, credits_refunded: true})
+    ActiveRecord::Base.connection.stubs(:adapter_name).returns("Trilogy")
+
+    statements = []
+    recorder = ->(_name, _started, _finished, _id, payload) { statements << payload[:sql] }
+    fulfilled, refunded = ActiveSupport::Notifications.subscribed(recorder, "sql.active_record") do
+      [charge.send(:credits_already_fulfilled?), charge.send(:credits_previously_refunded)]
+    end
+
+    mysql_json_lookups = statements.grep(/CAST\('true' AS JSON\)/)
+    assert_equal 2, mysql_json_lookups.size, "both lookups ask MySQL's JSON functions: #{statements.grep(/json/i).inspect}"
+    assert_match(/JSON_EXTRACT\(metadata, '\$\.credits_fulfilled'\)/, mysql_json_lookups.first)
+    assert_match(/JSON_EXTRACT\(metadata, '\$\.credits_refunded'\)/, mysql_json_lookups.last)
+    if ActiveRecord::Base.connection.adapter_name.match?(/mysql/i)
+      assert fulfilled
+      assert_equal 250, refunded
+    end
+  end
+
   # ========================================
   # PACK VALIDATION
   # ========================================

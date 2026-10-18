@@ -133,31 +133,37 @@ module UsageCredits
         category: :operation_charge
       }
 
-      # The affordability check and the protected operation must happen while
-      # holding the same wallet lock. Otherwise another request can consume the
-      # balance after the pre-check, causing this block's side effects to run
-      # even though its eventual debit fails.
-      with_lock do
-        available = credits
-        if cost > available
-          UsageCredits::Callbacks.dispatch(:insufficient_credits,
-            wallet: self,
-            amount: cost,
-            operation_name: operation_name,
-            metadata: {
-              available: available,
-              required: cost,
-              params: params
-            })
-          raise InsufficientCredits, "Insufficient credits (#{available} < #{cost})"
+      # One command, like every core command: the affordability check, the
+      # protected operation and the debit share the wallet lock, one instant
+      # and the core's verdict on this transaction's snapshot. Otherwise a
+      # caller that read before spending could check a stale MySQL balance:
+      # run the block on credits another request already took, or refuse
+      # credits another request just added. Its own savepoint makes it whole
+      # either way: a refused debit rolls back the block's writes too, even
+      # when the caller rescues and commits.
+      with_lock(requires_new: true) do
+        mutating_at(Time.current) do
+          available = credits
+          if cost > available
+            UsageCredits::Callbacks.dispatch(:insufficient_credits,
+              wallet: self,
+              amount: cost,
+              operation_name: operation_name,
+              metadata: {
+                available: available,
+                required: cost,
+                params: params
+              })
+            raise InsufficientCredits, "Insufficient credits (#{available} < #{cost})"
+          end
+
+          yield if block_given?
+
+          # Free operations are a supported part of the DSL. There is no valid
+          # zero-amount ledger transaction to record, so execute the block and
+          # return nil without calling the strictly-positive debit primitive.
+          cost.zero? ? nil : deduct_credits(cost, **deduct_params)
         end
-
-        yield if block_given?
-
-        # Free operations are a supported part of the DSL. There is no valid
-        # zero-amount ledger transaction to record, so execute the block and
-        # return nil without calling the strictly-positive debit primitive.
-        cost.zero? ? nil : deduct_credits(cost, **deduct_params)
       end
     end
 
@@ -221,20 +227,28 @@ module UsageCredits
         raise ArgumentError, "Expiration date must be a valid date or time"
       end
 
-      with_lock do
-        previous_balance = balance
-        transactions_to_expire = transactions.credits.where(fulfillment: fulfillment)
-        expiry = transactions_to_expire.klass.arel_table[:expires_at]
-        updated_count = transactions_to_expire
-          .where(expiry.eq(nil).or(expiry.gt(expiration)))
-          .update_all(expires_at: expiration, updated_at: Time.current)
+      # A command like any other: its own savepoint, and one instant and one
+      # snapshot verdict for every read. Outside the core's mutation context,
+      # refreshing the cached balance on a stale MySQL snapshot would cache a
+      # stale balance and bump `ledger_revision` unnoticed; the next command in
+      # the same transaction would then see its own revision and trust the
+      # stale snapshot.
+      with_lock(requires_new: true) do
+        mutating_at(Time.current) do
+          previous_balance = balance
+          transactions_to_expire = transactions.credits.where(fulfillment: fulfillment)
+          expiry = transactions_to_expire.klass.arel_table[:expires_at]
+          updated_count = transactions_to_expire
+            .where(expiry.eq(nil).or(expiry.gt(expiration)))
+            .update_all(expires_at: expiration, updated_at: evaluation_time)
 
-        if updated_count.positive?
-          refresh_cached_balance!
-          dispatch_balance_threshold_callbacks!(previous_balance)
+          if updated_count.positive?
+            new_balance = refresh_cached_balance!
+            dispatch_balance_threshold_callbacks!(previous_balance, new_balance)
+          end
+
+          updated_count
         end
-
-        updated_count
       end
     end
 
@@ -258,8 +272,9 @@ module UsageCredits
     # Payment refunds must be represented even after the purchased credits
     # have been consumed. The unbacked debit remains ledger debt; the public
     # balance stays floored at zero until later credits repay that debt.
+    # Its own savepoint, like every command; `apply_debit` pins the instant.
     def deduct_refunded_credits(amount, metadata:, fulfillment:)
-      with_lock do
+      with_lock(requires_new: true) do
         apply_debit(
           amount,
           metadata: metadata,

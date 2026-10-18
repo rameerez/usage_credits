@@ -149,8 +149,8 @@ module UsageCredits
         if adapter.include?("postgres")
           # PostgreSQL supports the @> JSON containment operator.
           transactions.exists?(["metadata @> ?", {purchase_charge_id: id, credits_fulfilled: true}.to_json])
-        elsif adapter.include?("mysql")
-          # MySQL: JSON_EXTRACT returns JSON values, use CAST for proper comparison
+        elsif adapter.match?(/mysql|trilogy/)
+          # MySQL (Trilogy is MySQL under another name): JSON_EXTRACT returns JSON values, use CAST for proper comparison
           transactions.exists?([
             "JSON_EXTRACT(metadata, '$.purchase_charge_id') = CAST(? AS JSON) AND JSON_EXTRACT(metadata, '$.credits_fulfilled') = CAST('true' AS JSON)",
             id
@@ -281,8 +281,8 @@ module UsageCredits
               "metadata @> ?",
               {refunded_purchase_charge_id: id, credits_refunded: true}.to_json
             )
-          elsif adapter.include?("mysql")
-            # MySQL: JSON_EXTRACT returns JSON values, use CAST for proper comparison
+          elsif adapter.match?(/mysql|trilogy/)
+            # MySQL (Trilogy is MySQL under another name): JSON_EXTRACT returns JSON values, use CAST for proper comparison
             transactions.where(
               "JSON_EXTRACT(metadata, '$.refunded_purchase_charge_id') = CAST(? AS JSON) AND JSON_EXTRACT(metadata, '$.credits_refunded') = CAST('true' AS JSON)",
               id

@@ -87,6 +87,12 @@ jobs:
         # drift is caught before release, not only in adapter-specific jobs.
         run: bundle exec rake db:migrate:reset test
 
+      - name: Check the committed dummy schema against the migrations
+        # db:migrate:reset rewrote test/dummy/db/schema.rb from the migrations.
+        # Anything but the Rails version in its header means the committed
+        # file drifted, and every run that loads it instead would break.
+        run: git diff --exit-code -I 'ActiveRecord::Schema\[' -- test/dummy/db/schema.rb
+
       - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@v7

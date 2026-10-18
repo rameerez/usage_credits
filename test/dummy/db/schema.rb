@@ -190,6 +190,7 @@ ActiveRecord::Schema[7.2].define(version: 2025_04_17_000000) do
     t.bigint "owner_id", null: false
     t.string "asset_code", default: "credits", null: false
     t.bigint "balance", default: 0, null: false
+    t.bigint "ledger_revision", default: 0, null: false
     t.json "metadata", default: {}, null: false
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
@@ -213,6 +214,28 @@ ActiveRecord::Schema[7.2].define(version: 2025_04_17_000000) do
     t.index ["source_transaction_id"], name: "index_wallets_allocations_on_source_transaction_id"
     t.index ["transaction_id", "source_transaction_id"], name: "index_wallets_allocations_on_tx_and_source_tx"
     t.index ["transaction_id"], name: "index_wallets_allocations_on_transaction_id"
+  end
+
+  create_table "wallets_holds", force: :cascade do |t|
+    t.bigint "wallet_id", null: false
+    t.bigint "transaction_id"
+    t.bigint "capture_transaction_id"
+    t.bigint "amount"
+    t.string "category", null: false
+    t.datetime "releases_at"
+    t.datetime "released_at"
+    t.string "release_reason"
+    t.json "metadata", default: {}, null: false
+    t.json "release_metadata", default: {}, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["capture_transaction_id"], name: "index_wallets_holds_on_capture_tx", unique: true
+    t.index ["releases_at"], name: "index_wallets_holds_on_releases_at"
+    t.index ["transaction_id", "released_at"], name: "index_wallets_holds_on_tx_and_released_at"
+    t.index ["wallet_id", "released_at"], name: "index_wallets_holds_on_wallet_and_released_at"
+    t.check_constraint "amount IS NULL OR amount > 0", name: "check_wallets_holds_amount_positive"
+    t.check_constraint "capture_transaction_id IS NULL OR (transaction_id IS NULL AND amount IS NOT NULL AND released_at IS NOT NULL)", name: "check_wallets_holds_capture_ends_reservation"
+    t.check_constraint "transaction_id IS NULL OR amount IS NULL", name: "check_wallets_holds_credit_hold_has_no_amount"
   end
 
   create_table "wallets_transactions", force: :cascade do |t|
@@ -252,6 +275,7 @@ ActiveRecord::Schema[7.2].define(version: 2025_04_17_000000) do
     t.bigint "owner_id", null: false
     t.string "asset_code", null: false
     t.bigint "balance", default: 0, null: false
+    t.bigint "ledger_revision", default: 0, null: false
     t.json "metadata", default: {}, null: false
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
@@ -273,6 +297,9 @@ ActiveRecord::Schema[7.2].define(version: 2025_04_17_000000) do
   add_foreign_key "usage_credits_transfers", "usage_credits_wallets", column: "to_wallet_id"
   add_foreign_key "wallets_allocations", "wallets_transactions", column: "source_transaction_id"
   add_foreign_key "wallets_allocations", "wallets_transactions", column: "transaction_id"
+  add_foreign_key "wallets_holds", "wallets_transactions", column: "capture_transaction_id"
+  add_foreign_key "wallets_holds", "wallets_transactions", column: "transaction_id"
+  add_foreign_key "wallets_holds", "wallets_wallets", column: "wallet_id"
   add_foreign_key "wallets_transactions", "wallets_transfers", column: "transfer_id"
   add_foreign_key "wallets_transactions", "wallets_wallets", column: "wallet_id"
   add_foreign_key "wallets_transfers", "wallets_wallets", column: "from_wallet_id"

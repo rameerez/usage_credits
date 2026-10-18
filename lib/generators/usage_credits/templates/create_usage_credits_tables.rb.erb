@@ -132,8 +132,9 @@ class CreateUsageCreditsTables < ActiveRecord::Migration<%= migration_version %>
   # MySQL 8+ doesn't allow default values on JSON columns.
   # Returns an empty hash default for SQLite/PostgreSQL, nil for MySQL.
   # Models handle nil metadata gracefully by defaulting to {} in their accessors.
+  # Rails' Trilogy adapter talks to MySQL too, under its own name.
   def json_column_default
-    return nil if connection.adapter_name.downcase.include?('mysql')
+    return nil if connection.adapter_name.match?(/mysql|trilogy/i)
     {}
   end
 end

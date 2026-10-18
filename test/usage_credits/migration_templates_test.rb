@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "erb"
 
 class UsageCredits::MigrationTemplatesTest < ActiveSupport::TestCase
   test "fresh install template matches the wallets-core transfer schema" do
@@ -35,9 +36,55 @@ class UsageCredits::MigrationTemplatesTest < ActiveSupport::TestCase
     refute_includes template, "add_foreign_key :usage_credits_fulfillments"
   end
 
+  # MySQL refuses a default on a JSON column, and Rails' Trilogy adapter talks
+  # to MySQL under its own name, so every path that creates usage_credits
+  # tables must recognise both, exactly as the wallets coexistence tables do.
+  test "every migration leaves JSON columns without a default on MySQL, under either adapter name" do
+    migrations = {
+      "install template" => template_migration_class("create_usage_credits_tables.rb.erb"),
+      "upgrade template" => template_migration_class("upgrade_usage_credits_to_wallets_core.rb.erb"),
+      "dummy install migration" => dummy_migration_class("20250212181807_create_usage_credits_tables.rb"),
+      "dummy coexistence migration" => dummy_migration_class("20250417000000_create_wallets_coexistence_tables.rb")
+    }
+
+    {"Mysql2" => nil, "Trilogy" => nil, "PostgreSQL" => {}, "SQLite" => {}}.each do |adapter_name, expected_default|
+      migrations.each do |name, migration_class|
+        migration = migration_class.new
+        migration.stubs(:connection).returns(stub(adapter_name: adapter_name))
+        default = migration.send(:json_column_default)
+
+        if expected_default.nil?
+          assert_nil default, "#{name} must leave JSON columns without a default on #{adapter_name}"
+        else
+          assert_equal expected_default, default, "#{name} on #{adapter_name}"
+        end
+      end
+    end
+  end
+
   private
 
   def template_path(filename)
     File.expand_path("../../lib/generators/usage_credits/templates/#{filename}", __dir__)
+  end
+
+  def template_migration_class(filename)
+    source = ERB.new(File.read(template_path(filename))).result_with_hash(
+      migration_version: "[#{ActiveRecord::VERSION::STRING.to_f}]"
+    )
+    migration_class_from(source, template_path(filename))
+  end
+
+  def dummy_migration_class(filename)
+    path = File.expand_path("../dummy/db/migrate/#{filename}", __dir__)
+    migration_class_from(File.read(path), path)
+  end
+
+  # In a namespace of its own, so loading a migration never clashes with a
+  # constant the app or another test defines.
+  def migration_class_from(source, path)
+    namespace = Module.new
+    namespace.module_eval(source, path, 1)
+    namespace.const_get(source[/^class (\w+) </, 1])
   end
 end

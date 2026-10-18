@@ -722,6 +722,50 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
     assert_equal initial_transaction_count, wallet.transactions.count
   end
 
+  # spend_credits_on is one command with its own savepoint: the block runs
+  # inside it, so whatever stops the command takes the block's writes with it,
+  # even when the caller rescues the error and commits its own transaction.
+
+  test "spend_credits_on rolls back its block's writes when the debit is refused, even if the caller rescues and commits" do
+    wallet = usage_credits_wallets(:rich_wallet)
+    initial_credits = wallet.credits
+    team_name = "written-by-the-block-#{SecureRandom.hex(4)}"
+
+    assert_no_difference -> { wallet.transactions.count } do
+      UsageCredits::Wallet.transaction do
+        wallet.spend_credits_on(:test_operation) do
+          Team.create!(name: team_name)
+          # Another handle on the same wallet spends everything, so the
+          # operation's own debit is refused after the block wrote its row.
+          UsageCredits::Wallet.find(wallet.id).deduct_credits(initial_credits)
+        end
+      rescue UsageCredits::InsufficientCredits
+        # The caller carries on, and its transaction commits.
+      end
+    end
+
+    refute Team.exists?(name: team_name), "the block's row rolls back with the refused debit"
+    assert_equal initial_credits, wallet.reload.credits, "and so does the block's own spending"
+  end
+
+  test "spend_credits_on rolls back its block's writes when the block raises, even if the caller rescues and commits" do
+    wallet = usage_credits_wallets(:rich_wallet)
+    initial_credits = wallet.credits
+    team_name = "written-by-the-block-#{SecureRandom.hex(4)}"
+
+    UsageCredits::Wallet.transaction do
+      wallet.spend_credits_on(:test_operation) do
+        Team.create!(name: team_name)
+        raise "Operation failed!"
+      end
+    rescue RuntimeError
+      # The caller carries on, and its transaction commits.
+    end
+
+    refute Team.exists?(name: team_name), "the block's row rolls back with the failed operation"
+    assert_equal initial_credits, wallet.reload.credits
+  end
+
   # ========================================
   # CREDIT HISTORY
   # ========================================

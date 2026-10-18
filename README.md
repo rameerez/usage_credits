@@ -418,7 +418,7 @@ redirect_to session.url
 
 The gem automatically handles:
 - Credit pack fulfillment after successful payment
-- Proportional credit removal on refunds (e.g., if 50% is refunded, 50% of credits are removed)
+- Proportional credit removal on refunds: if 50% is refunded, 50% of the credits are removed. A fraction of a credit rounds up, and a repeated or partial refund of one purchase only ever takes the difference still outstanding
 - Prevention of double-processing of purchase
 - Support for multiple currencies (USD, EUR, etc.)
 - Detailed transaction tracking with metadata like:

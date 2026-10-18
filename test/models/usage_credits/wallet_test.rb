@@ -462,7 +462,7 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
 
       # A credit-pack refund after its credits were spent leaves unbacked debt,
       # which `credits` nets out: 100 fresh credits minus 50 of debt.
-      wallet.send(:deduct_refunded_credits, 50, metadata: {reason: "refund"}, fulfillment: nil)
+      wallet.deduct_refunded_credits(50, metadata: {reason: "refund"}, fulfillment: nil)
       fresh_credit = wallet.give_credits(100, reason: "promo", expires_at: 10.days.from_now)
       assert_equal 50, wallet.credits
 
@@ -1042,9 +1042,9 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
       wallet.transfer_to(other, 5)
     end
 
-    # Pay refunds write their debit through this private path.
+    # Pay refunds write their debit through this path.
     assert_difference -> { wallet.reload.ledger_revision }, 1 do
-      wallet.send(:deduct_refunded_credits, 5, metadata: {reason: "refund"}, fulfillment: nil)
+      wallet.deduct_refunded_credits(5, metadata: {reason: "refund"}, fulfillment: nil)
     end
 
     assert_no_difference -> { wallet.reload.ledger_revision } do

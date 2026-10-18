@@ -363,8 +363,7 @@ module UsageCredits
         # repeated refund webhooks for this charge apply only the outstanding
         # delta, never the same clawback twice, even when this callback runs
         # inside a transaction that read the ledger first.
-        refund_transaction = wallet.send(
-          :deduct_refunded_credits,
+        refund_transaction = wallet.deduct_refunded_credits(
           total_credits_to_refund,
           fulfillment: fulfillment,
           metadata: snapshot.merge(

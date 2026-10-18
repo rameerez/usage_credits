@@ -267,9 +267,8 @@ module UsageCredits
 
     alias_method :transfer_credits_to, :transfer_to
 
-    private
-
-    # Claws back a refund: the part of `total_credits`, what the refunds of
+    # The Pay charge extension's refund webhook handler calls this; it is not a
+    # general-purpose API. Claws back a refund: the part of `total_credits`, what the refunds of
     # one purchase now add up to, that the ledger has not taken yet. The
     # block receives this wallet's refund debits and returns what earlier
     # refunds of the same purchase already took (nothing, without a block).
@@ -302,6 +301,8 @@ module UsageCredits
         end
       end
     end
+
+    private
 
     # =========================================
     # Helper Methods

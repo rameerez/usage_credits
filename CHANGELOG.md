@@ -1,4 +1,4 @@
-## [1.0.0] - Unreleased
+## [1.0.0] - 2026-10-18
 
 `usage_credits` is now built on top of [`wallets`](https://github.com/rameerez/wallets), our append-oriented, multi-asset ledger core. The credits-focused DX you know is unchanged — same `has_credits`, `spend_credits_on`, `give_credits`, packs, subscriptions, and Pay integration — but the expiration-aware allocation ledger, balance math, row-level locking, and transfer machinery now live in a shared, independently tested core.
 

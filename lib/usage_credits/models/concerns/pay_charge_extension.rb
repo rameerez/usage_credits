@@ -267,8 +267,10 @@ module UsageCredits
 
     # Returns the total credits already refunded for this charge
     # Note: NOT memoized because refunds can happen incrementally within the same request
-    def credits_previously_refunded
-      transactions = credit_wallet&.transactions&.where(category: "credit_pack_refund")
+    # What earlier refunds of this charge already took, summed from
+    # `transactions`: the wallet's refund debits, which the wallet's refund
+    # command passes in read as the ledger is now.
+    def credits_previously_refunded(transactions = credit_wallet&.transactions&.where(category: "credit_pack_refund"))
       return 0 unless transactions.present?
 
       # Try database-level filtering first (more efficient)
@@ -350,46 +352,36 @@ module UsageCredits
 
       begin
         wallet = credit_wallet
-        refund_transaction = nil
+        already_refunded = nil
+        total_credits_to_refund = divide_rounding_up(
+          total_purchased_credits * amount_refunded.to_i,
+          amount.to_i
+        )
 
-        # Both the cumulative-refund query and the new debit live under the
-        # wallet lock. Concurrent partial/full refund webhooks therefore apply
-        # only the remaining delta, never the same clawback twice.
-        wallet.with_lock do
-          already_refunded = credits_previously_refunded
-          total_credits_to_refund = divide_rounding_up(
-            total_purchased_credits * amount_refunded.to_i,
-            amount.to_i
+        # The cumulative lookup and the clawback are one wallet command: both
+        # read the ledger as it is now, under the wallet lock, so concurrent or
+        # repeated refund webhooks for this charge apply only the outstanding
+        # delta, never the same clawback twice, even when this callback runs
+        # inside a transaction that read the ledger first.
+        refund_transaction = wallet.send(
+          :deduct_refunded_credits,
+          total_credits_to_refund,
+          fulfillment: fulfillment,
+          metadata: snapshot.merge(
+            refunded_purchase_charge_id: id,
+            credits_refunded: true,
+            refunded_at: Time.current,
+            refund_percentage: amount_refunded.to_f / amount.to_f,
+            refund_amount_cents: amount_refunded,
+            total_credits_refunded: total_credits_to_refund
           )
-          credits_to_remove = total_credits_to_refund - already_refunded
+        ) { |refunds| already_refunded = credits_previously_refunded(refunds) }
 
-          if credits_to_remove <= 0
-            Rails.logger.info "Refund for charge #{id} already processed (#{already_refunded} credits already refunded)"
-            next
-          end
-
-          refund_ratio = amount_refunded.to_f / amount.to_f
-          Rails.logger.info "Processing refund for charge #{id}: #{credits_to_remove} credits (incremental from #{already_refunded} to #{total_credits_to_refund})"
-
-          refund_transaction = wallet.send(
-            :deduct_refunded_credits,
-            credits_to_remove,
-            fulfillment: fulfillment,
-            metadata: snapshot.merge(
-              refunded_purchase_charge_id: id,
-              credits_refunded: true,
-              refunded_at: Time.current,
-              refund_percentage: refund_ratio,
-              refund_amount_cents: amount_refunded,
-              incremental_credits: credits_to_remove,
-              total_credits_refunded: total_credits_to_refund
-            )
-          )
+        if refund_transaction
+          Rails.logger.info "Processed refund for charge #{id}: #{-refund_transaction.amount} credits (incremental from #{already_refunded} to #{total_credits_to_refund})"
+        else
+          Rails.logger.info "Refund for charge #{id} already processed (#{already_refunded} credits already refunded)"
         end
-
-        return unless refund_transaction
-
-        Rails.logger.info "Successfully processed refund for charge #{id}"
       rescue => e
         Rails.logger.error "Failed to process refund for charge #{id}: #{e.message}"
         raise

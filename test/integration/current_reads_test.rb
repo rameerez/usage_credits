@@ -27,6 +27,10 @@ class UsageCredits::CurrentReadsTest < ActiveSupport::TestCase
     UsageCredits.configure do |config|
       config.operation(:sixty_credit_task) { costs 60.credits }
       config.operation(:twenty_five_credit_task) { costs 25.credits }
+      config.credit_pack(:starter) do
+        gives 1000.credits
+        costs 49.dollars
+      end
     end
   end
 
@@ -123,6 +127,39 @@ class UsageCredits::CurrentReadsTest < ActiveSupport::TestCase
     assert_equal 10, wallet.read_attribute(:balance), "the cached balance matches the ledger"
   end
 
+  # ───────────────────────────────────────────────────────────────────────────
+  # Refund webhooks
+  # ───────────────────────────────────────────────────────────────────────────
+
+  test "a refund handled after its caller's first read claws back only what earlier refunds left" do
+    # Two refund webhooks for one purchase: B refunds a quarter after A's
+    # first read, then A, inside a transaction that read first (Pay's commit
+    # callbacks run inside a `transaction(joinable: false)`), handles the
+    # cumulative half. The lookup of what was refunded before must see B's
+    # clawback, or A claws the same 250 credits back again.
+    wallet = new_wallet
+    customer = Pay::Customer.create!(owner: wallet.owner, processor: :fake_processor, processor_id: "cus_refund_#{SecureRandom.hex(4)}")
+    charge = Pay::Charge.create!(
+      customer: customer,
+      type: "Pay::Charge",
+      processor_id: "ch_refund_#{SecureRandom.hex(4)}",
+      amount: 4900,
+      currency: "usd",
+      amount_refunded: 0,
+      metadata: {purchase_type: "credit_pack", pack_name: "starter", credits: 1000},
+      data: {status: "succeeded"}
+    )
+    assert_equal 1000, wallet.reload.credits
+
+    after_a_stale_read(wallet, -> { Pay::Charge.find(charge.id).update!(amount_refunded: 1225) }, joinable: false) do
+      Pay::Charge.find(charge.id).update!(amount_refunded: 2450) # handled inside this transaction, which read first
+    end
+
+    assert_equal [-250, -250], wallet.transactions.where(category: "credit_pack_refund").order(:id).pluck(:amount), "only the outstanding 250, never the same clawback twice"
+    assert_equal 500, wallet.reload.credits
+    assert_equal 500, wallet.read_attribute(:balance), "the cached balance matches the ledger"
+  end
+
   private
 
   def drain(queue)
@@ -141,20 +178,22 @@ class UsageCredits::CurrentReadsTest < ActiveSupport::TestCase
 
   # Runs the block on its own connection, inside a transaction that first
   # takes an ordinary read of `wallet` (fixing a MySQL snapshot) and then
-  # waits while `interleaved` commits on this test's connection.
+  # waits while `interleaved` commits on this test's connection. With
+  # `joinable: false`, a record saved inside the block runs its commit
+  # callbacks there, inside the open transaction, as Pay's webhooks do.
   #
   # An error on either side fails the test with that error, at once, and
   # strands neither side: by the time this returns or raises, the worker has
   # ended, its transaction is committed or rolled back, and its connection
   # is back in the pool.
-  def after_a_stale_read(wallet, interleaved)
+  def after_a_stale_read(wallet, interleaved, joinable: true)
     read_taken = Queue.new
     go_on = Queue.new
 
     worker = Thread.new do
       Thread.current.report_on_exception = false # the test raises what the worker ended with
       ActiveRecord::Base.connection_pool.with_connection do |connection|
-        UsageCredits::Wallet.transaction do
+        UsageCredits::Wallet.transaction(joinable: joinable) do
           stale = UsageCredits::Wallet.find(wallet.id)
           stale.credits
           read_taken << connection

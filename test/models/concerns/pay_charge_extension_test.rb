@@ -822,6 +822,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
     # a fulfillment record, so the fulfilled lookup has to ask the transactions.
     user.credit_wallet.transactions.create!(amount: 1000, category: "credit_pack_purchase", metadata: {purchase_charge_id: charge.id, credits_fulfilled: true})
     user.credit_wallet.transactions.create!(amount: -250, category: "credit_pack_refund", metadata: {refunded_purchase_charge_id: charge.id, credits_refunded: true})
+    mysql = ActiveRecord::Base.connection.adapter_name.match?(/mysql/i) # before the stub hides it
     ActiveRecord::Base.connection.stubs(:adapter_name).returns("Trilogy")
 
     statements = []
@@ -834,7 +835,7 @@ class PayChargeExtensionTest < ActiveSupport::TestCase
     assert_equal 2, mysql_json_lookups.size, "both lookups ask MySQL's JSON functions: #{statements.grep(/json/i).inspect}"
     assert_match(/JSON_EXTRACT\(metadata, '\$\.credits_fulfilled'\)/, mysql_json_lookups.first)
     assert_match(/JSON_EXTRACT\(metadata, '\$\.credits_refunded'\)/, mysql_json_lookups.last)
-    if ActiveRecord::Base.connection.adapter_name.match?(/mysql/i)
+    if mysql
       assert fulfilled
       assert_equal 250, refunded
     end

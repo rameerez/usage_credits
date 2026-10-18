@@ -269,20 +269,37 @@ module UsageCredits
 
     private
 
-    # Payment refunds must be represented even after the purchased credits
-    # have been consumed. The unbacked debit remains ledger debt; the public
-    # balance stays floored at zero until later credits repay that debt.
-    # Its own savepoint, like every command; `apply_debit` pins the instant.
-    def deduct_refunded_credits(amount, metadata:, fulfillment:)
+    # Claws back a refund: the part of `total_credits`, what the refunds of
+    # one purchase now add up to, that the ledger has not taken yet. The
+    # block receives this wallet's refund debits and returns what earlier
+    # refunds of the same purchase already took (nothing, without a block).
+    # The lookup and the debit are one command, under the wallet lock, at one
+    # instant and with one verdict on this transaction's snapshot, so the
+    # refund debits are read as they are now. Outside the command the lookup
+    # could miss a refund another connection committed after this
+    # transaction's first read (Pay's commit callbacks run inside a
+    # `transaction(joinable: false)`), and under MySQL's repeatable read the
+    # same credits would be clawed back twice. The debit may be unbacked: a
+    # refund is owed even after the purchased credits were spent, as ledger
+    # debt that later credits repay while `credits` stays floored at zero.
+    # Returns the refund transaction, or nil when nothing is outstanding.
+    def deduct_refunded_credits(total_credits, metadata:, fulfillment:)
       with_lock(requires_new: true) do
-        apply_debit(
-          amount,
-          metadata: metadata,
-          category: :credit_pack_refund,
-          transfer: nil,
-          extra_attributes: {fulfillment: fulfillment},
-          allow_unbacked: true
-        )
+        mutating_at(Time.current) do
+          refunds = current_read(transactions.debits.where(category: "credit_pack_refund"), current_reads?)
+          already_refunded = block_given? ? yield(refunds) : 0
+          outstanding = total_credits - already_refunded
+          next if outstanding <= 0
+
+          apply_debit(
+            outstanding,
+            metadata: metadata.merge(incremental_credits: outstanding),
+            category: :credit_pack_refund,
+            transfer: nil,
+            extra_attributes: {fulfillment: fulfillment},
+            allow_unbacked: true
+          )
+        end
       end
     end
 

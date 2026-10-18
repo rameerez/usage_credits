@@ -1,3 +1,10 @@
+## [1.0.1] - Unreleased
+
+### Fixed
+
+- **A refused `spend_credits_on` no longer poisons the wallet instance.** When the block had spent on the same wallet instance (or a caller's transaction rolled a command back), Rails left the cached balance and `ledger_revision` the command had written in memory as unsaved changes, and the next command on that instance raised `RuntimeError: Locking a record with unpersisted changes is not supported` instead of running. The fix is in `wallets` 0.4.2, which this release requires (`~> 0.4.2`); a regression test here pins the `spend_credits_on` shape.
+- `InsufficientCredits` speaks of credits whichever command raised it: `deduct_credits` and transfers used to pass the core's "Insufficient balance (5 < 10)" through, while `spend_credits_on` said "Insufficient credits (5 < 10)".
+
 ## [1.0.0] - 2026-10-18
 
 `usage_credits` is now built on top of [`wallets`](https://github.com/rameerez/wallets), our append-oriented, multi-asset ledger core. The credits-focused DX you know is unchanged — same `has_credits`, `spend_credits_on`, `give_credits`, packs, subscriptions, and Pay integration — but the expiration-aware allocation ledger, balance math, row-level locking, and transfer machinery now live in a shared, independently tested core.

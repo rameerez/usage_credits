@@ -412,7 +412,7 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
         end
       end
 
-      assert_equal "Insufficient balance (5 < 30)", error.message
+      assert_equal "Insufficient credits (5 < 30)", error.message
     end
 
     assert_equal 5, sender.credit_wallet.reload.credits

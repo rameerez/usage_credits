@@ -1,3 +1,9 @@
+## [1.1.0] - Unreleased
+
+### Added
+
+- `pricing_plan` in `subscription_plan` blocks: take a plan's Stripe price IDs from the [`pricing_plans`](https://github.com/rameerez/pricing_plans) plan of the same (or a given) key, so prices are declared once and can't drift. Every price of the pricing plan (String or any interval Hash, e.g. `month:`, `year:`, `quarter:`) matches subscriptions. Prices are read lazily, so initializer order doesn't matter; `pricing_plans` remains an optional dependency. Combining `pricing_plan` with `stripe_price`, a missing `pricing_plans` gem, or a missing pricing plan raises the new `UsageCredits::ConfigurationError` (at boot, via `validate_pricing_plan_links!`, and on lookup).
+
 ## [1.0.1] - 2026-10-18
 
 ### Fixed

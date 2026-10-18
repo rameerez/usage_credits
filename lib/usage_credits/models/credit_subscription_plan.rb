@@ -10,7 +10,7 @@ module UsageCredits
   # @see PaySubscriptionExtension for the actual credit fulfillment logic
   class CreditSubscriptionPlan
     attr_reader :name,
-      :processor_plan_ids,
+      :pricing_plan_key,
       :fulfillment_period, :credits_per_period,
       :signup_bonus_credits, :trial_credits,
       :rollover_enabled,
@@ -94,6 +94,49 @@ module UsageCredits
     # Payment Processor Integration
     # =========================================
 
+    # Take this plan's Stripe price IDs from the `pricing_plans` plan with the
+    # given key (this plan's own name by default), so every price is declared
+    # exactly once: in pricing_plans, the single source of truth for pricing.
+    #
+    # Prices are read lazily, every time the plan is matched or asked for its
+    # prices, so it doesn't matter which initializer Rails loads first. The only
+    # contract with pricing_plans is `PricingPlans::Registry.plan(key).stripe_price`.
+    #
+    # @param key [Symbol, String] The pricing_plans plan key
+    # @example Same key
+    #   pricing_plan
+    # @example Different key
+    #   pricing_plan :pro_2026
+    def pricing_plan(key = name)
+      raise ArgumentError, "Pricing plan key can't be blank" if key.blank?
+      @pricing_plan_key = key.to_sym
+      self
+    end
+
+    # Processor-specific plan ID(s), including Stripe prices read from the linked pricing plan
+    # @return [Hash] processor => String or Hash of period => ID
+    def processor_plan_ids
+      return @processor_plan_ids unless pricing_plan_key
+      @processor_plan_ids.merge(stripe: stripe_price_from_pricing_plan).compact
+    end
+
+    # Stripe price ID(s) of the linked pricing plan, in the same shape `stripe_price` returns:
+    # a String for a single price, or a Hash of period => price ID. Blank and non-String
+    # values (e.g. a credential that isn't set in this environment) are skipped.
+    #
+    # @return [String, Hash, nil]
+    # @raise [ConfigurationError] if pricing_plans isn't loaded or has no such plan
+    def stripe_price_from_pricing_plan
+      case (prices = linked_pricing_plan.stripe_price)
+      when String
+        prices.presence
+      when Hash
+        ids = prices.to_h { |period, id| [period.to_sym, id] }.select { |_, id| id.is_a?(String) && id.present? }
+        # pricing_plans stores a single `stripe_price "price_x"` as { id: "price_x" }
+        (ids.keys == [:id]) ? ids[:id] : ids.presence
+      end
+    end
+
     # Set the processor-specific plan ID(s)
     # Accepts either a single ID (String) or multiple period-specific IDs (Hash)
     #
@@ -109,7 +152,7 @@ module UsageCredits
         # Normalize all keys to symbols for consistent lookup
         id = id.transform_keys(&:to_sym)
       end
-      processor_plan_ids[processor.to_sym] = id
+      @processor_plan_ids[processor.to_sym] = id
     end
 
     # Get the plan ID(s) for a specific processor
@@ -244,6 +287,11 @@ module UsageCredits
       raise ArgumentError, "Fulfillment period must be set" if fulfillment_period.nil?
       raise ArgumentError, "Signup bonus credits must be greater than or equal to 0" if signup_bonus_credits.to_i.negative?
       raise ArgumentError, "Trial credits must be greater than or equal to 0" if trial_credits.to_i.negative?
+      if pricing_plan_key && @processor_plan_ids.key?(:stripe)
+        raise ConfigurationError, "Subscription plan :#{name} takes its Stripe prices from pricing plan " \
+          ":#{pricing_plan_key}, so it can't also declare `stripe_price`. Declare every price once, " \
+          "in the pricing plan (legacy prices included), and remove `stripe_price` here."
+      end
       true
     end
 
@@ -292,6 +340,22 @@ module UsageCredits
     end
 
     private
+
+    def linked_pricing_plan
+      unless defined?(::PricingPlans::Registry)
+        raise ConfigurationError, "Subscription plan :#{name} uses `pricing_plan :#{pricing_plan_key}`, " \
+          "but the pricing_plans gem isn't loaded. Add `gem \"pricing_plans\"` to your Gemfile, " \
+          "or declare `stripe_price` in this plan instead."
+      end
+
+      begin
+        ::PricingPlans::Registry.plan(pricing_plan_key) or raise KeyError
+      rescue
+        raise ConfigurationError, "Subscription plan :#{name} uses `pricing_plan :#{pricing_plan_key}`, " \
+          "but pricing_plans has no plan :#{pricing_plan_key}. Define `plan :#{pricing_plan_key}` in " \
+          "config/initializers/pricing_plans.rb, or pass the right key: `pricing_plan :your_plan`."
+      end
+    end
 
     def normalize_whole_number!(amount, name, minimum:)
       amount = amount.to_i if amount.is_a?(UsageCredits::Cost::Fixed)

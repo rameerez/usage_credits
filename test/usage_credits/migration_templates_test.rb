@@ -39,6 +39,25 @@ class UsageCredits::MigrationTemplatesTest < ActiveSupport::TestCase
   # MySQL refuses a default on a JSON column, and Rails' Trilogy adapter talks
   # to MySQL under its own name, so every path that creates usage_credits
   # tables must recognise both, exactly as the wallets coexistence tables do.
+  # PostGIS is PostgreSQL under another name (activerecord-postgis-adapter); it
+  # was getting plain json metadata columns while PostgreSQL got jsonb.
+  test "every migration picks jsonb on PostgreSQL under either of its adapter names" do
+    migrations = {
+      "install template" => template_migration_class("create_usage_credits_tables.rb.erb"),
+      "upgrade template" => template_migration_class("upgrade_usage_credits_to_wallets_core.rb.erb"),
+      "dummy install migration" => dummy_migration_class("20250212181807_create_usage_credits_tables.rb"),
+      "dummy coexistence migration" => dummy_migration_class("20250417000000_create_wallets_coexistence_tables.rb")
+    }
+
+    {"PostgreSQL" => :jsonb, "PostGIS" => :jsonb, "Mysql2" => :json, "Trilogy" => :json, "SQLite" => :json}.each do |adapter_name, type|
+      migrations.each do |name, migration_class|
+        migration = migration_class.new
+        migration.stubs(:connection).returns(stub(adapter_name: adapter_name))
+        assert_equal type, migration.send(:json_column_type), "#{name} on #{adapter_name}"
+      end
+    end
+  end
+
   test "every migration leaves JSON columns without a default on MySQL, under either adapter name" do
     migrations = {
       "install template" => template_migration_class("create_usage_credits_tables.rb.erb"),

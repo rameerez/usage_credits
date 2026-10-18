@@ -1,3 +1,9 @@
+## [1.1.1] - Unreleased
+
+### Fixed
+
+- The install and upgrade migrations (and the demo app's) pick `jsonb` for JSON columns on PostgreSQL under either of its adapter names: `PostGIS` (activerecord-postgis-adapter) was getting plain `json`. Same fix as wallets 0.4.3.
+
 ## [1.1.0] - 2026-10-18
 
 ### Added

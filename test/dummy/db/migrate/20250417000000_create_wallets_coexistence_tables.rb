@@ -125,7 +125,7 @@ class CreateWalletsCoexistenceTables < ActiveRecord::Migration[7.2]
   end
 
   def json_column_type
-    return :jsonb if connection.adapter_name.downcase.include?("postgresql")
+    return :jsonb if connection.adapter_name.match?(/postg/i) # PostgreSQL, and PostGIS, which is PostgreSQL under another name
 
     :json
   end

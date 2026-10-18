@@ -419,6 +419,13 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
     assert_equal 0, recipient.credit_wallet.reload.credits
   end
 
+  test "the credits wording keeps the core's diagnostics and touches only the leading phrase" do
+    wallet = usage_credits_wallets(:rich_wallet)
+
+    assert_equal "Insufficient credits (5 < 10; 80 reserved)", wallet.send(:in_credits_terms, "Insufficient balance (5 < 10; 80 reserved)")
+    assert_equal "Transfer refused: Insufficient balance (5 < 10)", wallet.send(:in_credits_terms, "Transfer refused: Insufficient balance (5 < 10)")
+  end
+
   test "credit wallet transfers preserve expiration buckets by default" do
     sender = User.create!(email: "sender-exp-#{SecureRandom.hex(4)}@example.com", name: "Sender Exp")
     recipient = User.create!(email: "recipient-exp-#{SecureRandom.hex(4)}@example.com", name: "Recipient Exp")

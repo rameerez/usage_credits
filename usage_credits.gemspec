@@ -32,5 +32,5 @@ Gem::Specification.new do |spec|
 
   spec.add_dependency "pay", ">= 11.6.2", "< 12.0"
   spec.add_dependency "rails", ">= 7.2.3.1", "< 9.0"
-  spec.add_dependency "wallets", "~> 0.4.0"
+  spec.add_dependency "wallets", "~> 0.4.2"
 end

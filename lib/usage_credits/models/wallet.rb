@@ -208,7 +208,7 @@ module UsageCredits
     def deduct_credits(amount, metadata: {}, category: :credit_deducted, fulfillment: nil)
       debit(amount, metadata: metadata, category: category, fulfillment: fulfillment)
     rescue Wallets::InsufficientBalance => e
-      raise InsufficientCredits, e.message
+      raise InsufficientCredits, in_credits_terms(e.message)
     end
 
     # Shorten the lifetime of credits minted by one fulfillment and reconcile
@@ -260,7 +260,7 @@ module UsageCredits
     rescue Wallets::InvalidTransfer => e
       raise InvalidTransfer, e.message
     rescue Wallets::InsufficientBalance => e
-      raise InsufficientCredits, e.message
+      raise InsufficientCredits, in_credits_terms(e.message)
     rescue Wallets::Error => e
       raise UsageCredits::Error, e.message
     end
@@ -303,6 +303,13 @@ module UsageCredits
     end
 
     private
+
+    # The wallets core refuses in its own words ("Insufficient balance (5 <
+    # 10)"); a credits wallet refuses in the words its own `InsufficientCredits`
+    # already uses, whichever command raised it.
+    def in_credits_terms(message)
+      message.sub(/\AInsufficient balance\b/, "Insufficient credits")
+    end
 
     # =========================================
     # Helper Methods

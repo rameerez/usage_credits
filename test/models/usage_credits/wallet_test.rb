@@ -412,11 +412,18 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
         end
       end
 
-      assert_equal "Insufficient balance (5 < 30)", error.message
+      assert_equal "Insufficient credits (5 < 30)", error.message
     end
 
     assert_equal 5, sender.credit_wallet.reload.credits
     assert_equal 0, recipient.credit_wallet.reload.credits
+  end
+
+  test "the credits wording keeps the core's diagnostics and touches only the leading phrase" do
+    wallet = usage_credits_wallets(:rich_wallet)
+
+    assert_equal "Insufficient credits (5 < 10; 80 reserved)", wallet.send(:in_credits_terms, "Insufficient balance (5 < 10; 80 reserved)")
+    assert_equal "Transfer refused: Insufficient balance (5 < 10)", wallet.send(:in_credits_terms, "Transfer refused: Insufficient balance (5 < 10)")
   end
 
   test "credit wallet transfers preserve expiration buckets by default" do

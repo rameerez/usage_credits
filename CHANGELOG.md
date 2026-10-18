@@ -4,6 +4,10 @@
 
 - `pricing_plan` in `subscription_plan` blocks: take a plan's Stripe price IDs from the [`pricing_plans`](https://github.com/rameerez/pricing_plans) plan of the same (or a given) key, so prices are declared once and can't drift. Every price of the pricing plan (String or any interval Hash, e.g. `month:`, `year:`, `quarter:`) matches subscriptions. Prices are read lazily, so initializer order doesn't matter; `pricing_plans` remains an optional dependency. Combining `pricing_plan` with `stripe_price`, a missing `pricing_plans` gem, or a missing pricing plan raises the new `UsageCredits::ConfigurationError` (at boot, via `validate_pricing_plan_links!`, and on lookup).
 
+### Fixed
+
+- **No credit grant can vanish through a `return` out of a lock or transaction block, and the suite now proves it.** In 0.5, `Wallet#add_credits` returned from inside `with_lock`, and the plan-change handler and `FulfillmentService#process` returned from inside `transaction`; on Rails 7.0, and on 7.1 without `load_defaults 7.1`, that rolled back what the block had written without an error, while `add_credits` still returned its `Transaction`. An audit of 1.0.1 found none of those exits left (the 1.0 rewrite removed the first and turned the other two into `next`) and no new one in any `transaction`, `with_lock` or wallet command block, and 1.0 requires Rails 7.2.3.1 or newer, which commits a block left by `return`, `break` or `throw`. New tests read back the ledger rows and the cached balance that `add_credits` and `give_credits` write, and document on every supported Rails that such a block commits. Reported by Tal Gruper (@TalGruperFolloze) in #31, with a fix for the 0.5 code in #32.
+
 ## [1.0.1] - 2026-10-18
 
 ### Fixed

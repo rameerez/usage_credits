@@ -65,6 +65,20 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
     end
   end
 
+  # Both return the new ledger row even when the write was rolled back (a
+  # `return` out of `with_lock` did that on Rails 7.0), so read them back.
+  test "add_credits and give_credits persist the ledger rows and the cached balance" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+
+    added = wallet.add_credits(100, metadata: {reason: "persistence_check"})
+    given = wallet.give_credits(50, reason: "persistence_check")
+
+    assert_equal [100, 50], UsageCredits::Transaction.where(id: [added.id, given.id]).order(:id).pluck(:amount)
+    fresh = UsageCredits::Wallet.find(wallet.id)
+    assert_equal 150, fresh.read_attribute(:balance), "the cached balance was written"
+    assert_equal 150, fresh.credits
+  end
+
   test "give_credits with expiration date" do
     wallet = usage_credits_wallets(:rich_wallet)
     expires_at = 30.days.from_now

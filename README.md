@@ -283,6 +283,8 @@ To ensure credits are not subtracted from users during failed operations, you ca
 end
 ```
 
+The credits are deducted right after the block, inside the same database transaction, so leave the block by finishing it or by raising. A `return` or `break` out of the block skips the deduction: the block's own database writes are committed and the operation ends up free.
+
 If you want to spend the credits immediately, you can use the non-block form:
 
 ```ruby

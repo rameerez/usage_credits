@@ -22,7 +22,7 @@ All with a simple DSL that reads just like English.
 - Ruby 3.2+ and Rails 7.2.3.1–8.x. Ruby 3.2 is the security floor because current patched versions of transitive Rails dependencies no longer support Ruby 3.1.
 - An ActiveJob backend (Sidekiq, `solid_queue`, etc.) for subscription credit fulfillment
 - [`pay`](https://github.com/pay-rails/pay) 11.6.2–11.x for payment integration. Pay 11.6.2 is the security floor because it fixes [GHSA-mjgf-xj26-9qf9](https://github.com/pay-rails/pay/security/advisories/GHSA-mjgf-xj26-9qf9).
-- [`wallets`](https://github.com/rameerez/wallets) 0.3.x (installed automatically as the ledger core)
+- [`wallets`](https://github.com/rameerez/wallets) 0.4.x (installed automatically as the ledger core)
 
 ## 👨‍💻 Example
 
@@ -110,6 +110,7 @@ rails db:migrate
 The upgrade migration moves your existing ledger onto the [`wallets`](https://github.com/rameerez/wallets) core schema **in place** — all balances, transactions, allocations, and fulfillments are preserved exactly as they are. It:
 
 - Adds an `asset_code` column to wallets (defaults to `"credits"`, so nothing changes for you)
+- Adds a `ledger_revision` counter to wallets, which the `wallets` core increments on every ledger change (it is how a stale MySQL snapshot is told from a current one)
 - Enforces one wallet per owner with a unique index (it first checks your data and aborts with step-by-step instructions if any owner somehow has duplicate wallets, before touching anything)
 - Widens integer amount columns to `bigint`
 - Creates the `usage_credits_transfers` table that powers wallet-to-wallet transfers
@@ -121,6 +122,7 @@ A few production notes:
 - On PostgreSQL, Rails runs the migration in one DDL transaction. The unique-index build, four `bigint` conversions, constraints, foreign keys, and transfer-table changes therefore hold their acquired table locks until the whole migration commits. Writes to **all** `usage_credits_*` ledger tables may be blocked for the combined duration, not only while each individual `bigint` conversion is executing. Use a maintenance window for a large or write-heavy ledger. A genuinely lower-lock rollout requires a DBA-reviewed, application-specific staged migration (including concurrent indexes and separately validated constraints); do not add `disable_ddl_transaction!` to the generated migration casually, because that trades atomicity for partial-schema exposure.
 - MySQL DDL commits step by step. Every mutation is independently guarded, so an interrupted run can be fixed and safely re-run.
 - Deploy the gem update and migration together: the 1.0 models expect the upgraded schema.
+- If your app also uses `wallets` directly, `usage_credits` 1.0 brings it to 0.4: run `rails generate wallets:upgrade` and migrate its tables too. `wallets` 0.4 raises on every `Wallets::Wallet` balance read and command until its holds table and `ledger_revision` column exist.
 - Fresh installs use descriptive `usage_credits_*` index names. Upgrades deliberately preserve safe legacy index names rather than dropping and rebuilding equivalent indexes, so schema dumps from fresh and upgraded databases can differ by index name while remaining structurally equivalent.
 
 Add `has_credits` your user model (or any model that needs to have credits):

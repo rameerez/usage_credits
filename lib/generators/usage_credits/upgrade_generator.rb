@@ -23,6 +23,7 @@ module UsageCredits
         say "\nThis migration will:"
         say "  - Check for duplicate owner wallets first, and abort with instructions if any exist"
         say "  - Add 'asset_code' column to wallets (default: 'credits')"
+        say "  - Add 'ledger_revision' column to wallets (default: 0)"
         say "  - Enforce one wallet per owner per asset with a unique index"
         say "  - Change integer columns to bigint for larger balance support"
         say "  - Create 'usage_credits_transfers' table for wallet transfers"

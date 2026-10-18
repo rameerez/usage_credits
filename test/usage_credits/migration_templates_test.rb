@@ -7,6 +7,7 @@ class UsageCredits::MigrationTemplatesTest < ActiveSupport::TestCase
     template = File.read(template_path("create_usage_credits_tables.rb.erb"))
 
     assert_includes template, 't.string :asset_code, null: false, default: "credits"'
+    assert_includes template, "t.bigint :ledger_revision, null: false, default: 0"
     assert_includes template, 't.string :expiration_policy, null: false, default: "preserve"'
     assert_includes template, "t.references :transfer"
     assert_includes template, 'index: { unique: true, name: "index_usage_credits_fulfillments_on_source" }'
@@ -23,6 +24,7 @@ class UsageCredits::MigrationTemplatesTest < ActiveSupport::TestCase
     assert_includes template, "def up"
     assert_includes template, "class UpgradeUsageCreditsToWalletsCore"
     assert_includes template, "add_column :usage_credits_wallets, :asset_code"
+    assert_includes template, "add_column :usage_credits_wallets, :ledger_revision, :bigint, null: false, default: 0"
     assert_includes template, "ensure_bigint_column!(:usage_credits_wallets, :balance"
     assert_includes template, "create_table :usage_credits_transfers"
     assert_includes template, 't.string :expiration_policy, null: false, default: "preserve"'

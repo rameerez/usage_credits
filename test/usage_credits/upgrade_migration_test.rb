@@ -48,6 +48,8 @@ class UsageCredits::UpgradeMigrationTest < ActiveSupport::TestCase
     assert_equal 42, wallet_row["owner_id"]
     assert_equal 150, wallet_row["balance"]
     assert_equal "credits", wallet_row["asset_code"]
+    assert_equal 0, wallet_row["ledger_revision"]
+    assert_ledger_revision_column
 
     transaction_rows = @connection.exec_query("SELECT id, wallet_id, amount, category, transfer_id FROM usage_credits_transactions ORDER BY id").to_a
     assert_equal [
@@ -170,6 +172,7 @@ class UsageCredits::UpgradeMigrationTest < ActiveSupport::TestCase
 
     # The database must be completely untouched so the user can fix data and re-run.
     refute @connection.columns(:usage_credits_wallets).any? { |column| column.name == "asset_code" }
+    refute @connection.columns(:usage_credits_wallets).any? { |column| column.name == "ledger_revision" }
     refute_includes @connection.tables, "usage_credits_transfers"
     refute @connection.columns(:usage_credits_transactions).any? { |column| column.name == "transfer_id" }
   end
@@ -183,6 +186,8 @@ class UsageCredits::UpgradeMigrationTest < ActiveSupport::TestCase
 
     assert_equal 1, @connection.indexes(:usage_credits_wallets).count { |index| index.name == "index_usage_credits_wallets_on_owner_and_asset" }
     assert_equal 150, @connection.select_value("SELECT balance FROM usage_credits_wallets WHERE id = 1")
+    assert_equal 1, @connection.columns(:usage_credits_wallets).count { |column| column.name == "ledger_revision" }
+    assert_ledger_revision_column
   end
 
   test "upgrade aborts before schema changes when payment sources have duplicate fulfillments" do
@@ -391,6 +396,7 @@ class UsageCredits::UpgradeMigrationTest < ActiveSupport::TestCase
       usage_credits_allocations
     ]
     assert_empty expected_tables - @connection.tables
+    assert_ledger_revision_column
 
     source_index = @connection.indexes(:usage_credits_fulfillments).find { |index| index.columns == %w[source_type source_id] }
     assert source_index&.unique
@@ -410,6 +416,18 @@ class UsageCredits::UpgradeMigrationTest < ActiveSupport::TestCase
   end
 
   private
+
+  # wallets 0.4 increments this counter on every command and compares it to
+  # tell a stale MySQL snapshot from a current one, so both install paths must
+  # create it exactly as wallets does.
+  def assert_ledger_revision_column
+    column = @connection.columns(:usage_credits_wallets).find { |candidate| candidate.name == "ledger_revision" }
+
+    assert column, "expected usage_credits_wallets.ledger_revision"
+    assert_equal "bigint", column.sql_type
+    assert_not column.null
+    assert_equal "0", column.default
+  end
 
   # Mirrors the actual 0.5.0 install template (lib/generators/usage_credits/templates/
   # create_usage_credits_tables.rb.erb on the 0.5.0 tag) so we test the upgrade

@@ -49,6 +49,14 @@ class UpgradeUsageCreditsToWalletsCore < ActiveRecord::Migration<%= migration_ve
       add_column :usage_credits_wallets, :asset_code, :string, null: false, default: "credits"
     end
 
+    # The wallets core increments this counter on every command and compares
+    # it to tell a stale MySQL snapshot from a current one. Without it, the
+    # core falls back to a timestamp marker that another connection's
+    # `touch(time:)` can repeat. Existing rows start at 0: only changes count.
+    unless column_exists?(:usage_credits_wallets, :ledger_revision)
+      add_column :usage_credits_wallets, :ledger_revision, :bigint, null: false, default: 0
+    end
+
     ensure_unique_index!(
       :usage_credits_wallets,
       %i[owner_type owner_id asset_code],

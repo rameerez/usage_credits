@@ -451,6 +451,33 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
     assert_nil transfer.inbound_transactions.sole.expires_at
   end
 
+  test "a :preserve transfer that unexpired credits fully back keeps their expiration despite refund debt" do
+    original_setting = UsageCredits.configuration.allow_negative_balance
+
+    begin
+      UsageCredits.configuration.allow_negative_balance = true
+      sender = User.create!(email: "sender-debt-#{SecureRandom.hex(4)}@example.com", name: "Sender Debt")
+      recipient = User.create!(email: "recipient-debt-#{SecureRandom.hex(4)}@example.com", name: "Recipient Debt")
+      wallet = sender.credit_wallet
+
+      # A credit-pack refund after its credits were spent leaves unbacked debt,
+      # which `credits` nets out: 100 fresh credits minus 50 of debt.
+      wallet.send(:deduct_refunded_credits, 50, metadata: {reason: "refund"}, fulfillment: nil)
+      fresh_credit = wallet.give_credits(100, reason: "promo", expires_at: 10.days.from_now)
+      assert_equal 50, wallet.credits
+
+      # 80 is above `credits`, but the fresh credit backs every unit of it, so
+      # nothing is unbacked and its expiration travels with the value.
+      transfer = wallet.transfer_to(recipient.credit_wallet, 80)
+
+      assert_equal "preserve", transfer.expiration_policy
+      assert_equal fresh_credit.expires_at.to_i, transfer.inbound_transactions.sole.expires_at.to_i
+      assert_equal 80, recipient.credit_wallet.reload.credits
+    ensure
+      UsageCredits.configuration.allow_negative_balance = original_setting
+    end
+  end
+
   test "partial allocation from multiple sources" do
     wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
 
@@ -863,6 +890,135 @@ class UsageCredits::WalletTest < ActiveSupport::TestCase
       assert_equal 20, refill.balance_after
     ensure
       UsageCredits.configuration.allow_negative_balance = original_setting
+    end
+  end
+
+  # ========================================
+  # WALLETS CORE: HOLDS ARE NOT EXPOSED
+  # ========================================
+
+  # Holds are a wallets-level feature that usage_credits 1.0 does not opt
+  # into: its ledger runs no hold SQL, `credits` keeps its floored contract,
+  # and every hold command refuses before it reaches the database. Apps that
+  # need pending value use `wallets` directly, side by side.
+
+  test "credit wallets do not keep holds" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+    wallet.give_credits(100, reason: "bonus")
+
+    assert_nil UsageCredits::Wallet.hold_class_name
+    assert_not_predicate UsageCredits::Wallet, :holds_enabled?
+    assert_equal 0, wallet.held_balance
+    assert_equal 100, wallet.available_balance
+    assert_equal 100, wallet.total_balance
+    assert_not_predicate wallet, :on_hold?
+  end
+
+  test "every hold command raises HoldsNotEnabled before running a query" do
+    wallet = UsageCredits::Wallet.create!(owner: users(:new_user))
+    credit = wallet.give_credits(100, reason: "bonus")
+
+    commands = {
+      "credit(hold:)" => -> { wallet.credit(50, category: :credit_added, hold: :pending_validation) },
+      "credit(available_at:)" => -> { wallet.credit(50, category: :credit_added, available_at: 1.day.from_now) },
+      "debit(from:)" => -> { wallet.debit(10, category: :credit_deducted, from: credit) },
+      "hold(credit)" => -> { wallet.hold(credit, category: :fraud_review) },
+      "hold (whole wallet)" => -> { wallet.hold(category: :chargeback) },
+      "reserve" => -> { wallet.reserve(10, category: :booking) }
+    }
+
+    commands.each do |name, command|
+      assert_no_queries do
+        assert_raises(Wallets::HoldsNotEnabled, "#{name} must refuse on a credits wallet") { command.call }
+      end
+    end
+
+    assert_equal 1, wallet.transactions.count
+    assert_equal 100, wallet.reload.credits
+  end
+
+  test "credit wallet transfers do not take from:" do
+    sender = User.create!(email: "sender-from-#{SecureRandom.hex(4)}@example.com", name: "Sender From")
+    recipient = User.create!(email: "recipient-from-#{SecureRandom.hex(4)}@example.com", name: "Recipient From")
+    credit = sender.credit_wallet.give_credits(100, reason: "bonus")
+
+    %i[transfer_to transfer_credits_to].each do |entry_point|
+      assert_no_difference -> { UsageCredits::Transfer.count } do
+        assert_raises(ArgumentError) do
+          sender.credit_wallet.public_send(entry_point, recipient.credit_wallet, 10, from: credit)
+        end
+      end
+    end
+  end
+
+  test "the credits ledger never queries a holds table" do
+    sender = User.create!(email: "sender-noholds-#{SecureRandom.hex(4)}@example.com", name: "Sender No Holds")
+    recipient = User.create!(email: "recipient-noholds-#{SecureRandom.hex(4)}@example.com", name: "Recipient No Holds")
+
+    assert_no_queries_match(/_holds\b/i, include_schema: true) do
+      wallet = sender.credit_wallet
+      wallet.give_credits(100, reason: "bonus", expires_at: 30.days.from_now)
+      wallet.deduct_credits(10)
+      wallet.spend_credits_on(:test_operation)
+      wallet.transfer_to(recipient.credit_wallet, 5)
+      wallet.credits
+      wallet.held_balance
+      wallet.total_balance
+      sender.destroy!
+    end
+  end
+
+  # ========================================
+  # WALLETS CORE: LEDGER REVISION
+  # ========================================
+
+  # wallets 0.4 increments `ledger_revision` on every command, and compares it
+  # to tell a stale MySQL snapshot from a current one. usage_credits has its
+  # own mutation paths on top of the core commands, so each one is checked.
+
+  test "every credit wallet command increments ledger_revision" do
+    sender = User.create!(email: "sender-revision-#{SecureRandom.hex(4)}@example.com", name: "Sender Revision")
+    recipient = User.create!(email: "recipient-revision-#{SecureRandom.hex(4)}@example.com", name: "Recipient Revision")
+    wallet = sender.credit_wallet
+    other = recipient.credit_wallet
+
+    assert_difference -> { wallet.reload.ledger_revision }, 1 do
+      wallet.give_credits(100, reason: "bonus")
+    end
+
+    assert_difference -> { wallet.reload.ledger_revision }, 1 do
+      wallet.deduct_credits(10)
+    end
+
+    assert_difference -> { wallet.reload.ledger_revision }, 1 do
+      wallet.spend_credits_on(:test_operation)
+    end
+
+    assert_difference [-> { wallet.reload.ledger_revision }, -> { other.reload.ledger_revision }], 1 do
+      wallet.transfer_to(other, 5)
+    end
+
+    # Pay refunds write their debit through this private path.
+    assert_difference -> { wallet.reload.ledger_revision }, 1 do
+      wallet.send(:deduct_refunded_credits, 5, metadata: {reason: "refund"}, fulfillment: nil)
+    end
+
+    assert_no_difference -> { wallet.reload.ledger_revision } do
+      wallet.credits
+      wallet.credit_history.to_a
+    end
+  end
+
+  test "shortening fulfillment credits increments ledger_revision only when a credit changes" do
+    wallet = usage_credits_wallets(:subscribed_wallet)
+    fulfillment = usage_credits_fulfillments(:active_subscription_fulfillment)
+
+    assert_difference -> { wallet.reload.ledger_revision }, 1 do
+      wallet.expire_fulfillment_credits!(fulfillment: fulfillment, expires_at: 10.days.from_now)
+    end
+
+    assert_no_difference -> { wallet.reload.ledger_revision } do
+      wallet.expire_fulfillment_credits!(fulfillment: fulfillment, expires_at: 20.days.from_now)
     end
   end
 

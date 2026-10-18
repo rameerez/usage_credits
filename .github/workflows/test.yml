@@ -15,9 +15,10 @@ on:
 permissions:
   contents: read
 
-# usage_credits 1.0 depends on wallets 0.3 before that version exists on
-# RubyGems. Every CI lane resolves the exact reviewed Wallets candidate below;
-# remove this source override only after the published dependency is available.
+# usage_credits 1.0 depends on wallets 0.4, which is released and tagged
+# (v0.4.0) but not yet on RubyGems. Every CI lane resolves that exact release
+# commit through WALLETS_PATH. Once wallets 0.4.x is on RubyGems, drop this
+# override and the wallets checkout steps so CI resolves the published gem.
 env:
   WALLETS_PATH: ${{ github.workspace }}/wallets-core
 
@@ -66,11 +67,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Checkout reviewed wallets 0.3 candidate
+      - name: Checkout wallets 0.4.0 release
         uses: actions/checkout@v7
         with:
           repository: rameerez/wallets
-          ref: 743f57e96a7b48e3bb790e63d5cba2e83f4f057b
+          # The commit the v0.4.0 tag points at (a SHA cannot be moved like a tag).
+          ref: ec479a9e295b65869625e20bc6100219872f91ab
           path: wallets-core
           persist-credentials: false
 
@@ -118,11 +120,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Checkout reviewed wallets 0.3 candidate
+      - name: Checkout wallets 0.4.0 release
         uses: actions/checkout@v7
         with:
           repository: rameerez/wallets
-          ref: 743f57e96a7b48e3bb790e63d5cba2e83f4f057b
+          # The commit the v0.4.0 tag points at (a SHA cannot be moved like a tag).
+          ref: ec479a9e295b65869625e20bc6100219872f91ab
           path: wallets-core
           persist-credentials: false
 
@@ -187,11 +190,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Checkout reviewed wallets 0.3 candidate
+      - name: Checkout wallets 0.4.0 release
         uses: actions/checkout@v7
         with:
           repository: rameerez/wallets
-          ref: 743f57e96a7b48e3bb790e63d5cba2e83f4f057b
+          # The commit the v0.4.0 tag points at (a SHA cannot be moved like a tag).
+          ref: ec479a9e295b65869625e20bc6100219872f91ab
           path: wallets-core
           persist-credentials: false
 
@@ -262,11 +266,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Checkout reviewed wallets 0.3 candidate
+      - name: Checkout wallets 0.4.0 release
         uses: actions/checkout@v7
         with:
           repository: rameerez/wallets
-          ref: 743f57e96a7b48e3bb790e63d5cba2e83f4f057b
+          # The commit the v0.4.0 tag points at (a SHA cannot be moved like a tag).
+          ref: ec479a9e295b65869625e20bc6100219872f91ab
           path: wallets-core
           persist-credentials: false
 

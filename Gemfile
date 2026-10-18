@@ -42,7 +42,8 @@ group :test do
 
   # Receipts
   gem "prawn"
-  gem "receipts"
+  # Pay 11 requires receipts ~> 2; receipts 3.0.0 makes it raise at boot.
+  gem "receipts", "~> 2"
 
   # Database adapters (for multi-database testing)
   gem "sqlite3", ">= 2.9.5"

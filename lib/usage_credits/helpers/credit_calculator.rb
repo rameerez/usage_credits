@@ -21,6 +21,24 @@ module UsageCredits
       end
     end
 
+    # Normalize every configured or dynamically calculated credit cost through
+    # one strict boundary. Keeping parse-error translation here means fixed
+    # values and Proc results cannot match Wallets error-message text in
+    # separate places and drift apart.
+    def normalize_credit_amount(amount)
+      number = begin
+        Wallets::WholeNumber.parse(amount, name: "Credit amount")
+      rescue ArgumentError
+        raise ArgumentError, "Credit amount must be a whole number (got: #{amount})"
+      end
+
+      if number.negative?
+        raise ArgumentError, "Credit amount cannot be negative (got: #{amount})"
+      end
+
+      number
+    end
+
     # Convert a monetary amount to credits
     def money_to_credits(cents, exchange_rate)
       apply_rounding(cents * exchange_rate / 100.0)

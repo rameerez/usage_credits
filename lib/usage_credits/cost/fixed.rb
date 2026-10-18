@@ -7,7 +7,7 @@ module UsageCredits
       attr_reader :period
 
       def initialize(amount)
-        @amount = amount
+        super
         @period = nil  # Will default to 1.month in CreditSubscriptionPlan
       end
 
@@ -18,7 +18,6 @@ module UsageCredits
           value.calculate(params)
         else
           validate_amount!(value)
-          value.to_i
         end
       end
 

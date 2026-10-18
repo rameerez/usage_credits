@@ -1,0 +1,22 @@
+# Wallets gem wallets (for coexistence testing)
+# These use the wallets_wallets table, separate from usage_credits_wallets
+
+alpha_points_wallet:
+  id: 1
+  owner_type: Team
+  owner_id: 1
+  asset_code: points
+  balance: 500
+  metadata: {}
+  created_at: <%= 10.days.ago %>
+  updated_at: <%= 1.day.ago %>
+
+beta_points_wallet:
+  id: 2
+  owner_type: Team
+  owner_id: 2
+  asset_code: points
+  balance: 200
+  metadata: {}
+  created_at: <%= 5.days.ago %>
+  updated_at: <%= 1.day.ago %>

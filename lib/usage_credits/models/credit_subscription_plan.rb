@@ -10,12 +10,12 @@ module UsageCredits
   # @see PaySubscriptionExtension for the actual credit fulfillment logic
   class CreditSubscriptionPlan
     attr_reader :name,
-                :processor_plan_ids,
-                :fulfillment_period, :credits_per_period,
-                :signup_bonus_credits, :trial_credits,
-                :rollover_enabled,
-                :expire_credits_on_cancel, :credit_expiration_period,
-                :metadata
+      :processor_plan_ids,
+      :fulfillment_period, :credits_per_period,
+      :signup_bonus_credits, :trial_credits,
+      :rollover_enabled,
+      :expire_credits_on_cancel, :credit_expiration_period,
+      :metadata
 
     attr_writer :fulfillment_period
 
@@ -41,23 +41,23 @@ module UsageCredits
     # Set base credits given each period
     def gives(amount)
       if amount.is_a?(UsageCredits::Cost::Fixed)
-        @credits_per_period = amount.amount
+        @credits_per_period = normalize_whole_number!(amount.amount, "Credits per period", minimum: 0)
         @fulfillment_period = UsageCredits::PeriodParser.normalize_period(amount.period || 1.month)
         self
       else
-        @credits_per_period = amount.to_i
+        @credits_per_period = normalize_whole_number!(amount, "Credits per period", minimum: 0)
         CreditGiver.new(self)
       end
     end
 
     # One-time signup bonus credits
     def signup_bonus(amount)
-      @signup_bonus_credits = amount.to_i
+      @signup_bonus_credits = normalize_whole_number!(amount, "Signup bonus credits", minimum: 0)
     end
 
     # Credits given during trial period
     def trial_includes(amount)
-      @trial_credits = amount.to_i
+      @trial_credits = normalize_whole_number!(amount, "Trial credits", minimum: 0)
     end
 
     # Configure whether unused credits roll over between periods
@@ -75,6 +75,12 @@ module UsageCredits
     # @param duration [ActiveSupport::Duration, nil] Grace period before credits expire
     # @return [void]
     def expire_after(duration)
+      unless duration.nil?
+        seconds = duration.is_a?(ActiveSupport::Duration) ? duration.value : duration
+        seconds = Wallets::WholeNumber.parse(seconds, name: "Credit expiration period")
+        raise ArgumentError, "Credit expiration period cannot be negative" if seconds.negative?
+      end
+
       @expire_credits_on_cancel = true
       @credit_expiration_period = duration
     end
@@ -170,7 +176,7 @@ module UsageCredits
       ids = plan_id_for(:stripe)
       return {} if ids.nil?
       return ids if ids.is_a?(Hash)
-      { default: ids } # Wrap single ID in hash for consistency
+      {default: ids} # Wrap single ID in hash for consistency
     end
 
     # Check if this plan matches a given processor price ID
@@ -180,7 +186,7 @@ module UsageCredits
     def matches_processor_id?(processor_id)
       processor_plan_ids.values.any? do |ids|
         if ids.is_a?(Hash)
-          ids.values.include?(processor_id)
+          ids.value?(processor_id)
         else
           ids == processor_id
         end
@@ -202,7 +208,10 @@ module UsageCredits
     #   plan.create_checkout_session(user, success_url: "/success", cancel_url: "/cancel", period: :year)
     def create_checkout_session(user, success_url:, cancel_url:, processor: :stripe, period: nil)
       raise ArgumentError, "User must respond to payment_processor" unless user.respond_to?(:payment_processor)
+      raise ArgumentError, "User must have a payment processor" unless user.payment_processor
       raise ArgumentError, "No fulfillment period configured for plan: #{name}" unless fulfillment_period
+
+      processor = processor.to_sym
 
       plan_ids = plan_id_for(processor)
       raise ArgumentError, "No #{processor.to_s.titleize} plan ID configured for plan: #{name}" unless plan_ids
@@ -210,7 +219,7 @@ module UsageCredits
       # Determine which price ID to use
       plan_id = if plan_ids.is_a?(Hash)
         # Multi-period plan: period is required
-        raise ArgumentError, "This plan has multiple billing periods (#{plan_ids.keys.join(', ')}). Please specify period: parameter (e.g., period: :month)" if period.nil?
+        raise ArgumentError, "This plan has multiple billing periods (#{plan_ids.keys.join(", ")}). Please specify period: parameter (e.g., period: :month)" if period.nil?
         plan_ids[period.to_sym] || raise(ArgumentError, "Period #{period.inspect} not found. Available periods: #{plan_ids.keys.inspect}")
       else
         # Single-price plan: use the ID directly
@@ -251,6 +260,10 @@ module UsageCredits
     end
 
     def create_stripe_checkout_session(user, plan_id, success_url, cancel_url)
+      processor_metadata = UsageCredits::ProcessorMetadata.normalize(
+        base_metadata.merge(processor_plan: plan_id)
+      )
+
       user.payment_processor.checkout(
         mode: "subscription",
         line_items: [{
@@ -259,7 +272,7 @@ module UsageCredits
         }],
         success_url: success_url,
         cancel_url: cancel_url,
-        subscription_data: { metadata: base_metadata }
+        subscription_data: {metadata: processor_metadata}
       )
     end
 
@@ -276,6 +289,15 @@ module UsageCredits
         credit_expiration_period: credit_expiration_period&.to_i,
         metadata: metadata
       }
+    end
+
+    private
+
+    def normalize_whole_number!(amount, name, minimum:)
+      amount = amount.to_i if amount.is_a?(UsageCredits::Cost::Fixed)
+      value = Wallets::WholeNumber.parse(amount, name: name)
+      raise ArgumentError, "#{name} must be at least #{minimum}" if value < minimum
+      value
     end
 
     # =========================================
@@ -300,6 +322,5 @@ module UsageCredits
         @plan
       end
     end
-
   end
 end

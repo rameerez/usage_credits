@@ -19,7 +19,15 @@ module UsageCredits
       end
 
       def create_initializer
-        template "initializer.rb", "config/initializers/usage_credits.rb"
+        destination = "config/initializers/usage_credits.rb"
+        if File.exist?(File.expand_path(destination, destination_root))
+          # Never clobber a configured app. Thor's interactive conflict prompt
+          # is not a safety net in non-TTY runs (scripts, CI, AI agents), and
+          # this file is where apps define their whole credits catalog.
+          say_status :skip, "#{destination} already exists — keeping your configuration (delete it and re-run to regenerate the template)", :yellow
+          return
+        end
+        template "initializer.rb", destination
       end
 
       def display_post_install_message

@@ -17,7 +17,7 @@ module UsageCredits
       end
 
       Rails.logger.info "Completed processing #{count} fulfillments in #{formatted_time}"
-    rescue StandardError => e
+    rescue => e
       Rails.logger.error "Error processing credit fulfillments: #{e.message}"
       raise # Re-raise to trigger job retry
     end

@@ -42,7 +42,7 @@ class UsageCredits::FulfillmentTest < ActiveSupport::TestCase
       fulfillment_type: "credit_pack",
       credits_last_fulfillment: 1000,
       last_fulfilled_at: Time.current,
-      metadata: { test: true }
+      metadata: {test: true}
     )
 
     assert fulfillment.persisted?
@@ -61,7 +61,7 @@ class UsageCredits::FulfillmentTest < ActiveSupport::TestCase
       fulfillment_period: "1.month",
       last_fulfilled_at: Time.current,
       next_fulfillment_at: 1.month.from_now,
-      metadata: { plan: "pro_plan_monthly" }
+      metadata: {plan: "pro_plan_monthly"}
     )
 
     assert fulfillment.persisted?
@@ -105,6 +105,18 @@ class UsageCredits::FulfillmentTest < ActiveSupport::TestCase
     assert fulfillment.errors[:fulfillment_type].present?
   end
 
+  test "rejects unsupported fulfillment types and negative credit snapshots" do
+    fulfillment = UsageCredits::Fulfillment.new(
+      wallet: usage_credits_wallets(:rich_wallet),
+      fulfillment_type: "unknown",
+      credits_last_fulfillment: -1
+    )
+
+    assert_not fulfillment.valid?
+    assert_includes fulfillment.errors[:fulfillment_type], "is not included in the list"
+    assert_includes fulfillment.errors[:credits_last_fulfillment], "must be greater than or equal to 0"
+  end
+
   test "validates fulfillment_period format" do
     fulfillment = UsageCredits::Fulfillment.new(
       wallet: usage_credits_wallets(:rich_wallet),
@@ -117,6 +129,23 @@ class UsageCredits::FulfillmentTest < ActiveSupport::TestCase
 
     assert_not fulfillment.valid?
     assert fulfillment.errors[:fulfillment_period].present?
+  end
+
+  test "persisted fulfillment cadence survives a higher configuration minimum" do
+    UsageCredits.configuration.min_fulfillment_period = 1.month
+    next_fulfillment_at = 1.week.from_now
+    fulfillment = UsageCredits::Fulfillment.new(
+      wallet: usage_credits_wallets(:subscribed_wallet),
+      fulfillment_type: "subscription",
+      credits_last_fulfillment: 100,
+      fulfillment_period: "1.week",
+      last_fulfilled_at: Time.current,
+      next_fulfillment_at: next_fulfillment_at,
+      metadata: {plan: "legacy_weekly"}
+    )
+
+    assert fulfillment.valid?, fulfillment.errors.full_messages.to_sentence
+    assert_equal (next_fulfillment_at + 1.week).to_i, fulfillment.calculate_next_fulfillment.to_i
   end
 
   test "validates unique source" do
@@ -132,6 +161,24 @@ class UsageCredits::FulfillmentTest < ActiveSupport::TestCase
 
     assert_not duplicate.valid?
     assert duplicate.errors[:source_id].present?
+  end
+
+  test "database uniquely enforces one fulfillment per polymorphic source" do
+    existing = usage_credits_fulfillments(:active_subscription_fulfillment)
+    now = Time.current
+
+    assert_raises(ActiveRecord::RecordNotUnique) do
+      UsageCredits::Fulfillment.insert_all!([{
+        wallet_id: existing.wallet_id,
+        source_type: existing.source_type,
+        source_id: existing.source_id,
+        fulfillment_type: "subscription",
+        credits_last_fulfillment: 1,
+        metadata: {},
+        created_at: now,
+        updated_at: now
+      }])
+    end
   end
 
   # ========================================
@@ -350,7 +397,8 @@ class UsageCredits::FulfillmentTest < ActiveSupport::TestCase
 
     count = UsageCredits::FulfillmentService.process_pending_fulfillments
 
-    assert count >= 2
+    assert count >= 1
+    assert f2.reload.next_fulfillment_at.past?, "trial fulfillment should remain due until Pay activates it"
   end
 
   test "FulfillmentService skips non-due fulfillments" do
@@ -401,7 +449,7 @@ class UsageCredits::FulfillmentTest < ActiveSupport::TestCase
       fulfillment_period: "1.month",
       last_fulfilled_at: 1.month.ago,
       next_fulfillment_at: 1.day.from_now,
-      metadata: { plan: "rollover_plan_monthly" }
+      metadata: {plan: "rollover_plan_monthly"}
     )
 
     # Make it due now (bypass validation with update_columns)
@@ -436,7 +484,7 @@ class UsageCredits::FulfillmentTest < ActiveSupport::TestCase
       fulfillment_period: "1.month",
       last_fulfilled_at: 1.month.ago,
       next_fulfillment_at: 1.day.from_now,
-      metadata: { plan: "nonexistent_plan" }
+      metadata: {plan: "nonexistent_plan"}
     )
 
     fulfillment.update_columns(next_fulfillment_at: 1.second.ago)
@@ -459,7 +507,7 @@ class UsageCredits::FulfillmentTest < ActiveSupport::TestCase
       last_fulfilled_at: 1.month.ago,
       next_fulfillment_at: 1.day.from_now,
       fulfillment_period: "1.month",
-      metadata: { credits: 100 }  # Has credits, will process
+      metadata: {credits: 100}  # Has credits, will process
     )
 
     fulfillment.update_columns(next_fulfillment_at: 1.second.ago)
@@ -491,7 +539,7 @@ class UsageCredits::FulfillmentTest < ActiveSupport::TestCase
       fulfillment_period: "1.month",
       last_fulfilled_at: 1.month.ago,
       next_fulfillment_at: 1.day.from_now,
-      metadata: { credits: 100 }
+      metadata: {credits: 100}
     )
 
     f2 = UsageCredits::Fulfillment.create!(
@@ -501,7 +549,7 @@ class UsageCredits::FulfillmentTest < ActiveSupport::TestCase
       fulfillment_period: "1.month",
       last_fulfilled_at: 1.month.ago,
       next_fulfillment_at: 2.days.from_now,
-      metadata: { credits: 200 }
+      metadata: {credits: 200}
     )
 
     # Make them due now (bypass validation)

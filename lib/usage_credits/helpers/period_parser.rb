@@ -4,7 +4,6 @@ module UsageCredits
   # Handles parsing and normalization of time periods throughout the gem.
   # Converts strings like "1.month" or symbols like :monthly into ActiveSupport::Duration objects.
   module PeriodParser
-
     # Canonical periods and their aliases
     VALID_PERIODS = {
       second: [:second, :seconds],        # 1.second
@@ -17,6 +16,7 @@ module UsageCredits
       year: [:year, :yearly, :annually]   # 1.year
     }.freeze
 
+    ABSOLUTE_MIN_PERIOD = 1.second
     MIN_PERIOD = 1.day  # Deprecated: Use UsageCredits.configuration.min_fulfillment_period instead
 
     module_function
@@ -37,8 +37,7 @@ module UsageCredits
 
       # Handle ActiveSupport::Duration objects directly
       if period.is_a?(ActiveSupport::Duration)
-        min_period = min_fulfillment_period
-        raise ArgumentError, "Period must be at least #{min_period.inspect}" if period < min_period
+        validate_minimum!(period)
         period
       else
         # Convert symbols to canonical durations
@@ -55,8 +54,7 @@ module UsageCredits
           raise ArgumentError, "Unsupported period: #{period}. Supported periods: #{VALID_PERIODS.values.flatten.inspect}"
         end
 
-        min_period = min_fulfillment_period
-        raise ArgumentError, "Period must be at least #{min_period.inspect}" if duration < min_period
+        validate_minimum!(duration)
         duration
       end
     end
@@ -65,8 +63,11 @@ module UsageCredits
     # @param period_str [String, ActiveSupport::Duration] A string like "1.month" or "1 month" or an existing duration
     # @return [ActiveSupport::Duration] The parsed duration
     # @raise [ArgumentError] If the period string is invalid
-    def parse_period(period_str)
-      return period_str if period_str.is_a?(ActiveSupport::Duration)
+    def parse_period(period_str, enforce_minimum: true)
+      if period_str.is_a?(ActiveSupport::Duration)
+        validate_minimum!(period_str, persisted: !enforce_minimum)
+        return period_str
+      end
 
       if period_str.to_s =~ /\A(\d+)[.\s](\w+)\z/
         amount = $1.to_i
@@ -82,12 +83,17 @@ module UsageCredits
         canonical_unit = canonical_unit_for(unit)
 
         duration = amount.send(canonical_unit)
-        min_period = min_fulfillment_period
-        raise ArgumentError, "Period must be at least #{min_period.inspect}" if duration < min_period
+        validate_minimum!(duration, persisted: !enforce_minimum)
         duration
       else
         raise ArgumentError, "Invalid period format: #{period_str}. Expected format: '1.month', '2 months', etc."
       end
+    end
+
+    # Persisted commercial schedules remain valid if an operator later raises
+    # the minimum allowed for newly configured plans.
+    def parse_persisted_period(period_str)
+      parse_period(period_str, enforce_minimum: false)
     end
 
     # Map any alias to its canonical unit method name
@@ -111,5 +117,21 @@ module UsageCredits
       false
     end
 
+    def valid_persisted_period_format?(period_str)
+      parse_persisted_period(period_str)
+      true
+    rescue ArgumentError
+      false
+    end
+
+    def validate_minimum!(duration, persisted: false)
+      # Persisted commercial terms must survive a later operator-configured
+      # minimum increase, but they can never bypass the gem's hard safety
+      # floor. A zero cadence remains perpetually due and can mint on every job
+      # run, so one second is the absolute minimum for all schedules.
+      min_period = persisted ? ABSOLUTE_MIN_PERIOD : min_fulfillment_period
+      raise ArgumentError, "Period must be at least #{min_period.inspect}" if duration < min_period
+    end
+    private_class_method :validate_minimum!
   end
 end

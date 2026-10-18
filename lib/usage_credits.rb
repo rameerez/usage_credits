@@ -5,14 +5,25 @@
 
 require "rails"
 require "active_record"
+require "active_job"
 require "pay"
+require "wallets"
 require "active_support/all"
+
+module UsageCredits
+  # usage_credits deliberately exposes one asset. Keep its persisted value in
+  # one runtime constant so association lookup and race-safe creation cannot
+  # drift apart.
+  DEFAULT_ASSET_CODE = "credits"
+end
 
 # Load order matters! Dependencies are loaded in this specific order:
 #
 # 1. Core helpers
 require "usage_credits/helpers/credit_calculator"   # Centralized credit rounding
 require "usage_credits/helpers/period_parser"       # Parse fulfillment periods like `:monthly` to `1.month`
+require "usage_credits/helpers/processor_metadata"  # Payment metadata limits and serialization
+require "usage_credits/subscription_terms"          # Immutable processor subscription snapshots
 require "usage_credits/core_ext/numeric"            # Numeric extension to write `10.credits` in our DSL
 
 # 2. Cost calculation
@@ -43,17 +54,19 @@ module UsageCredits
 end
 
 # 6. Models (order matters for dependencies)
+#    These extend Wallets::* classes, so wallets gem must be loaded first
 require "usage_credits/models/wallet"
 require "usage_credits/models/transaction"
 require "usage_credits/models/allocation"
+require "usage_credits/models/transfer"
 require "usage_credits/models/operation"
 require "usage_credits/models/fulfillment"
 require "usage_credits/models/credit_pack"
 require "usage_credits/models/credit_subscription_plan"
 
 # 7. Jobs
-require "usage_credits/services/fulfillment_service.rb"
-require "usage_credits/jobs/fulfillment_job.rb"
+require "usage_credits/services/fulfillment_service"
+require "usage_credits/jobs/fulfillment_job"
 
 # Main module that serves as the primary interface to the gem.
 # Most methods here delegate to Configuration, which is the single source of truth for all config in the initializer
@@ -62,6 +75,7 @@ module UsageCredits
   class Error < StandardError; end
   class InsufficientCredits < Error; end
   class InvalidOperation < Error; end
+  class InvalidTransfer < Error; end
 
   class << self
     attr_writer :configuration
@@ -157,7 +171,6 @@ module UsageCredits
         notify_low_balance(params[:wallet]&.owner)
       end
     end
-
   end
 end
 

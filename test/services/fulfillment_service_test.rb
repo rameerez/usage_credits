@@ -38,6 +38,18 @@ module UsageCredits
           unused_credits :rollover
         end
 
+        config.subscription_plan :stripe_pause_service_pro do
+          processor_plan(:stripe, "stripe_pause_service_pro")
+          gives 500.credits.every(:month)
+          unused_credits :expire
+        end
+
+        config.subscription_plan :stripe_pause_service_premium do
+          processor_plan(:stripe, "stripe_pause_service_premium")
+          gives 2000.credits.every(:month)
+          unused_credits :expire
+        end
+
         config.credit_pack :test_pack do
           gives 1000.credits
           costs 49.dollars
@@ -222,7 +234,7 @@ module UsageCredits
         fulfillment_period: "1.month",
         last_fulfilled_at: 1.month.ago,
         next_fulfillment_at: 1.day.from_now,
-        metadata: { plan: "rollover_plan_monthly" }
+        metadata: {plan: "rollover_plan_monthly"}
       )
 
       fulfillment.update_columns(next_fulfillment_at: 1.second.ago)
@@ -232,6 +244,231 @@ module UsageCredits
 
       latest_tx = wallet.transactions.where(category: "subscription_credits").order(:created_at).last
       assert_nil latest_tx.expires_at
+    end
+
+    test "does not award recurring credits while the Pay subscription is trialing" do
+      fulfillment = usage_credits_fulfillments(:trial_fulfillment)
+      wallet = fulfillment.wallet
+      initial_credits = wallet.credits
+      fulfillment.update_columns(next_fulfillment_at: 1.second.ago)
+
+      result = FulfillmentService.new(fulfillment).process
+
+      assert_nil result
+      assert_equal initial_credits, wallet.reload.credits
+      assert fulfillment.reload.next_fulfillment_at.past?, "skipped fulfillment should remain due for retry after activation"
+    end
+
+    test "does not award recurring credits during an effective Stripe pause and resumes afterward" do
+      wallet, subscription, fulfillment = stripe_subscription_fulfillment("effective-pause")
+      initial_credits = wallet.reload.credits
+
+      subscription.update_columns(
+        pause_behavior: "void",
+        pause_starts_at: 1.minute.ago,
+        updated_at: Time.current
+      )
+      fulfillment.update_columns(
+        last_fulfilled_at: 1.month.ago,
+        next_fulfillment_at: 1.second.ago
+      )
+
+      result = FulfillmentService.new(fulfillment.reload).process
+
+      assert_nil result
+      assert_equal "active", subscription.reload.status
+      assert_not subscription.active?
+      assert_equal initial_credits, wallet.reload.credits
+      assert fulfillment.reload.next_fulfillment_at.past?
+
+      subscription.update_columns(
+        pause_behavior: nil,
+        pause_starts_at: nil,
+        updated_at: Time.current
+      )
+
+      assert subscription.reload.eligible_for_usage_credit_fulfillment?
+      assert fulfillment.reload.due_for_fulfillment?
+      assert_difference -> { wallet.reload.credits }, 500 do
+        FulfillmentService.new(fulfillment.reload).process
+      end
+    end
+
+    test "reconciles a deferred paused plan change before a recurring award" do
+      wallet, subscription, fulfillment = stripe_subscription_fulfillment("deferred-reconcile")
+      initial_credits = wallet.reload.credits
+
+      subscription.update_columns(
+        pause_behavior: "void",
+        pause_starts_at: 1.minute.ago,
+        updated_at: Time.current
+      )
+      subscription.update!(processor_plan: "stripe_pause_service_premium")
+      assert_equal "stripe_pause_service_premium", fulfillment.reload.metadata["deferred_plan_change"]
+
+      # Simulate a committed processor resume whose after-commit callback was
+      # interrupted before it could install the deferred commercial terms.
+      subscription.update_columns(
+        pause_behavior: nil,
+        pause_starts_at: nil,
+        updated_at: Time.current
+      )
+      fulfillment.update_columns(
+        last_fulfilled_at: 1.month.ago,
+        next_fulfillment_at: 1.second.ago
+      )
+
+      assert_difference -> { wallet.reload.credits }, 2000 do
+        FulfillmentService.new(fulfillment.reload).process
+      end
+
+      fulfillment.reload
+      assert_equal "stripe_pause_service_premium", fulfillment.metadata["plan"]
+      assert_nil fulfillment.metadata["deferred_plan_change"]
+      assert_equal initial_credits + 2000, wallet.reload.credits
+    end
+
+    test "fails closed when deferred plan terms are corrupt" do
+      wallet, subscription, fulfillment = stripe_subscription_fulfillment("corrupt-deferred")
+      initial_credits = wallet.reload.credits
+
+      subscription.update_columns(
+        processor_plan: "stripe_pause_service_premium",
+        updated_at: Time.current
+      )
+      fulfillment.update_columns(
+        last_fulfilled_at: 1.month.ago,
+        next_fulfillment_at: 1.second.ago,
+        metadata: fulfillment.metadata.merge(
+          "deferred_plan_change" => "stripe_pause_service_premium",
+          "deferred_plan_snapshot" => {"plan" => "wrong_plan"}
+        )
+      )
+
+      error = assert_raises(UsageCredits::InvalidOperation) do
+        FulfillmentService.new(fulfillment.reload).process
+      end
+
+      assert_includes error.message, "do not match"
+      assert_equal initial_credits, wallet.reload.credits
+    end
+
+    test "fails closed while an active processor plan transition is unreconciled" do
+      wallet, subscription, fulfillment = stripe_subscription_fulfillment("unreconciled-plan")
+      initial_credits = wallet.reload.credits
+
+      # update_columns models the interval after Pay committed the new plan but
+      # before UsageCredits' after-commit reconciliation completed.
+      subscription.update_columns(
+        processor_plan: "stripe_pause_service_premium",
+        updated_at: Time.current
+      )
+      fulfillment.update_columns(
+        last_fulfilled_at: 1.month.ago,
+        next_fulfillment_at: 1.second.ago
+      )
+
+      error = assert_raises(UsageCredits::InvalidOperation) do
+        FulfillmentService.new(fulfillment.reload).process
+      end
+
+      assert_includes error.message, "has not been reconciled"
+      assert_equal initial_credits, wallet.reload.credits
+    end
+
+    test "does not award credits when a recorded Pay subscription is missing" do
+      wallet = usage_credits_wallets(:subscribed_wallet)
+      initial_credits = wallet.credits
+      fulfillment = usage_credits_fulfillments(:active_subscription_fulfillment)
+      initial_transactions = wallet.transactions.where(fulfillment: fulfillment).count
+      fulfillment.update_columns(source_id: 999_999, next_fulfillment_at: 1.second.ago)
+
+      error = assert_raises(UsageCredits::Error) do
+        FulfillmentService.new(fulfillment.reload).process
+      end
+
+      assert_includes error.message, "no longer exists"
+      assert_equal initial_credits, wallet.reload.credits
+      assert_equal initial_transactions, wallet.transactions.where(fulfillment: fulfillment).count
+    end
+
+    test "recognizes a dangling processor-specific Pay source type" do
+      wallet = usage_credits_wallets(:subscribed_wallet)
+      initial_credits = wallet.credits
+      fulfillment = usage_credits_fulfillments(:active_subscription_fulfillment)
+      fulfillment.update_columns(
+        source_type: "Pay::Stripe::Subscription",
+        source_id: 999_999,
+        next_fulfillment_at: 1.second.ago
+      )
+
+      error = assert_raises(UsageCredits::Error) do
+        FulfillmentService.new(fulfillment.reload).process
+      end
+
+      assert_includes error.message, "no longer exists"
+      assert_equal initial_credits, wallet.reload.credits
+    end
+
+    test "trial boundary activates processors whose status stays active" do
+      UsageCredits.configure do |config|
+        config.subscription_plan :active_trial_test do
+          processor_plan(:fake_processor, "active_trial_plan")
+          gives 500.credits.every(:month)
+          signup_bonus 100.credits
+          trial_includes 50.credits
+          unused_credits :expire
+        end
+      end
+
+      user = User.create!(email: "active-trial-#{SecureRandom.hex(4)}@example.com", name: "Active Trial")
+      wallet = user.credit_wallet
+      customer = Pay::Customer.create!(
+        owner: user,
+        processor: :fake_processor,
+        processor_id: "cus_active_trial_#{SecureRandom.hex(4)}"
+      )
+      subscription = Pay::Subscription.create!(
+        customer: customer,
+        name: "default",
+        processor_id: "sub_active_trial_#{SecureRandom.hex(4)}",
+        processor_plan: "active_trial_plan",
+        status: "active",
+        quantity: 1,
+        trial_ends_at: 1.day.from_now
+      )
+      fulfillment = Fulfillment.find_by!(source: subscription)
+
+      assert_equal 50, wallet.reload.credits
+      assert_equal "trial", fulfillment.metadata["initial_award_state"]
+
+      # Some processors do not emit a status transition when an active trial
+      # ends. Simulate the clock boundary without an Active Record callback.
+      subscription.update_columns(trial_ends_at: 1.second.ago, updated_at: Time.current)
+      fulfillment.update_columns(next_fulfillment_at: 1.second.ago)
+
+      assert_difference -> { wallet.reload.credits }, 600 do
+        FulfillmentService.new(fulfillment.reload).process
+      end
+
+      assert_equal "active", fulfillment.reload.metadata["initial_award_state"]
+      assert fulfillment.next_fulfillment_at.future?
+    end
+
+    test "dispatches subscription credits awarded after a recurring fulfillment" do
+      fulfillment = usage_credits_fulfillments(:active_subscription_fulfillment)
+      fulfillment.update!(next_fulfillment_at: 1.second.ago)
+      events = []
+      UsageCredits.configure do |config|
+        config.on_subscription_credits_awarded { |context| events << context }
+      end
+
+      transaction = FulfillmentService.new(fulfillment).process
+
+      assert_equal 1, events.size
+      assert_equal transaction, events.first.transaction
+      assert_equal transaction.amount, events.first.amount
+      assert_equal fulfillment.id, events.first.metadata[:fulfillment].id
     end
 
     # ========================================
@@ -249,7 +486,7 @@ module UsageCredits
         credits_last_fulfillment: 1000,
         last_fulfilled_at: nil,
         next_fulfillment_at: 1.second.ago,
-        metadata: { pack: "test_pack" }
+        metadata: {pack: "test_pack"}
       )
 
       service = FulfillmentService.new(fulfillment)
@@ -267,7 +504,7 @@ module UsageCredits
         credits_last_fulfillment: 1000,
         last_fulfilled_at: nil,
         next_fulfillment_at: 1.second.ago,
-        metadata: { pack: "test_pack" }
+        metadata: {pack: "test_pack"}
       )
 
       service = FulfillmentService.new(fulfillment)
@@ -293,7 +530,7 @@ module UsageCredits
         last_fulfilled_at: nil,
         next_fulfillment_at: 1.day.from_now,
         fulfillment_period: "1.month",
-        metadata: { credits: 250 }
+        metadata: {credits: 250}
       )
 
       fulfillment.update_columns(next_fulfillment_at: 1.second.ago)
@@ -315,7 +552,7 @@ module UsageCredits
         last_fulfilled_at: nil,
         next_fulfillment_at: 1.day.from_now,
         fulfillment_period: "1.month",
-        metadata: { credits: 100 }
+        metadata: {credits: 100}
       )
 
       fulfillment.update_columns(next_fulfillment_at: 1.second.ago)
@@ -373,7 +610,7 @@ module UsageCredits
         fulfillment_period: "1.month",
         last_fulfilled_at: 1.month.ago,
         next_fulfillment_at: 1.day.from_now,
-        metadata: { plan: "nonexistent_plan_id" }
+        metadata: {plan: "nonexistent_plan_id"}
       )
 
       fulfillment.update_columns(next_fulfillment_at: 1.second.ago)
@@ -397,7 +634,7 @@ module UsageCredits
         credits_last_fulfillment: 1000,
         last_fulfilled_at: nil,
         next_fulfillment_at: nil,
-        metadata: { pack: "nonexistent_pack" }
+        metadata: {pack: "nonexistent_pack"}
       )
 
       # Manually set to make it appear due (for testing)
@@ -426,7 +663,8 @@ module UsageCredits
 
       count = FulfillmentService.process_pending_fulfillments
 
-      assert count >= 2
+      assert count >= 1
+      assert f2.reload.next_fulfillment_at.past?, "trial fulfillment should be skipped and not counted"
     end
 
     test "process_pending_fulfillments continues on error" do
@@ -441,7 +679,7 @@ module UsageCredits
         last_fulfilled_at: nil,
         next_fulfillment_at: 1.day.from_now,
         fulfillment_period: "1.month",
-        metadata: { credits: 100 }
+        metadata: {credits: 100}
       )
       valid.update_columns(next_fulfillment_at: 1.second.ago)
 
@@ -453,7 +691,7 @@ module UsageCredits
         fulfillment_period: "1.month",
         last_fulfilled_at: 1.month.ago,
         next_fulfillment_at: 1.day.from_now,
-        metadata: { plan: "nonexistent" }
+        metadata: {plan: "nonexistent"}
       )
       invalid.update_columns(next_fulfillment_at: 1.second.ago)
 
@@ -601,7 +839,7 @@ module UsageCredits
         fulfillment_period: "5.seconds",
         last_fulfilled_at: 6.seconds.ago,
         next_fulfillment_at: 1.day.from_now,
-        metadata: { plan: "rapid_plan_id" }
+        metadata: {plan: "rapid_plan_id"}
       )
       fulfillment.update_columns(next_fulfillment_at: 1.second.ago)
 
@@ -642,7 +880,7 @@ module UsageCredits
         end
       end
 
-      wallet = usage_credits_wallets(:empty_wallet)
+      wallet = UsageCredits::Wallet.create!(owner: users(:walletless_user), asset_code: "accumulation_test")
 
       # Create fulfillment
       fulfillment = Fulfillment.create!(
@@ -652,7 +890,7 @@ module UsageCredits
         fulfillment_period: "2.seconds",
         last_fulfilled_at: nil,
         next_fulfillment_at: 1.day.from_now,
-        metadata: { plan: "rapid_accumulation_plan" }
+        metadata: {plan: "rapid_accumulation_plan"}
       )
 
       # Simulate multiple fulfillment cycles
@@ -680,6 +918,47 @@ module UsageCredits
       assert wallet.reload.credits <= max_expected_balance + 100,
         "Balance is #{wallet.credits}, but should not exceed #{max_expected_balance + 100}. " \
         "Credits are accumulating because grace period is not capped to fulfillment period."
+    end
+
+    test "manual fulfillment rejects fractional string credits instead of truncating" do
+      fulfillment = Fulfillment.new(
+        wallet: usage_credits_wallets(:rich_wallet),
+        fulfillment_type: "manual",
+        credits_last_fulfillment: 0,
+        metadata: {credits: "10.5"}
+      )
+
+      service = FulfillmentService.new(fulfillment)
+      error = assert_raises(UsageCredits::Error) { service.send(:calculate_credits) }
+
+      assert_includes error.message, "positive whole number"
+    end
+
+    private
+
+    def stripe_subscription_fulfillment(label)
+      token = SecureRandom.hex(4)
+      user = User.create!(
+        email: "stripe-pause-service-#{label}-#{token}@example.com",
+        name: "Stripe Pause Service"
+      )
+      customer = Pay::Customer.create!(
+        owner: user,
+        processor: :stripe,
+        processor_id: "cus_stripe_pause_service_#{token}"
+      )
+      subscription = Pay::Stripe::Subscription.create!(
+        customer: customer,
+        name: "default",
+        processor_id: "sub_stripe_pause_service_#{token}",
+        processor_plan: "stripe_pause_service_pro",
+        status: "active",
+        quantity: 1,
+        current_period_start: Time.current,
+        current_period_end: 1.month.from_now
+      )
+
+      [user.credit_wallet, subscription, Fulfillment.find_by!(source: subscription)]
     end
   end
 end

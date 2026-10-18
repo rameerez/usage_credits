@@ -130,6 +130,31 @@ class WalletCallbacksIntegrationTest < ActiveSupport::TestCase
     assert_equal 10, ctx.metadata[:available]
   end
 
+  test "deduct_credits and transfers report held and reserved credits as zero when insufficient" do
+    events = []
+    UsageCredits.configure do |config|
+      config.on_insufficient_credits { |ctx| events << ctx }
+    end
+    recipient = User.create!(email: "insufficient-#{SecureRandom.hex(4)}@example.com", name: "Insufficient Recipient")
+
+    @user.credit_wallet.add_credits(10)
+
+    assert_raises(UsageCredits::InsufficientCredits) { @user.credit_wallet.deduct_credits(50) }
+    assert_raises(UsageCredits::InsufficientCredits) { @user.credit_wallet.transfer_to(recipient.credit_wallet, 50) }
+
+    # The wallets core names what holds keep out of reach. Credit wallets keep
+    # no holds, so both terms are always present and always zero.
+    assert_equal 2, events.size
+    events.each do |ctx|
+      assert_equal :insufficient_credits, ctx.event
+      assert_equal 50, ctx.amount
+      assert_equal 10, ctx.metadata[:available]
+      assert_equal 50, ctx.metadata[:required]
+      assert_equal 0, ctx.metadata[:held]
+      assert_equal 0, ctx.metadata[:reserved]
+    end
+  end
+
   test "multiple callbacks can be configured for different events" do
     added_events = []
     deducted_events = []
@@ -215,9 +240,8 @@ class WalletCallbacksIntegrationTest < ActiveSupport::TestCase
       current_period_end: 1.month.from_now
     )
 
-    # Wait for initial setup callback
+    # Ignore the initial setup callback; this assertion targets the upgrade.
     events.clear
-    initial_balance = @user.credit_wallet.reload.credits
 
     # Check if fulfillment was created
     fulfillment = UsageCredits::Fulfillment.find_by(source: subscription)

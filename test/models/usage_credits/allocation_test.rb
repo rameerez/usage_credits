@@ -8,8 +8,12 @@ class UsageCredits::AllocationTest < ActiveSupport::TestCase
   # ========================================
 
   test "creates allocation linking spend to source" do
-    spend_tx = usage_credits_transactions(:rich_spent_credit)
     source_tx = usage_credits_transactions(:rich_initial_credit)
+    spend_tx = UsageCredits::Transaction.create!(
+      wallet: source_tx.wallet,
+      amount: -50,
+      category: :operation_charge
+    )
 
     allocation = UsageCredits::Allocation.create!(
       spend_transaction: spend_tx,
@@ -150,7 +154,7 @@ class UsageCredits::AllocationTest < ActiveSupport::TestCase
   # NOTE: The validation runs differently on create vs subsequent valid? calls
   # After creation, the allocation is included in the source's allocated_amount,
   # making remaining_amount drop, which causes the validation to fail on subsequent checks
-  #test "allocation with exact remaining amount is valid" do
+  # test "allocation with exact remaining amount is valid" do
   #  source_tx = UsageCredits::Transaction.create!(
   #    wallet: usage_credits_wallets(:rich_wallet),
   #    amount: 100,
@@ -171,7 +175,7 @@ class UsageCredits::AllocationTest < ActiveSupport::TestCase
   #
   #  assert allocation.valid?
   #  assert_equal 0, source_tx.reload.remaining_amount
-  #end
+  # end
 
   test "zero amount allocation is invalid" do
     allocation = UsageCredits::Allocation.new(

@@ -12,7 +12,7 @@ class ApplicationController < ActionController::Base
   def reset_demo!
     if current_user
       # First delete the Pay::Customer which will cascade delete all Pay-related records
-      if pay_customer = current_user.payment_processor
+      if (pay_customer = current_user.payment_processor)
         pay_customer.destroy
       end
 

@@ -5,16 +5,9 @@ module UsageCredits
   class Engine < ::Rails::Engine
     isolate_namespace UsageCredits
 
-    # Ensure our models load first
-    config.autoload_paths << File.expand_path("../models", __dir__)
-    config.autoload_paths << File.expand_path("../models/concerns", __dir__)
-
-    # Set up autoloading paths
-    initializer "usage_credits.autoload", before: :set_autoload_paths do |app|
-      app.config.autoload_paths << root.join("lib")
-      app.config.autoload_paths << root.join("lib/usage_credits/models")
-      app.config.autoload_paths << root.join("lib/usage_credits/models/concerns")
-    end
+    # All gem code is required eagerly by lib/usage_credits.rb. Adding these
+    # directories to the host app's autoloaders would make Zeitwerk claim
+    # common top-level constants such as ::Wallet and ::Operation.
 
     # Add has_credits method to ActiveRecord::Base
     initializer "usage_credits.active_record" do
@@ -30,8 +23,11 @@ module UsageCredits
       end
     end
 
-    initializer "usage_credits.configs" do
-      # Initialize any config settings
+    initializer "usage_credits.action_view" do
+      ActiveSupport.on_load :action_view do
+        require "usage_credits/helpers/credits_helper"
+        include UsageCredits::CreditsHelper
+      end
     end
   end
 end

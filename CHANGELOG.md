@@ -1,3 +1,71 @@
+## [1.0.0] - Unreleased
+
+`usage_credits` is now built on top of [`wallets`](https://github.com/rameerez/wallets), our append-oriented, multi-asset ledger core. The credits-focused DX you know is unchanged — same `has_credits`, `spend_credits_on`, `give_credits`, packs, subscriptions, and Pay integration — but the expiration-aware allocation ledger, balance math, row-level locking, and transfer machinery now live in a shared, independently tested core.
+
+### Added
+
+- New runtime dependency: `wallets` (`~> 0.4.0`), installed automatically with the gem
+- Upgrade generator for existing installs: `rails generate usage_credits:upgrade` creates an in-place, re-runnable migration that preserves all existing ledger data. Before touching the schema it rejects duplicate owner wallets or fulfillment sources, partial polymorphic references, orphaned ledger or Pay sources, invalid ledger amounts/allocations, incompatible key types, reserved-index collisions, and interrupted transfer schemas with actionable diagnostics.
+- Wallet-to-wallet credit transfers via the underlying wallets layer (`usage_credits_transfers` table), with expiration-preserving semantics by default
+- `UsageCredits::Transfer` model, plus `transfer_in` / `transfer_out` transaction categories
+
+### Changed
+
+- **Schema** (handled by the upgrade migration for existing apps): wallets gain an `asset_code` column (default `"credits"`) and a `ledger_revision` counter (`bigint`, default `0`); one wallet per owner per asset is now enforced with a unique index; `balance` / `amount` / `credits_last_fulfillment` columns widen from `integer` to `bigint`; transactions gain a nullable `transfer_id` reference
+- `UsageCredits::Wallet`, `Transaction`, and `Allocation` now subclass the `wallets` core models via its embeddability hooks (same tables as before, prefixed `usage_credits_`)
+- Holds and reservations (new in `wallets` 0.4) are a wallets-level feature that `usage_credits` 1.0 does not expose. Credit wallets keep no holds and run no hold SQL, `credits` keeps its floored contract, and `credit(hold:)`, `credit(available_at:)`, `debit(from:)`, `hold` and `reserve` raise `Wallets::HoldsNotEnabled` on a credits wallet. Apps that need pending credits use `wallets` directly, side by side.
+- Every wallet command (`give_credits`, `add_credits`, `deduct_credits`, `spend_credits_on`, transfers, and the cancellation expiry and refund debits that Pay events trigger) runs in its own savepoint: a command that fails leaves no rows behind and reports no success callbacks, even when the caller rescues the error and commits. Inside `transaction(joinable: false)`, `credits_added`, `credits_deducted`, `low_balance_reached` and `balance_depleted` fire when that inner transaction completes, not at the outer commit.
+- `insufficient_credits` callbacks fired by `deduct_credits` and by transfers now carry `held:` and `reserved:` in their metadata, always `0` because credit wallets keep no holds; the one fired by `spend_credits_on` keeps its existing payload.
+- A refund webhook's clawback is one wallet command: what earlier refunds of the purchase already took and the debit for the rest are read and written under the wallet lock, at one instant, as the ledger is now, so two refund webhooks for one charge, or one handled inside a transaction that read the ledger first, never claw back the same credits twice.
+- `spend_credits_on` runs its block inside that savepoint, under the wallet lock, between the affordability check and the debit, which both read the ledger at the same instant. If the block raises, or the debit is refused (because the block itself spent the credits, say), the block's own database writes roll back with the command, even when the caller rescues the error and commits its transaction. Work outside the database, such as an API call or an email, cannot be rolled back.
+- With `allow_negative_balance` on and credit-pack refund debt outstanding, a `:preserve` transfer above `credits` that unexpired credits fully back now keeps their expirations instead of arriving evergreen: the fallback to a single evergreen credit (`:none`) follows the part of a transfer that is really unbacked, not the available balance.
+- Every ledger change increments the wallet row's new `ledger_revision`. On MySQL the wallets core compares it to tell a stale snapshot from a current one, so a command called after its transaction already read something no longer decides on stale balances, `spend_credits_on`'s affordability check and cancellation expiry included. It moves even when the balance does not, so read neither it nor `updated_at` as a balance change.
+- The wallets core's save-time `balance >= 0` validation is gone; commands enforce funding under the wallet lock instead. `credits` and the cached `balance` column both come from the floored `usage_credits` balance, so they stay at zero or above.
+- `credit` reserves the keywords `hold:` and `available_at:`, and `debit` reserves `from:`. They raise `Wallets::HoldsNotEnabled` instead of `ArgumentError`, and an app that added transaction columns by those names to `additional_transaction_attribute_names` can no longer pass them through.
+- Wallet creation now goes through the race-safe, idempotent `create_for_owner!` from the wallets core; an `initial_balance` is recorded as a proper ledger transaction (category `manual_adjustment`, reason `initial_balance`) instead of a bare column write, so initial balances are auditable
+- Payment and subscription terms are snapshotted at checkout/fulfillment time, so delayed webhooks, refunds, renewals, and plan changes never depend on mutable initializer configuration.
+- Credit-pack fulfillment/refunds and subscription fulfillment are serialized with row locks and database uniqueness constraints; successful callbacks are deferred until the outermost transaction commits.
+- Pay fulfillment hooks run only after create/update commits, never after destroy commits; deleting an eligible but unfulfilled processor record cannot mint credits against a dangling source.
+- Credit-pack refunds are cumulative, proportional, and idempotent under concurrent webhook delivery. If purchased credits were already spent, the refund records explicit credit debt instead of silently under-refunding; a never-fulfilled purchase cannot create debt.
+- Operations evaluate dynamic costs exactly once under the wallet lock, round once at the final operation boundary, and normalize fixed/dynamic credit amounts through one strict validation path. Free operations remain ledger-free while preserving the established callback contract.
+- `expire_after` now applies the snapshotted cancellation policy to credits created by that subscription, including after the configured plan is removed; unrelated credits are never shortened. The wallet owns this mutation and emits low-balance/depleted crossings when cancellation makes the expiration effective immediately.
+- Persisted fulfillment cadence is parsed through the same strict duration parser as configuration and is never permitted below one second, preventing malformed metadata or a zero-period retry loop.
+- Recurring Pay-backed fulfillment locks and re-checks the subscription before minting, fails closed for dangling Pay sources (including processor-specific STI type names) and unresolved plan transitions, and never awards while the processor subscription is trialing, paused, incomplete, or canceled.
+- The locked subscription freshness check canonicalizes processor timestamps to the database column precision. Sub-microsecond values from processor SDKs can no longer make a just-committed callback look stale and silently suppress the initial credit award.
+- Subscription lifecycle transactions now exit their blocks locally instead of using method-level `return`, preserving explicit commit semantics across the Rails 7.2-to-8.x behavior change; unrelated subscription updates also skip deferred-resume reconciliation queries.
+- Credit-wallet lookup now delegates cold-cache lookup and race recovery to the wallets core's single `create_for_owner!` path instead of querying the same owner/asset association first.
+- `transfer_to` and its backwards-compatible `transfer_credits_to` alias now share the complete expiration-policy signature and consistently translate core transfer failures into the `usage_credits` error hierarchy.
+- Effective processor pauses use Pay's processor-specific lifecycle predicate rather than raw status (Stripe can remain `"active"` while paused). Plan changes made during a pause are snapshotted without minting, reconciled before the first resumed fulfillment even if an after-commit callback was interrupted, and rejected fail-closed if the persisted terms are inconsistent.
+- Fresh and upgrade migrations add row-local ledger constraints and abort before schema changes when legacy rows violate amount, allocation, transfer, wallet, or fulfillment invariants.
+- Rails 7.2's transaction callback API is now required to prevent rolled-back ledger events.
+- Ruby 3.2 and Rails 7.2.3.1 are the minimum supported runtime versions. Current security-patched Rails dependency releases cannot be installed on Ruby 3.1, and earlier Rails 7.2 patch releases contain known vulnerabilities.
+- Pay 11.6.2 is now the minimum supported version. Earlier Pay releases are excluded because [GHSA-mjgf-xj26-9qf9](https://github.com/pay-rails/pay/security/advisories/GHSA-mjgf-xj26-9qf9) permits forged Paddle Billing webhooks through non-constant-time signature comparison.
+
+### Fixed
+
+- MySQL through Rails' Trilogy adapter is MySQL. The install and upgrade migrations now leave JSON columns without a default under it, as MySQL 8 requires, and the Pay charge fulfilment and refund lookups ask MySQL's JSON functions under it. Before, Trilogy took the SQLite paths: the migrations failed on MySQL 8, and the refund lookup compared MySQL's JSON `true` with the number `1`, which never matches, so every refund webhook saw nothing refunded before it and deducted the refunded total again, a repeated or partial refund included.
+
+### Preserved public surface
+
+- The established entry points remain: `credits`, `credit_history`, `give_credits`, `spend_credits_on`, `has_enough_credits_to?`, `estimate_credits_to`, `add_credits`, `deduct_credits`, callbacks, categories, scopes, and the Pay integration.
+- Negative balances still floor to zero in `credits` (the wallets core can represent overdrafts, but `usage_credits` keeps its historical contract)
+- `usage_credits` stays single-asset (`"credits"`) by design — multi-asset apps can use the `wallets` gem directly, side by side, including in the same app
+
+### Tests
+
+- The suite now contains 856 runs / 2,564 assertions, including adversarial coverage for concurrent fulfillment/refund delivery, stale processor records, processor timestamp precision, processor pauses/resumes, transfer API/error compatibility, cross-gem isolation, the `wallets` 0.4 boundary (no hold command or hold query reaches a credits wallet, and every mutation path increments `ledger_revision`), stale MySQL snapshots raced across two real connections for `spend_credits_on`, cancellation expiry and refund webhooks (on PostgreSQL and MySQL; SQLite serializes writers), the committed dummy schema against its migrations, destroy callbacks, immutable commercial terms, cancellation expiration and threshold callbacks, malformed persisted cadence, centralized cost normalization, one-time compound rounding, interrupted upgrades, and database constraints.
+- Compatibility coverage includes Ruby 3.2 across both the Rails 7.2 and Rails 8.1 boundaries, Ruby 3.3/3.4/4.0 across Rails 7.2/8.1 and both the Pay 11.6.2 security floor and latest compatible Pay release, plus clean migrations and the full suite on SQLite, PostgreSQL, and MySQL. PostgreSQL and MySQL each run both the default dependency graph and the literal Ruby 3.2 / Rails 7.2 / Pay 11.6.2 minimum boundary.
+- CI audits every supported dependency bundle against the latest `ruby-advisory-db` before release.
+- The development Gemfile and the appraisal gemfiles pin `receipts` to `~> 2`. Every Pay 11 release raises at boot with receipts 3.0.0, so an unpinned fresh bundle could not load the test app.
+
+### Upgrade instructions
+
+1. Release or install `wallets` 0.4.x first; `usage_credits` 1.0 will not resolve against 0.3.x or earlier. If your app also uses `wallets` directly, run `rails generate wallets:upgrade` and migrate its own tables before deploying: `wallets` 0.4 raises on every `Wallets::Wallet` balance read until its holds table exists, and on every command until both the holds table and the `ledger_revision` column exist.
+2. Update `usage_credits`, then run `rails generate usage_credits:upgrade`.
+3. Review the generated migration and **back up your database** (the migration is not reversible).
+4. Run the migration against a production snapshot, resolve every preflight failure, and measure its locking window before deployment. On PostgreSQL, locks acquired across all ledger DDL are held until the whole migration commits.
+5. Deploy the gem update and `rails db:migrate` together — the 1.0 models expect the upgraded schema.
+
 ## [0.5.0] - 2026-03-15
 
 - Add configurable transaction categories via `config.additional_categories` for money-like wallet use cases (marketplaces, fintech) by @rameerez in https://github.com/rameerez/usage_credits/pull/29

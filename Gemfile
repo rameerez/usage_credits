@@ -5,15 +5,23 @@ source "https://rubygems.org"
 # Runtime dependencies are specified in usage_credits.gemspec
 gemspec
 
+# Ecosystem development can test an unreleased wallets version without
+# weakening the runtime gemspec constraint. CI/release builds omit this and
+# resolve the published dependency normally.
+if ENV["WALLETS_PATH"]
+  gem "wallets", path: File.expand_path(ENV.fetch("WALLETS_PATH"), __dir__)
+end
+
 # Build & release tools
 gem "rake", "~> 13.0"
 
 group :development do
   gem "appraisal"
+  gem "bundler-audit", "~> 0.9"
   gem "web-console"
 
   # Code quality
-  gem "standard"
+  gem "standard", ">= 1.35.1"
   gem "rubocop", "~> 1.0"
   gem "rubocop-minitest", "~> 0.35"
   gem "rubocop-performance", "~> 1.0"
@@ -34,10 +42,11 @@ group :test do
 
   # Receipts
   gem "prawn"
-  gem "receipts"
+  # Pay 11 requires receipts ~> 2; receipts 3.0.0 makes it raise at boot.
+  gem "receipts", "~> 2"
 
   # Database adapters (for multi-database testing)
-  gem "sqlite3"
+  gem "sqlite3", ">= 2.9.5"
   gem "pg"
   gem "mysql2"
 

@@ -89,10 +89,10 @@ class BackwardCompatibilityTest < ActiveSupport::TestCase
     second_output = capture_io { UsageCredits.handle_event(:low_balance_reached, wallet: @user.credit_wallet) }
 
     # First call should have deprecation warning
-    assert_match /DEPRECATION/, first_output[1]
+    assert_match(/DEPRECATION/, first_output[1])
 
     # Second call should NOT have warning (already warned)
-    refute_match /DEPRECATION/, second_output[1]
+    refute_match(/DEPRECATION/, second_output[1])
   end
 
   test "reset! clears deprecation warnings" do
@@ -102,7 +102,7 @@ class BackwardCompatibilityTest < ActiveSupport::TestCase
 
     # First call - should warn
     first_output = capture_io { UsageCredits.handle_event(:low_balance_reached, wallet: @user.credit_wallet) }
-    assert_match /DEPRECATION/, first_output[1]
+    assert_match(/DEPRECATION/, first_output[1])
 
     # Reset
     UsageCredits.reset!
@@ -114,6 +114,6 @@ class BackwardCompatibilityTest < ActiveSupport::TestCase
 
     # Should warn again after reset
     after_reset_output = capture_io { UsageCredits.handle_event(:low_balance_reached, wallet: @user.credit_wallet) }
-    assert_match /DEPRECATION/, after_reset_output[1]
+    assert_match(/DEPRECATION/, after_reset_output[1])
   end
 end

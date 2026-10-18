@@ -31,12 +31,7 @@ module UsageCredits
       protected
 
       def validate_amount!(amount)
-        unless amount == amount.to_i
-          raise ArgumentError, "Credit amount must be a whole number (got: #{amount})"
-        end
-        if amount.negative?
-          raise ArgumentError, "Credit amount cannot be negative (got: #{amount})"
-        end
+        CreditCalculator.normalize_credit_amount(amount)
       end
     end
   end

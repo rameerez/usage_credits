@@ -31,20 +31,19 @@ jobs:
             label: rails-7.2
           - path: gemfiles/rails_8.1.gemfile
             label: rails-8.1
+          - path: gemfiles/pay_11.gemfile
+            label: pay-11
           - path: gemfiles/pay_minimum.gemfile
             label: pay-minimum
         include:
           # Exercise both Rails boundaries on the minimum secure Ruby line.
+          # Pay 12's paddle ~> 3 needs Ruby 3.3+, so Ruby 3.2 runs on Pay 11:
+          # pay-11 is the Rails 8.1 boundary, pay-minimum the Rails 7.2 one and
+          # the literal minimum Ruby/Rails/Pay set.
           - ruby_version: "3.2"
             gemfile:
-              path: gemfiles/rails_7.2.gemfile
-              label: rails-7.2
-          - ruby_version: "3.2"
-            gemfile:
-              path: gemfiles/rails_8.1.gemfile
-              label: rails-8.1
-          # Also exercise the literal minimum runtime/dependency pair, not just
-          # each minimum independently in newer combinations.
+              path: gemfiles/pay_11.gemfile
+              label: pay-11
           - ruby_version: "3.2"
             gemfile:
               path: gemfiles/pay_minimum.gemfile
@@ -98,6 +97,8 @@ jobs:
             label: rails-7.2
           - path: gemfiles/rails_8.1.gemfile
             label: rails-8.1
+          - path: gemfiles/pay_11.gemfile
+            label: pay-11
           - path: gemfiles/pay_minimum.gemfile
             label: pay-minimum
 
@@ -142,7 +143,7 @@ jobs:
           # Ruby/Rails/Pay boundary, not only the modern dependency graph.
           - ruby_version: "3.2"
             gemfile:
-              path: gemfiles/rails_7.2.gemfile
+              path: gemfiles/pay_minimum.gemfile
               label: minimum
 
     services:
@@ -210,7 +211,7 @@ jobs:
           # Ruby/Rails/Pay boundary, not only the modern dependency graph.
           - ruby_version: "3.2"
             gemfile:
-              path: gemfiles/rails_7.2.gemfile
+              path: gemfiles/pay_minimum.gemfile
               label: minimum
 
     services:

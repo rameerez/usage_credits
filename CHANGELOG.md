@@ -1,3 +1,15 @@
+## [Unreleased]
+
+### Added
+
+- Pay 12 support: the `pay` dependency is now `>= 11.6.2, < 13.0`. Pay 12 raises at boot unless your processor gems match it, so moving to Pay 12 also means `stripe ~> 20` (from `~> 19`) and, if you use Paddle, `paddle ~> 3` (from `~> 2.5`) in your own Gemfile. `paddle` 3 requires Ruby 3.3+. No `usage_credits` code or schema change is needed: Pay 12 ships no new migrations, and the subscription extension already treats Lemon Squeezy's `on_trial` (Pay 11) and `trialing` (Pay 12) as the same trial state.
+- On Pay 12, Lemon Squeezy cancellations reach the cancellation handling: the fulfillment gets its `stops_at`, and plans that expire credits on cancel expire them. Pay 11 stores Lemon Squeezy's status as `cancelled`, which the extension's `canceled` check never matched; Pay 12 normalizes it to `canceled`.
+
+### Tests
+
+- CI runs the suite against Pay 12 (Rails 7.2 and 8.1), the latest Pay 11 (new `pay-11` appraisal, Rails 8.1) and the Pay 11.6.2 floor. Pay 12's `paddle ~> 3` needs Ruby 3.3+, so Ruby 3.2 runs on the Pay 11 bundles; `pay-minimum` now pins Rails 7.2 and is the literal Ruby 3.2 / Rails 7.2 / Pay 11.6.2 minimum that the PostgreSQL and MySQL minimum jobs run.
+- The development Gemfile adds `ostruct`: braintree requires it without declaring it, Ruby 4.0 no longer ships it as a default gem, and `paddle` 3 no longer pulls it in.
+
 ## [1.1.1] - 2026-10-19
 
 ### Fixed

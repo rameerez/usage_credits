@@ -35,10 +35,14 @@ group :test do
   gem "webmock"
 
   # Payment processors (for testing Pay integration)
-  # Note: stripe version is specified in Appraisals per Pay version
+  # Note: stripe version is specified in Appraisals per Pay version. Pay 12
+  # requires paddle ~> 3 (Ruby 3.3+); the Pay 11 appraisals override it to ~> 2.6.
   gem "braintree", ">= 2.92.0"
   gem "lemonsqueezy", "~> 1.0"
-  gem "paddle", "~> 2.6"
+  gem "paddle", "~> 3.0"
+  # braintree requires ostruct without declaring it, and Ruby 4.0 no longer
+  # ships it as a default gem. paddle 2.x used to pull it in transitively.
+  gem "ostruct"
 
   # Receipts
   gem "prawn"

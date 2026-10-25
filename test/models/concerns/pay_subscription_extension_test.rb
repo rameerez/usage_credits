@@ -71,6 +71,19 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
         unused_credits :expire
       end
 
+      config.subscription_plan :lemon_expiring do
+        processor_plan(:lemon_squeezy, "lemon_expiring")
+        gives 500.credits.every(:month)
+        unused_credits :rollover
+        expire_after 0.days
+      end
+
+      config.subscription_plan :lemon_daily do
+        processor_plan(:lemon_squeezy, "lemon_daily")
+        gives 10.credits.every(:day)
+        unused_credits :rollover
+      end
+
       config.subscription_plan :paddle_pause_pro do
         processor_plan(:paddle_billing, "paddle_pause_pro")
         gives 500.credits.every(:month)
@@ -232,70 +245,154 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
   # PROCESSOR STATES ACROSS PAY 11 AND PAY 12
   # ========================================
   #
-  # Pay 12 changed how some processors record a subscription's state. These
-  # tests pin how the extension reads each of those states, and they pass on
-  # both Pay lines.
+  # Pay 12 records some processor states differently from Pay 11. The Lemon
+  # Squeezy tests go through Pay's own sync, so each Pay line maps the
+  # processor's statuses itself. Where the two lines differ, the
+  # expectations branch on the Pay version.
 
-  test "processor trialing status receives only its trial credits" do
-    # Pay 12 records Lemon Squeezy's on_trial as trialing.
-    wallet, customer = processor_subscription_context(:lemon_squeezy, "lemon-trialing")
+  test "Lemon Squeezy trial syncs as a trial and receives only its trial credits" do
+    wallet, customer = processor_subscription_context(:lemon_squeezy, "lemon-trial-sync")
     subscription = nil
 
     assert_difference -> { wallet.reload.credits }, 75 do
-      subscription = create_processor_subscription(
-        Pay::LemonSqueezy::Subscription,
-        customer,
-        processor_plan: "lemon_trial",
-        status: "trialing",
-        trial_ends_at: 1.week.from_now
-      )
+      subscription = sync_lemon_squeezy(customer, status: "on_trial", plan: "lemon_trial", trial_ends_at: 1.week.from_now)
     end
 
+    assert_equal pay_at_least?("12") ? "trialing" : "on_trial", subscription.status
     assert subscription.eligible_for_usage_credit_fulfillment?(include_trial: true)
     assert_not subscription.eligible_for_usage_credit_fulfillment?
     assert_equal "trial", UsageCredits::Fulfillment.find_by!(source: subscription).metadata["initial_award_state"]
     assert_equal 0, wallet.transactions.where(category: "subscription_credits").count
   end
 
-  test "Lemon Squeezy canceled status stops fulfillment" do
-    # Pay 12 records Lemon Squeezy's cancelled as canceled, the spelling the
-    # cancellation callback matches.
-    _wallet, customer = processor_subscription_context(:lemon_squeezy, "lemon-canceled")
-    subscription = create_processor_subscription(
-      Pay::LemonSqueezy::Subscription,
-      customer,
-      processor_plan: "lemon_trial",
-      status: "active"
-    )
+  test "Lemon Squeezy cancel request and resume keep the credits and their expiry" do
+    # Lemon Squeezy records the cancel request at once, and the customer can
+    # resume until ends_at. The credit expiry cannot be undone, so it must
+    # wait for the end.
+    wallet, customer = processor_subscription_context(:lemon_squeezy, "lemon-uncancel")
+    ends_at = 20.days.from_now
+    subscription = sync_lemon_squeezy(customer, status: "active", plan: "lemon_expiring", renews_at: ends_at)
     fulfillment = UsageCredits::Fulfillment.find_by!(source: subscription)
-    assert_nil fulfillment.stops_at
+    assert_equal 500, wallet.reload.credits
 
-    ends_at = 1.day.from_now
-    subscription.update!(status: "canceled", ends_at: ends_at)
+    subscription = sync_lemon_squeezy(customer, id: subscription.processor_id, status: "cancelled",
+      plan: "lemon_expiring", renews_at: ends_at, ends_at: ends_at)
 
-    assert_in_delta ends_at.to_i, fulfillment.reload.stops_at.to_i, 1
+    assert_equal pay_at_least?("12") ? "canceled" : "cancelled", subscription.status
+    assert subscription.eligible_for_usage_credit_fulfillment?
+    assert_nil fulfillment.reload.metadata["cancellation_credit_expiration_at"]
+    assert_equal [nil], wallet.transactions.where(fulfillment: fulfillment).distinct.pluck(:expires_at)
+
+    subscription = sync_lemon_squeezy(customer, id: subscription.processor_id, status: "active",
+      plan: "lemon_expiring", renews_at: ends_at)
+
+    assert_equal "active", subscription.status
+    assert_nil fulfillment.reload.metadata["cancellation_credit_expiration_at"]
+    assert_equal [nil], wallet.transactions.where(fulfillment: fulfillment).distinct.pluck(:expires_at)
+    travel_to ends_at + 1.hour do
+      assert_equal 500, wallet.reload.credits
+    end
   end
 
-  test "Lemon Squeezy cancelled status from Pay 11 is not eligible for credits" do
-    # Pay 11 recorded Lemon Squeezy's own spelling. The cancellation callback
-    # does not match it, but the recurring fulfillment still awards nothing.
-    _wallet, customer = processor_subscription_context(:lemon_squeezy, "lemon-cancelled")
-    subscription = create_processor_subscription(
-      Pay::LemonSqueezy::Subscription,
-      customer,
-      processor_plan: "lemon_trial",
-      status: "active"
-    )
+  test "Lemon Squeezy expired status after a cancellation runs the cancellation handling" do
+    wallet, customer = processor_subscription_context(:lemon_squeezy, "lemon-expired")
+    ends_at = 20.days.from_now
+    subscription = sync_lemon_squeezy(customer, status: "active", plan: "lemon_expiring", renews_at: ends_at)
+    fulfillment = UsageCredits::Fulfillment.find_by!(source: subscription)
+    subscription = sync_lemon_squeezy(customer, id: subscription.processor_id, status: "cancelled",
+      plan: "lemon_expiring", renews_at: ends_at, ends_at: ends_at)
+    assert_equal 500, wallet.reload.credits
 
-    subscription.update!(status: "cancelled", ends_at: 1.day.ago)
+    travel_to ends_at + 1.minute do
+      subscription = sync_lemon_squeezy(customer, id: subscription.processor_id, status: "expired",
+        plan: "lemon_expiring", ends_at: ends_at)
 
+      assert_equal "expired", subscription.status
+      assert_not subscription.eligible_for_usage_credit_fulfillment?(include_trial: true)
+      fulfillment.reload
+      assert_in_delta ends_at.to_i, fulfillment.stops_at.to_i, 1
+      assert_in_delta ends_at.to_i, fulfillment.metadata["cancellation_credit_expiration_at"].to_time.to_i, 1
+      assert_equal 0, wallet.reload.credits
+    end
+  end
+
+  test "Lemon Squeezy failed dunning that ends in expired runs the cancellation handling" do
+    wallet, customer = processor_subscription_context(:lemon_squeezy, "lemon-dunning")
+    renews_at = 20.days.from_now
+    subscription = sync_lemon_squeezy(customer, status: "active", plan: "lemon_expiring", renews_at: renews_at)
+    fulfillment = UsageCredits::Fulfillment.find_by!(source: subscription)
+    assert_equal 500, wallet.reload.credits
+
+    %w[past_due unpaid].each do |status|
+      subscription = sync_lemon_squeezy(customer, id: subscription.processor_id, status: status,
+        plan: "lemon_expiring", renews_at: renews_at)
+      assert_nil fulfillment.reload.metadata["cancellation_credit_expiration_at"]
+    end
+
+    ends_at = 1.minute.ago
+    subscription = sync_lemon_squeezy(customer, id: subscription.processor_id, status: "expired",
+      plan: "lemon_expiring", ends_at: ends_at)
+
+    assert_in_delta ends_at.to_i, fulfillment.reload.metadata["cancellation_credit_expiration_at"].to_time.to_i, 1
+    assert_equal 0, wallet.reload.credits
+  end
+
+  test "Lemon Squeezy subscription keeps its recurring credits until a cancellation takes effect" do
+    # Stripe and Paddle keep the status active until the end of the paid
+    # period, so their recurring credits continue. Lemon Squeezy must too.
+    wallet, customer = processor_subscription_context(:lemon_squeezy, "lemon-grace")
+    ends_at = 3.days.from_now
+    subscription = sync_lemon_squeezy(customer, status: "active", plan: "lemon_daily", renews_at: 1.month.from_now)
+    assert_equal 10, wallet.reload.credits
+
+    subscription = sync_lemon_squeezy(customer, id: subscription.processor_id, status: "cancelled",
+      plan: "lemon_daily", renews_at: ends_at, ends_at: ends_at)
+    fulfillment = UsageCredits::Fulfillment.find_by!(source: subscription)
+
+    travel_to 1.day.from_now + 1.minute do
+      assert_difference -> { wallet.reload.credits }, 10 do
+        UsageCredits::FulfillmentService.new(fulfillment.reload).process
+      end
+    end
+
+    travel_to ends_at + 1.minute do
+      assert_not subscription.reload.eligible_for_usage_credit_fulfillment?
+      assert_no_difference -> { wallet.reload.credits } do
+        UsageCredits::FulfillmentService.new(fulfillment.reload).process
+      end
+    end
+  end
+
+  test "Lemon Squeezy pause written by Pay 11 stops blocking credits after the resume" do
+    # Pay 11 kept the pause's resume time in pause_starts_at. Pay 12 writes
+    # pause_resumes_at and never clears the old column.
+    wallet, customer = processor_subscription_context(:lemon_squeezy, "lemon-pause")
+    resumes_at = 3.days.from_now
+    subscription = sync_lemon_squeezy(customer, status: "active", plan: "lemon_daily", renews_at: 1.month.from_now)
+    fulfillment = UsageCredits::Fulfillment.find_by!(source: subscription)
+
+    subscription = sync_lemon_squeezy(customer, id: subscription.processor_id, status: "paused",
+      plan: "lemon_daily", renews_at: 1.month.from_now, resumes_at: resumes_at)
     assert_not subscription.eligible_for_usage_credit_fulfillment?(include_trial: true)
+    # The row as Pay 11 left it at upgrade time.
+    subscription.update_columns(pause_starts_at: resumes_at) if pay_at_least?("12")
+
+    travel_to resumes_at + 1.day do
+      subscription = sync_lemon_squeezy(customer, id: subscription.processor_id, status: "active",
+        plan: "lemon_daily", renews_at: 1.month.from_now)
+
+      assert_equal pay_at_least?("12"), subscription.pause_starts_at.present?
+      assert subscription.eligible_for_usage_credit_fulfillment?
+      assert_difference -> { wallet.reload.credits }, 10 do
+        UsageCredits::FulfillmentService.new(fulfillment.reload).process
+      end
+    end
   end
 
   test "scheduled Paddle Billing pause awards credits until the pause starts" do
-    # Pay 12 keeps a Paddle Billing subscription active while a pause is
-    # scheduled and answers paused? for it. Pay 11 answers paused? only once
-    # the status is paused.
+    # Pay 12.2 keeps a Paddle Billing subscription active while a pause is
+    # scheduled and answers paused? for it. Before 12.2, Pay answers paused?
+    # only once the status is paused.
     wallet, customer = processor_subscription_context(:paddle_billing, "paddle-scheduled-pause")
     pause_starts_at = 1.day.from_now
     subscription = nil
@@ -312,6 +409,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
       )
     end
 
+    assert_equal pay_at_least?("12.2"), subscription.paused?
     assert subscription.eligible_for_usage_credit_fulfillment?
 
     travel_to pause_starts_at + 1.second do
@@ -321,7 +419,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
 
   test "Stripe paused status after a trial awards no credits" do
     # Stripe pauses a subscription whose trial ends without a payment method.
-    # Pay 12 answers paused? for that status; Pay 11 does not.
+    # Pay 12.2 answers paused? for that status; earlier Pay does not.
     wallet, customer = stripe_subscription_context("stripe-trial-paused")
     subscription = create_stripe_subscription(
       customer,
@@ -334,6 +432,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
       subscription.update!(status: "paused", trial_ends_at: 1.minute.ago)
     end
 
+    assert_equal pay_at_least?("12.2"), subscription.paused?
     assert_not subscription.eligible_for_usage_credit_fulfillment?(include_trial: true)
     assert_equal 0, wallet.transactions.where(category: "subscription_credits").count
   end
@@ -3657,6 +3756,32 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     )
 
     [user.credit_wallet, customer]
+  end
+
+  def pay_at_least?(version)
+    Gem::Version.new(Pay::VERSION) >= Gem::Version.new(version)
+  end
+
+  # Syncs a subscription through Pay's own Lemon Squeezy mapping, as a webhook
+  # does, from the attributes that the Lemon Squeezy API returns.
+  def sync_lemon_squeezy(customer, status:, plan:, id: nil, renews_at: nil, ends_at: nil, trial_ends_at: nil, resumes_at: nil)
+    id ||= SecureRandom.random_number(10**9).to_s
+    object = LemonSqueezy::Subscription.new(
+      "id" => id,
+      "attributes" => {
+        "customer_id" => customer.processor_id,
+        "status" => status,
+        "renews_at" => renews_at&.iso8601,
+        "ends_at" => ends_at&.iso8601,
+        "trial_ends_at" => trial_ends_at&.iso8601,
+        "pause" => (resumes_at ? {"mode" => "void", "resumes_at" => resumes_at.iso8601} : nil),
+        "first_subscription_item" => {"price_id" => plan, "quantity" => 1},
+        "created_at" => 1.month.ago.iso8601,
+        "updated_at" => Time.current.iso8601
+      }
+    )
+
+    Pay::LemonSqueezy::Subscription.sync(id, object: object)
   end
 
   def create_processor_subscription(subscription_class, customer, processor_plan:, **attributes)

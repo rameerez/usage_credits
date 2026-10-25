@@ -4,9 +4,10 @@
 # WALLETS_PATH hook for coordinated pre-release CI. Appraisal cannot emit that
 # runtime conditional itself, so preserve the postamble when regenerating.
 
-# Pay checks processor gem versions at boot: Pay 12 requires stripe ~> 20 and
-# paddle ~> 3 (from the root Gemfile), Pay 11 requires stripe ~> 19 and
-# paddle ~> 2.5. paddle 3 needs Ruby 3.3+, so Ruby 3.2 runs the Pay 11 bundles.
+# Pay checks processor gem versions at boot: Pay 12.3 requires stripe ~> 20 and
+# paddle ~> 3 (from the root Gemfile), so the Pay 12 bundles resolve Pay 12.3.
+# Pay 11 (like Pay 12.0 to 12.2) requires stripe ~> 19 and paddle ~> 2.5.
+# paddle 3 needs Ruby 3.3+, so Ruby 3.2 runs the Pay 11 bundles.
 
 # Test minimum supported Rails version (with latest Pay)
 appraise "rails-7.2" do

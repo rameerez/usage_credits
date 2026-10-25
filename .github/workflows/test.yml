@@ -37,7 +37,7 @@ jobs:
             label: pay-minimum
         include:
           # Exercise both Rails boundaries on the minimum secure Ruby line.
-          # Pay 12's paddle ~> 3 needs Ruby 3.3+, so Ruby 3.2 runs on Pay 11:
+          # Pay 12.3's paddle ~> 3 needs Ruby 3.3+, so Ruby 3.2 runs on Pay 11:
           # pay-11 is the Rails 8.1 boundary, pay-minimum the Rails 7.2 one and
           # the literal minimum Ruby/Rails/Pay set.
           - ruby_version: "3.2"

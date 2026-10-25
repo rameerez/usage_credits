@@ -35,7 +35,7 @@ group :test do
   gem "webmock"
 
   # Payment processors (for testing Pay integration)
-  # Note: stripe version is specified in Appraisals per Pay version. Pay 12
+  # Note: stripe version is specified in Appraisals per Pay version. Pay 12.3
   # requires paddle ~> 3 (Ruby 3.3+); the Pay 11 appraisals override it to ~> 2.6.
   gem "braintree", ">= 2.92.0"
   gem "lemonsqueezy", "~> 1.0"

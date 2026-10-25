@@ -21,7 +21,7 @@ All with a simple DSL that reads just like English.
 
 - Ruby 3.2+ and Rails 7.2.3.1–8.x. Ruby 3.2 is the security floor because current patched versions of transitive Rails dependencies no longer support Ruby 3.1.
 - An ActiveJob backend (Sidekiq, `solid_queue`, etc.) for subscription credit fulfillment
-- [`pay`](https://github.com/pay-rails/pay) 11.6.2–12.x for payment integration. Pay 11.6.2 is the security floor because it fixes [GHSA-mjgf-xj26-9qf9](https://github.com/pay-rails/pay/security/advisories/GHSA-mjgf-xj26-9qf9). Pay 12 requires `stripe ~> 20` and `paddle ~> 3` (if you use them) instead of Pay 11's `stripe ~> 19` and `paddle ~> 2.5`.
+- [`pay`](https://github.com/pay-rails/pay) 11.6.2–12.x for payment integration. Pay 11.6.2 is the security floor because it fixes [GHSA-mjgf-xj26-9qf9](https://github.com/pay-rails/pay/security/advisories/GHSA-mjgf-xj26-9qf9). Pay 12.3 requires `stripe ~> 20` and, for Paddle, `paddle ~> 3` (Ruby 3.3+); Pay 11 and Pay 12.0–12.2 require `stripe ~> 19` and `paddle ~> 2.5`. If you use Lemon Squeezy, read the note on Pay 12 in the [CHANGELOG](CHANGELOG.md) before you run Pay's one-time row update.
 - [`wallets`](https://github.com/rameerez/wallets) 0.4.2 or any later 0.4.x (installed automatically as the ledger core)
 
 ## 👨‍💻 Example

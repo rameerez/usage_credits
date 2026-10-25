@@ -1,13 +1,18 @@
-## [Unreleased]
+## [1.2.0] - Unreleased
 
 ### Added
 
-- Pay 12 support: the `pay` dependency is now `>= 11.6.2, < 13.0`. Pay 12 raises at boot unless your processor gems match it, so moving to Pay 12 also means `stripe ~> 20` (from `~> 19`) and, if you use Paddle, `paddle ~> 3` (from `~> 2.5`) in your own Gemfile. `paddle` 3 requires Ruby 3.3+. No `usage_credits` code or schema change is needed: Pay 12 ships no new migrations, and the subscription extension already treats Lemon Squeezy's `on_trial` (Pay 11) and `trialing` (Pay 12) as the same trial state.
-- On Pay 12, Lemon Squeezy cancellations reach the cancellation handling: the fulfillment gets its `stops_at`, and plans that expire credits on cancel expire them. Pay 11 stores Lemon Squeezy's status as `cancelled`, which the extension's `canceled` check never matched; Pay 12 normalizes it to `canceled`.
+- **Pay 12 support.** The `pay` dependency is now `>= 11.6.2, < 13.0`. Pay checks processor gem versions at boot: Pay 12.3 needs `stripe ~> 20` (from `~> 19`) and, if you use Paddle, `paddle ~> 3` (from `~> 2.5`) in your own Gemfile, and `paddle` 3 requires Ruby 3.3+. Pay 12.0 to 12.2 keep Pay 11's `stripe` and `paddle` versions. No `usage_credits` code or schema change is needed: Pay 12 ships no new migrations, and the subscription extension already reads every state Pay 12 records. Lemon Squeezy's `on_trial` (Pay 11) and `trialing` (Pay 12) are the same trial state, a scheduled Paddle Billing pause keeps awarding credits until it starts, and a Stripe subscription that Stripe pauses at the end of a trial without a payment method awards none. Based on #47 by @krzyzak.
+
+### Changed
+
+- **On Pay 12, Lemon Squeezy cancellations run the cancellation handling.** Pay 11 recorded Lemon Squeezy's status as `cancelled`, which the extension's `canceled` check never matched. Those subscriptions stopped getting credits, because they were no longer active, but their fulfillment never got its `stops_at`, and plans with `expire_after` never expired their credits. Pay 12 records `canceled`, so the fulfillment now stops, and plans with `expire_after` expire the subscription's credits as configured.
+- **Pay's one-time Lemon Squeezy row update runs that handling for old cancellations.** Pay's [12.0 upgrade guide](https://github.com/pay-rails/pay/blob/main/UPGRADE.md#lemon-squeezy) gives two ways to rewrite the rows that Pay 11 synced. `Pay::LemonSqueezy::Subscription.find_each(&:sync!)` saves each row with callbacks, so every subscription cancelled under Pay 11 gets its fulfillment stopped, and on plans with `expire_after` its credits expire at the old `ends_at` plus the grace period, which is often at once. The `update_all` variant skips callbacks and leaves those fulfillments and credits as they are. Pick the one that matches what you promised those customers.
 
 ### Tests
 
-- CI runs the suite against Pay 12 (Rails 7.2 and 8.1), the latest Pay 11 (new `pay-11` appraisal, Rails 8.1) and the Pay 11.6.2 floor. Pay 12's `paddle ~> 3` needs Ruby 3.3+, so Ruby 3.2 runs on the Pay 11 bundles; `pay-minimum` now pins Rails 7.2 and is the literal Ruby 3.2 / Rails 7.2 / Pay 11.6.2 minimum that the PostgreSQL and MySQL minimum jobs run.
+- CI runs the suite against Pay 12.3 (Rails 7.2 and 8.1), the latest Pay 11 (new `pay-11` appraisal, Rails 8.1) and the Pay 11.6.2 floor. Pay 12.3's `paddle ~> 3` needs Ruby 3.3+, so Ruby 3.2 runs on the Pay 11 bundles; `pay-minimum` now pins Rails 7.2 and is the literal Ruby 3.2 / Rails 7.2 / Pay 11.6.2 minimum that the PostgreSQL and MySQL minimum jobs run.
+- New tests pin how the subscription extension reads the states that Pay 12 records differently: Lemon Squeezy `trialing` and `canceled`, a scheduled Paddle Billing pause, and Stripe's `paused` status after a trial. They pass on Pay 11 and Pay 12.
 - The development Gemfile adds `ostruct`: braintree requires it without declaring it, Ruby 4.0 no longer ships it as a default gem, and `paddle` 3 no longer pulls it in.
 
 ## [1.1.1] - 2026-10-19

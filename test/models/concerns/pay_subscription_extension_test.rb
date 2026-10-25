@@ -70,6 +70,13 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
         trial_includes 75.credits
         unused_credits :expire
       end
+
+      config.subscription_plan :paddle_pause_pro do
+        processor_plan(:paddle_billing, "paddle_pause_pro")
+        gives 500.credits.every(:month)
+        signup_bonus 100.credits
+        unused_credits :expire
+      end
     end
   end
 
@@ -218,6 +225,116 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     assert subscription.eligible_for_usage_credit_fulfillment?(include_trial: true)
     assert_not subscription.eligible_for_usage_credit_fulfillment?
     assert_equal "trial", UsageCredits::Fulfillment.find_by!(source: subscription).metadata["initial_award_state"]
+    assert_equal 0, wallet.transactions.where(category: "subscription_credits").count
+  end
+
+  # ========================================
+  # PROCESSOR STATES ACROSS PAY 11 AND PAY 12
+  # ========================================
+  #
+  # Pay 12 changed how some processors record a subscription's state. These
+  # tests pin how the extension reads each of those states, and they pass on
+  # both Pay lines.
+
+  test "processor trialing status receives only its trial credits" do
+    # Pay 12 records Lemon Squeezy's on_trial as trialing.
+    wallet, customer = processor_subscription_context(:lemon_squeezy, "lemon-trialing")
+    subscription = nil
+
+    assert_difference -> { wallet.reload.credits }, 75 do
+      subscription = create_processor_subscription(
+        Pay::LemonSqueezy::Subscription,
+        customer,
+        processor_plan: "lemon_trial",
+        status: "trialing",
+        trial_ends_at: 1.week.from_now
+      )
+    end
+
+    assert subscription.eligible_for_usage_credit_fulfillment?(include_trial: true)
+    assert_not subscription.eligible_for_usage_credit_fulfillment?
+    assert_equal "trial", UsageCredits::Fulfillment.find_by!(source: subscription).metadata["initial_award_state"]
+    assert_equal 0, wallet.transactions.where(category: "subscription_credits").count
+  end
+
+  test "Lemon Squeezy canceled status stops fulfillment" do
+    # Pay 12 records Lemon Squeezy's cancelled as canceled, the spelling the
+    # cancellation callback matches.
+    _wallet, customer = processor_subscription_context(:lemon_squeezy, "lemon-canceled")
+    subscription = create_processor_subscription(
+      Pay::LemonSqueezy::Subscription,
+      customer,
+      processor_plan: "lemon_trial",
+      status: "active"
+    )
+    fulfillment = UsageCredits::Fulfillment.find_by!(source: subscription)
+    assert_nil fulfillment.stops_at
+
+    ends_at = 1.day.from_now
+    subscription.update!(status: "canceled", ends_at: ends_at)
+
+    assert_in_delta ends_at.to_i, fulfillment.reload.stops_at.to_i, 1
+  end
+
+  test "Lemon Squeezy cancelled status from Pay 11 is not eligible for credits" do
+    # Pay 11 recorded Lemon Squeezy's own spelling. The cancellation callback
+    # does not match it, but the recurring fulfillment still awards nothing.
+    _wallet, customer = processor_subscription_context(:lemon_squeezy, "lemon-cancelled")
+    subscription = create_processor_subscription(
+      Pay::LemonSqueezy::Subscription,
+      customer,
+      processor_plan: "lemon_trial",
+      status: "active"
+    )
+
+    subscription.update!(status: "cancelled", ends_at: 1.day.ago)
+
+    assert_not subscription.eligible_for_usage_credit_fulfillment?(include_trial: true)
+  end
+
+  test "scheduled Paddle Billing pause awards credits until the pause starts" do
+    # Pay 12 keeps a Paddle Billing subscription active while a pause is
+    # scheduled and answers paused? for it. Pay 11 answers paused? only once
+    # the status is paused.
+    wallet, customer = processor_subscription_context(:paddle_billing, "paddle-scheduled-pause")
+    pause_starts_at = 1.day.from_now
+    subscription = nil
+
+    assert_difference -> { wallet.reload.credits }, 600 do
+      subscription = create_processor_subscription(
+        Pay::PaddleBilling::Subscription,
+        customer,
+        processor_plan: "paddle_pause_pro",
+        status: "active",
+        pause_starts_at: pause_starts_at,
+        current_period_start: Time.current,
+        current_period_end: pause_starts_at
+      )
+    end
+
+    assert subscription.eligible_for_usage_credit_fulfillment?
+
+    travel_to pause_starts_at + 1.second do
+      assert_not subscription.reload.eligible_for_usage_credit_fulfillment?(include_trial: true)
+    end
+  end
+
+  test "Stripe paused status after a trial awards no credits" do
+    # Stripe pauses a subscription whose trial ends without a payment method.
+    # Pay 12 answers paused? for that status; Pay 11 does not.
+    wallet, customer = stripe_subscription_context("stripe-trial-paused")
+    subscription = create_stripe_subscription(
+      customer,
+      processor_plan: "stripe_pause_pro",
+      status: "trialing",
+      trial_ends_at: 1.day.from_now
+    )
+
+    assert_no_difference -> { wallet.reload.credits } do
+      subscription.update!(status: "paused", trial_ends_at: 1.minute.ago)
+    end
+
+    assert_not subscription.eligible_for_usage_credit_fulfillment?(include_trial: true)
     assert_equal 0, wallet.transactions.where(category: "subscription_credits").count
   end
 
@@ -3524,6 +3641,31 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
       quantity: 1,
       current_period_start: Time.current,
       current_period_end: 1.month.from_now
+    }.merge(attributes))
+  end
+
+  def processor_subscription_context(processor, label)
+    token = SecureRandom.hex(4)
+    user = User.create!(
+      email: "#{label}-#{token}@example.com",
+      name: "Processor State Test"
+    )
+    customer = Pay::Customer.create!(
+      owner: user,
+      processor: processor,
+      processor_id: "cus_#{label.tr("-", "_")}_#{token}"
+    )
+
+    [user.credit_wallet, customer]
+  end
+
+  def create_processor_subscription(subscription_class, customer, processor_plan:, **attributes)
+    subscription_class.create!({
+      customer: customer,
+      name: "default",
+      processor_id: "sub_#{customer.processor}_#{SecureRandom.hex(4)}",
+      processor_plan: processor_plan,
+      quantity: 1
     }.merge(attributes))
   end
 end

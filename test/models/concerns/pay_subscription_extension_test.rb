@@ -75,7 +75,7 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
         processor_plan(:lemon_squeezy, "lemon_expiring")
         gives 500.credits.every(:month)
         unused_credits :rollover
-        expire_after 0.days
+        expire_after 7.days
       end
 
       config.subscription_plan :lemon_daily do
@@ -311,9 +311,51 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
       assert_not subscription.eligible_for_usage_credit_fulfillment?(include_trial: true)
       fulfillment.reload
       assert_in_delta ends_at.to_i, fulfillment.stops_at.to_i, 1
-      assert_in_delta ends_at.to_i, fulfillment.metadata["cancellation_credit_expiration_at"].to_time.to_i, 1
+      assert_in_delta (ends_at + 7.days).to_i, fulfillment.metadata["cancellation_credit_expiration_at"].to_time.to_i, 1
+      assert_equal 500, wallet.reload.credits
+    end
+
+    travel_to ends_at + 7.days + 1.minute do
       assert_equal 0, wallet.reload.credits
     end
+  end
+
+  test "Lemon Squeezy cancellation whose ends_at has passed runs the cancellation handling" do
+    wallet, customer = processor_subscription_context(:lemon_squeezy, "lemon-cancel-ended")
+    subscription = sync_lemon_squeezy(customer, status: "active", plan: "lemon_expiring", renews_at: 20.days.from_now)
+    fulfillment = UsageCredits::Fulfillment.find_by!(source: subscription)
+    ends_at = 1.minute.ago
+
+    subscription = sync_lemon_squeezy(customer, id: subscription.processor_id, status: "cancelled",
+      plan: "lemon_expiring", renews_at: ends_at, ends_at: ends_at)
+
+    assert_equal pay_at_least?("12") ? "canceled" : "cancelled", subscription.status
+    assert_not subscription.eligible_for_usage_credit_fulfillment?(include_trial: true)
+    fulfillment.reload
+    assert_in_delta ends_at.to_i, fulfillment.stops_at.to_i, 1
+    assert_in_delta (ends_at + 7.days).to_i, fulfillment.metadata["cancellation_credit_expiration_at"].to_time.to_i, 1
+    assert_equal 500, wallet.reload.credits
+  end
+
+  test "Pay's Lemon Squeezy cancel keeps the credits until the subscription ends" do
+    # Pay's #cancel stores the raw "cancelled" from the API response on both
+    # Pay lines, before the webhook arrives.
+    wallet, customer = processor_subscription_context(:lemon_squeezy, "lemon-api-cancel")
+    ends_at = 20.days.from_now
+    subscription = sync_lemon_squeezy(customer, status: "active", plan: "lemon_expiring", renews_at: ends_at)
+    fulfillment = UsageCredits::Fulfillment.find_by!(source: subscription)
+    LemonSqueezy::Subscription.stubs(:cancel).returns(
+      lemon_squeezy_object(customer, id: subscription.processor_id, status: "cancelled",
+        plan: "lemon_expiring", renews_at: ends_at, ends_at: ends_at)
+    )
+
+    subscription.cancel
+
+    assert_equal "cancelled", subscription.reload.status
+    assert subscription.eligible_for_usage_credit_fulfillment?
+    assert_nil fulfillment.reload.metadata["cancellation_credit_expiration_at"]
+    assert_equal [nil], wallet.transactions.where(fulfillment: fulfillment).distinct.pluck(:expires_at)
+    assert_equal 500, wallet.reload.credits
   end
 
   test "Lemon Squeezy failed dunning that ends in expired runs the cancellation handling" do
@@ -333,8 +375,12 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
     subscription = sync_lemon_squeezy(customer, id: subscription.processor_id, status: "expired",
       plan: "lemon_expiring", ends_at: ends_at)
 
-    assert_in_delta ends_at.to_i, fulfillment.reload.metadata["cancellation_credit_expiration_at"].to_time.to_i, 1
-    assert_equal 0, wallet.reload.credits
+    assert_in_delta (ends_at + 7.days).to_i,
+      fulfillment.reload.metadata["cancellation_credit_expiration_at"].to_time.to_i, 1
+    assert_equal 500, wallet.reload.credits
+    travel_to ends_at + 7.days + 1.minute do
+      assert_equal 0, wallet.reload.credits
+    end
   end
 
   test "Lemon Squeezy subscription keeps its recurring credits until a cancellation takes effect" do
@@ -3764,9 +3810,14 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
 
   # Syncs a subscription through Pay's own Lemon Squeezy mapping, as a webhook
   # does, from the attributes that the Lemon Squeezy API returns.
-  def sync_lemon_squeezy(customer, status:, plan:, id: nil, renews_at: nil, ends_at: nil, trial_ends_at: nil, resumes_at: nil)
+  def sync_lemon_squeezy(customer, id: nil, **attributes)
     id ||= SecureRandom.random_number(10**9).to_s
-    object = LemonSqueezy::Subscription.new(
+    Pay::LemonSqueezy::Subscription.sync(id, object: lemon_squeezy_object(customer, id: id, **attributes))
+  end
+
+  # A subscription as the Lemon Squeezy API returns it.
+  def lemon_squeezy_object(customer, id:, status:, plan:, renews_at: nil, ends_at: nil, trial_ends_at: nil, resumes_at: nil)
+    LemonSqueezy::Subscription.new(
       "id" => id,
       "attributes" => {
         "customer_id" => customer.processor_id,
@@ -3780,8 +3831,6 @@ class PaySubscriptionExtensionTest < ActiveSupport::TestCase
         "updated_at" => Time.current.iso8601
       }
     )
-
-    Pay::LemonSqueezy::Subscription.sync(id, object: object)
   end
 
   def create_processor_subscription(subscription_class, customer, processor_plan:, **attributes)

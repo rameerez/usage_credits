@@ -30,7 +30,10 @@ Gem::Specification.new do |spec|
   spec.executables = spec.files.grep(%r{\Aexe/}) { |f| File.basename(f) }
   spec.require_paths = ["lib"]
 
-  spec.add_dependency "pay", ">= 11.6.2", "< 12.0"
+  # Pay 11.6.2 fixes GHSA-mjgf-xj26-9qf9. Pay 12.0.0 and 12.1.0 accept forged
+  # Paddle Billing and Lemon Squeezy webhooks when no signing secret is set
+  # (GHSA-5p37-w3f3-55pm, GHSA-6mr3-672j-v5hf); 12.1.1 fixes them.
+  spec.add_dependency "pay", ">= 11.6.2", "< 13.0", "!= 12.0.0", "!= 12.1.0"
   spec.add_dependency "rails", ">= 7.2.3.1", "< 9.0"
   spec.add_dependency "wallets", "~> 0.4.2"
 end

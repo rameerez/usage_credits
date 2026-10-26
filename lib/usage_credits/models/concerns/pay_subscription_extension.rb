@@ -28,6 +28,9 @@ module UsageCredits
   module PaySubscriptionExtension
     extend ActiveSupport::Concern
 
+    # Lemon Squeezy's own spelling, which Pay 11 stores, and Pay 12's spelling.
+    LEMON_SQUEEZY_CANCELED_STATUSES = %w[cancelled canceled].freeze
+
     included do
       # For initial setup and fulfillment, we can't do after_create or on: :create because the subscription first may
       # get created with status "incomplete" and only get updated to status "active" when the payment is cleared
@@ -64,6 +67,10 @@ module UsageCredits
     def eligible_for_usage_credit_fulfillment?(include_trial: false)
       processor_active = if status == "on_trial"
         respond_to?(:on_trial?) && on_trial?
+      elsif lemon_squeezy_cancellation_grace_period?
+        # The customer paid until ends_at and can still resume, as with a
+        # Stripe or Paddle cancellation at the end of the period.
+        true
       elsif respond_to?(:paused?)
         active?
       else
@@ -155,12 +162,31 @@ module UsageCredits
         eligible_for_usage_credit_fulfillment?
     end
 
-    # This doesn't get called the exact moment the user cancels its subscription, but at the end of the period,
-    # when the payment processor sends the event that the subscription has actually been cancelled.
-    # For the moment the user clicks on "Cancel subscription", the sub keeps its state as "active" (for now),
-    # the sub just gets its `ends_at` set from nil to the actual cancellation date.
+    # True when the subscription has really ended, not when the customer asks
+    # to cancel. Stripe, Paddle and Braintree keep the status "active" (with
+    # `ends_at` set) until the end of the paid period, and only then record
+    # "canceled". Lemon Squeezy records "cancelled" (Pay 12: "canceled") at
+    # the cancel request, while the customer can still resume. Its terminal
+    # status is "expired", which also ends a failed dunning
+    # (past_due, unpaid, expired).
     def subscription_canceled?
-      saved_change_to_status? && status == "canceled"
+      return false unless saved_change_to_status?
+      return status == "canceled" unless lemon_squeezy_subscription?
+
+      status == "expired" ||
+        (LEMON_SQUEEZY_CANCELED_STATUSES.include?(status) && !lemon_squeezy_cancellation_grace_period?)
+    end
+
+    def lemon_squeezy_subscription?
+      is_a?(Pay::LemonSqueezy::Subscription)
+    end
+
+    # A Lemon Squeezy subscription that the customer cancelled, inside the
+    # period they paid for.
+    def lemon_squeezy_cancellation_grace_period?
+      lemon_squeezy_subscription? &&
+        LEMON_SQUEEZY_CANCELED_STATUSES.include?(status) &&
+        ends_at.present? && ends_at > Time.current
     end
 
     def plan_changed?
@@ -191,6 +217,10 @@ module UsageCredits
 
     # Immediate awarding of first cycle + set up Fulfillment object for subsequent periods
     def handle_initial_award_and_fulfillment_setup
+      # A cancel request never starts an award. The paid period's credits
+      # were granted already, and the recurring fulfillment runs to ends_at.
+      return if lemon_squeezy_cancellation_grace_period?
+
       plan = subscription_terms
       return unless plan
       return unless has_valid_wallet?
@@ -869,6 +899,10 @@ module UsageCredits
 
     def paused_for_usage_credits?
       return true if status == "paused"
+      # A Lemon Squeezy pause starts when Lemon Squeezy records it, so the
+      # status is enough. Pay 11 kept the pause's resume time in
+      # pause_starts_at, and Pay 12 never clears that old value.
+      return false if lemon_squeezy_subscription?
 
       pause_started = respond_to?(:pause_starts_at) && pause_starts_at.present? && pause_starts_at <= Time.current
       return true if pause_started

@@ -35,5 +35,5 @@ Gem::Specification.new do |spec|
   # (GHSA-5p37-w3f3-55pm, GHSA-6mr3-672j-v5hf); 12.1.1 fixes them.
   spec.add_dependency "pay", ">= 11.6.2", "< 13.0", "!= 12.0.0", "!= 12.1.0"
   spec.add_dependency "rails", ">= 7.2.3.1", "< 9.0"
-  spec.add_dependency "wallets", "~> 0.4.2"
+  spec.add_dependency "wallets", ">= 0.4.2", "< 0.6"
 end
